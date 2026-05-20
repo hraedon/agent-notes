@@ -187,6 +187,26 @@ class Server:
             },
             self._tool_remove_link,
         )
+        self.register_tool(
+            "history",
+            {
+                "description": (
+                    "Return change_log rows for a specific note in chronological order."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "kind": {"type": "string"},
+                        "workspace": {"type": "string", "description": "Workspace slug"},
+                        "project": {"type": "string", "description": "Project slug"},
+                        "identifier": {"type": "string"},
+                        "limit": {"type": "integer", "default": 100},
+                    },
+                    "required": ["kind", "workspace", "project", "identifier"],
+                },
+            },
+            self._tool_history,
+        )
 
     # ------------------------------------------------------------------
     # Core tool implementations — thin wrappers over core/db.py
@@ -323,6 +343,31 @@ class Server:
         fk, fi = args["from_kind"], args["from_identifier"]
         tk, ti, rel = args["to_kind"], args["to_identifier"], args["relationship"]
         return f"Link added: {fk}/{fi} --{rel}--> {tk}/{ti}"
+
+    def _tool_history(self, args: dict) -> str:
+        from agent_notes.core import change_log, db
+
+        workspace_slug = args.get("workspace", "")
+        ws = next((w for w in db.list_workspaces() if w.slug == workspace_slug), None)
+        if ws is None:
+            return f"Error: workspace '{workspace_slug}' not found"
+        project_slug = args.get("project", "")
+        projects = db.list_projects(workspace_id=ws.id)
+        p = next((x for x in projects if x.slug == project_slug), None)
+        if p is None:
+            return f"Error: project '{project_slug}' not found"
+        kind = args.get("kind", "")
+        identifier = args.get("identifier", "")
+        limit = min(int(args.get("limit", 100)), 500)
+        rows = change_log.history(kind, ws.id, p.id, identifier, limit=limit)
+        if not rows:
+            return f"No history for {kind}/{identifier}."
+        lines = [f"{len(rows)} change(s) for {kind}/{identifier}:"]
+        for r in rows:
+            lines.append(
+                f"- event={r.event} at {r.changed_at.strftime('%Y-%m-%d %H:%M')}"
+            )
+        return "\n".join(lines)
 
     def _tool_remove_link(self, args: dict) -> str:
         from agent_notes.core import db
