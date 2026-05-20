@@ -324,10 +324,12 @@ class Server:
         return "\n".join(lines)
 
     def _tool_add_link(self, args: dict) -> str:
-        from agent_notes.core import db
+        # Route through links.add_link (not db.add_link) so the change_log row
+        # is written in the same transaction — decision 20.
+        from agent_notes.core import links
 
         try:
-            db.add_link(
+            links.add_link(
                 from_kind=args["from_kind"],
                 from_workspace=int(args["from_workspace"]),
                 from_project=int(args["from_project"]),
@@ -370,9 +372,11 @@ class Server:
         return "\n".join(lines)
 
     def _tool_remove_link(self, args: dict) -> str:
-        from agent_notes.core import db
+        # Route through links.remove_link (not db.remove_link) so the
+        # change_log row is written in the same transaction — decision 20.
+        from agent_notes.core import links
 
-        removed = db.remove_link(
+        removed = links.remove_link(
             from_kind=args["from_kind"],
             from_workspace=int(args["from_workspace"]),
             from_project=int(args["from_project"]),
