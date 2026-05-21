@@ -31,6 +31,13 @@ _KIND = "memory"
 
 _WIKILINK_RE = re.compile(r"(?<!`)\[\[([^\]`]+)\]\](?!`)")
 
+_GAP_SECTION_RE = re.compile(
+    r"^##\s+Gaps?\s+to\s+flag\s*\n(.*?)(?=\n##|\Z)",
+    re.IGNORECASE | re.DOTALL | re.MULTILINE,
+)
+
+_GAP_LINE_RE = re.compile(r"^\s*-\s+\[\[([^\]]+)\]\]\s*:\s*(.+)$", re.MULTILINE)
+
 
 def _parse_wikilinks(body: str) -> list[str]:
     """Extract [[name]] references from body, skipping fenced code spans.
@@ -203,6 +210,74 @@ class MemoryServer(Server):
                 },
             },
             self._tool_trace_graph,
+        )
+        self.register_tool(
+            "find_reflections",
+            {
+                "description": (
+                    "Find reflection memories (memory_type='reflection'). "
+                    "Returns matching reflections ranked by semantic similarity. "
+                    "Phase 5.1 / decision 25: reflections are stored as memories."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "workspace": {"type": "string"},
+                        "project": {"type": "string"},
+                        "query": {"type": "string", "description": "Search query (optional)"},
+                        "limit": {"type": "integer", "default": 10},
+                        "include_body": {"type": "boolean", "default": False},
+                    },
+                    "required": ["workspace"],
+                },
+            },
+            self._tool_find_reflections,
+        )
+        self.register_tool(
+            "extract_gaps",
+            {
+                "description": (
+                    "Parse the 'Gaps to flag' section from a reflection memory and "
+                    "return structured gap entries. Each gap has an identifier and "
+                    "description. The agent can then confirm and call file_breadcrumb "
+                    "for each gap (Phase 5.3)."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "workspace": {"type": "string"},
+                        "project": {"type": "string"},
+                        "name": {"type": "string", "description": "Reflection memory name"},
+                    },
+                    "required": ["workspace", "project", "name"],
+                },
+            },
+            self._tool_extract_gaps,
+        )
+        self.register_tool(
+            "mark_gaps_filed",
+            {
+                "description": (
+                    "Mark specific gaps from a reflection as filed (decision 19). "
+                    "Updates the reflection memory's attributes.gaps_filed_as list. "
+                    "Body remains immutable (append-only)."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "workspace": {"type": "string"},
+                        "project": {"type": "string"},
+                        "name": {"type": "string", "description": "Reflection memory name"},
+                        "filed_identifiers": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "List of BC identifiers that gaps were filed as",
+                        },
+                    },
+                    "required": ["workspace", "project", "name", "filed_identifiers"],
+                },
+            },
+            self._tool_mark_gaps_filed,
         )
 
     # ------------------------------------------------------------------
@@ -568,3 +643,161 @@ class MemoryServer(Server):
         for n in nodes:
             lines.append(f"- {n.identifier} (relationship={n.relationship}, depth={n.depth})")
         return "\n".join(lines)
+
+    def _tool_find_reflections(self, args: dict) -> str:
+        from agent_notes.core.embed import embed
+
+        workspace_slug = args["workspace"]
+        project_slug = args.get("project")
+        query = args.get("query")
+        limit = min(int(args.get("limit", 10)), 50)
+        include_body = bool(args.get("include_body", False))
+
+        ws = self._resolve_workspace(workspace_slug)
+
+        conditions = [
+            "active = true",
+            "workspace_id = %s",
+            "memory_type = 'reflection'",
+            "embedding IS NOT NULL",
+        ]
+        params: list[Any] = [ws.id]
+
+        if project_slug:
+            proj = self._resolve_project(ws.id, project_slug)
+            conditions.append("project_id = %s")
+            params.append(proj.id)
+
+        where = " AND ".join(conditions)
+
+        if query:
+            vec = embed(query, task="query")
+            body_col = "body" if include_body else "LEFT(body, 0) AS body"
+            order_clause = "ORDER BY embedding <=> %s::vector"
+            select_score = ", 1 - (embedding <=> %s::vector) AS score"
+            params_with_vec = [vec.tolist()] + params + [vec.tolist(), limit]
+        else:
+            body_col = "body" if include_body else "LEFT(body, 0) AS body"
+            order_clause = "ORDER BY updated_at DESC"
+            select_score = ""
+            params_with_vec = params + [limit]
+
+        with _conn() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            cur.execute(
+                f"""
+                SELECT id, name, {body_col}, attributes,
+                       created_at, updated_at{select_score}
+                FROM memories
+                WHERE {where}
+                {order_clause}
+                LIMIT %s
+                """,
+                params_with_vec,
+            )
+            rows = cur.fetchall()
+
+        if not rows:
+            return "No reflection memories found."
+
+        lines = [f"{len(rows)} reflection(s) found:"]
+        for r in rows:
+            score_str = f", score={r['score']:.3f}" if "score" in r else ""
+            line = f"- **{r['name']}**{score_str}"
+            gaps_filed = (r.get("attributes") or {}).get("gaps_filed_as", [])
+            if gaps_filed:
+                line += f" (gaps_filed: {', '.join(gaps_filed)})"
+            if include_body and r["body"]:
+                line += f"\n  {r['body'][:200]}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    def _tool_extract_gaps(self, args: dict) -> str:
+        workspace_slug = args["workspace"]
+        project_slug = args["project"]
+        name = args["name"]
+
+        ws = self._resolve_workspace(workspace_slug)
+        proj = self._resolve_project(ws.id, project_slug)
+
+        with _conn() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            cur.execute(
+                "SELECT id, name, body, attributes FROM memories "
+                "WHERE project_id = %s AND workspace_id = %s AND name = %s "
+                "AND active = true AND memory_type = 'reflection'",
+                (proj.id, ws.id, name),
+            )
+            row = cur.fetchone()
+
+        if row is None:
+            return f"Reflection '{name}' not found in project '{project_slug}'."
+
+        body = row["body"]
+        section_match = _GAP_SECTION_RE.search(body)
+        if section_match is None:
+            return f"No 'Gaps to flag' section found in reflection '{name}'."
+
+        section_text = section_match.group(1)
+        gaps = _GAP_LINE_RE.findall(section_text)
+
+        if not gaps:
+            return f"No structured gap entries (format: '- [[ID]]: description') found in '{name}'."
+
+        already_filed = set((row.get("attributes") or {}).get("gaps_filed_as", []))
+        lines = [f"{len(gaps)} gap(s) extracted from '{name}':"]
+        for identifier, description in gaps:
+            status = " [FILED]" if identifier in already_filed else ""
+            lines.append(f"- **{identifier}**{status}: {description.strip()}")
+        lines.append("")
+        lines.append(
+            "Propose filing as breadcrumbs by calling file_breadcrumb for each unfilled gap."
+        )
+        return "\n".join(lines)
+
+    def _tool_mark_gaps_filed(self, args: dict) -> str:
+        workspace_slug = args["workspace"]
+        project_slug = args["project"]
+        name = args["name"]
+        filed_identifiers = args["filed_identifiers"]
+
+        ws = self._resolve_workspace(workspace_slug)
+        proj = self._resolve_project(ws.id, project_slug)
+
+        with _conn() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            cur.execute(
+                "SELECT id, attributes FROM memories "
+                "WHERE project_id = %s AND workspace_id = %s AND name = %s "
+                "AND active = true AND memory_type = 'reflection'",
+                (proj.id, ws.id, name),
+            )
+            row = cur.fetchone()
+            if row is None:
+                conn.rollback()
+                return f"Reflection '{name}' not found in project '{project_slug}'."
+
+            attrs = dict(row.get("attributes") or {})
+            existing = set(attrs.get("gaps_filed_as", []))
+            existing.update(filed_identifiers)
+            attrs["gaps_filed_as"] = sorted(existing)
+
+            cur.execute(
+                "UPDATE memories SET attributes = %s WHERE id = %s",
+                (psycopg.types.json.Jsonb(attrs), row["id"]),
+            )
+            write_change(
+                conn,
+                kind=_KIND,
+                workspace_id=ws.id,
+                project_id=proj.id,
+                identifier=name,
+                event="updated",
+                payload={"gaps_filed_as": attrs["gaps_filed_as"]},
+            )
+            conn.commit()
+
+        return (
+            f"Marked {len(filed_identifiers)} gap(s) as filed in "
+            f"'{name}': {', '.join(filed_identifiers)}"
+        )

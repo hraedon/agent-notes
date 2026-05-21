@@ -79,3 +79,21 @@ DROP TRIGGER IF EXISTS memories_updated_at ON memories;
 CREATE TRIGGER memories_updated_at
     BEFORE UPDATE ON memories
     FOR EACH ROW EXECUTE FUNCTION memories_updated_at_fn();
+
+-- ---------------------------------------------------------------------------
+-- Seed memory_type vocabularies (Phase 5.1)
+-- ---------------------------------------------------------------------------
+
+INSERT INTO vocabularies (workspace_id, kind_namespace, name, is_terminal, is_open, sort_order)
+VALUES
+    (1, 'memory_type', 'note',       false, true, 10),
+    (1, 'memory_type', 'decision',   false, true, 20),
+    (1, 'memory_type', 'feedback',   false, true, 30),
+    (1, 'memory_type', 'project',    false, true, 40),
+    (1, 'memory_type', 'reference',  false, true, 50),
+    (1, 'memory_type', 'user',       false, true, 60),
+    (1, 'memory_type', 'reflection', false, true, 70)
+ON CONFLICT (workspace_id, kind_namespace, name) DO UPDATE SET
+    is_terminal = EXCLUDED.is_terminal,
+    is_open     = EXCLUDED.is_open,
+    sort_order  = EXCLUDED.sort_order;

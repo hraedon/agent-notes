@@ -107,7 +107,7 @@ class TestMemorySchema:
             assert cur.fetchone() is not None
 
     def test_updated_at_trigger(self, pg, mem_ws, mem_proj, seeded_vocab) -> None:
-        with psycopg.connect(pg) as conn:
+        with coredb._conn() as conn:
             cur = conn.cursor(row_factory=dict_row)
             cur.execute(
                 """
@@ -129,7 +129,6 @@ class TestMemorySchema:
             result = cur.fetchone()
             conn.commit()
 
-            # Trigger fires on UPDATE; updated_at should be >= created_at
             assert result["updated_at"] >= result["created_at"]
 
 
@@ -505,9 +504,8 @@ class TestTraceGraphMemory:
 
 class TestVocabReferenceCheck:
     def test_delete_referenced_memory_type(self, pg, mem_ws, mem_proj, seeded_vocab) -> None:
-        with psycopg.connect(pg, row_factory=dict_row) as conn:
-            cur = conn.cursor()
-            cur.execute(
+        with coredb._conn() as conn:
+            conn.execute(
                 """
                 INSERT INTO memories (workspace_id, project_id, name, memory_type, body)
                 VALUES (%s, %s, 'refcheck-mem', 'feedback', 'test')
