@@ -55,6 +55,28 @@ def slugify(title: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Breadcrumb markdown builder
+# ---------------------------------------------------------------------------
+
+
+def build_breadcrumb_markdown(row: dict) -> str:
+    """Build canonical frontmatter-v1 markdown for a breadcrumb row."""
+    fm = {
+        "identifier": row["identifier"],
+        "title": row["title"],
+        "kind": row["kind"],
+        "status": row["status"],
+        "severity": row.get("severity", "medium"),
+    }
+    if row.get("external_refs"):
+        fm["external_refs"] = row["external_refs"]
+    if row.get("diagnostic_keys"):
+        fm["diagnostic_keys"] = row["diagnostic_keys"]
+    body = row.get("body", "")
+    return render_frontmatter(fm) + body
+
+
+# ---------------------------------------------------------------------------
 # render_index
 # ---------------------------------------------------------------------------
 
