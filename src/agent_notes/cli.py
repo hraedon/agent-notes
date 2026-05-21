@@ -44,7 +44,9 @@ def serve(kinds: list[str]) -> None:
 
             server.merge_registry(MemoryServer())
         elif canonical == "search":
-            raise NotImplementedError("search server not yet implemented (Phase 4)")
+            from agent_notes.servers.search import SearchServer
+
+            server.merge_registry(SearchServer())
         else:
             raise NotImplementedError(f"unknown kind: {kind!r}")
 
