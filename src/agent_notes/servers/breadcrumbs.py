@@ -33,6 +33,7 @@ class BreadcrumbServer(Server):
     def __init__(self) -> None:
         super().__init__()
         self._register_breadcrumb_tools()
+        self._register_resource_handlers()
 
     # ------------------------------------------------------------------
     # Helpers
@@ -164,6 +165,62 @@ class BreadcrumbServer(Server):
 
         # Should never reach here, but satisfy type checker.
         return f"Unexpected result: {outcome.result}"
+
+    # ------------------------------------------------------------------
+    # Resource handlers (Phase 6.1)
+    # ------------------------------------------------------------------
+
+    def _register_resource_handlers(self) -> None:
+        from agent_notes.core.resources import build_uri, parse_uri
+
+        def _list_fn(workspace_slug: str, project_slug: str) -> list[dict]:
+            ws = self._resolve_workspace(workspace_slug)
+            proj = self._resolve_project(ws.id, project_slug)
+            rows = BreadcrumbModel.query_breadcrumbs(
+                project_id=proj.id,
+                limit=1000,
+            )
+            return [
+                {
+                    "uri": build_uri(
+                        "breadcrumb", workspace_slug, project_slug, r["identifier"]
+                    ),
+                    "name": r["identifier"],
+                    "mimeType": "text/markdown",
+                    "description": f"{r['kind']} / {r['status']} — {r['title']}",
+                }
+                for r in rows
+            ]
+
+        def _read_fn(workspace_slug: str, project_slug: str, identifier: str) -> str:
+            ws = self._resolve_workspace(workspace_slug)
+            proj = self._resolve_project(ws.id, project_slug)
+            row = BreadcrumbModel.get_breadcrumb(proj.id, identifier)
+            if row is None:
+                raise KeyError(f"Breadcrumb {identifier!r} not found")
+            from agent_notes.core.projection import build_breadcrumb_markdown
+
+            return build_breadcrumb_markdown(row)
+
+        def _handler(action: str, uri_or_prefix: str):
+            if action == "list":
+                resources: list[dict] = []
+                from agent_notes.core.db import list_projects, list_workspaces
+
+                for ws in list_workspaces():
+                    for proj in list_projects(workspace_id=ws.id):
+                        resources.extend(_list_fn(ws.slug, proj.slug))
+                return resources
+            if action == "read":
+                parsed = parse_uri(uri_or_prefix)
+                if parsed.kind != "breadcrumb":
+                    raise ValueError(f"Expected breadcrumb URI, got {parsed.kind}")
+                if parsed.project is None or parsed.identifier is None:
+                    raise ValueError(f"URI must include project and identifier: {uri_or_prefix!r}")
+                return _read_fn(parsed.workspace, parsed.project, parsed.identifier)
+            raise ValueError(f"Unknown action: {action!r}")
+
+        self.register_resource_handler("note://breadcrumb/", _handler)
 
     # ------------------------------------------------------------------
     # Tool registration

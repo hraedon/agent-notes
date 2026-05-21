@@ -6,7 +6,7 @@ Consolidates and supersedes the standalone `breadcrumb-mcp` and `memory-mcp` pro
 
 ## Status
 
-Phase 0 (legacy prep) complete. Phase 1a (repo skeleton + core protocol layer) in progress.
+Phases 0–5 complete. Phase 6 in progress.
 
 ## Quickstart
 
@@ -19,9 +19,39 @@ export AGENT_NOTES_DSN="postgresql://user:pass@host:5432/agent_notes"
 
 # Create schema
 agent-notes-setup
-
-# Run a server (per-kind shim — or use `agent-notes serve --kinds ...` for omnibus)
-agent-notes-breadcrumbs
 ```
+
+For machines with **<32 GB RAM**, prefer `agent-notes-omnibus` over running per-kind binaries — it loads the embedding model **once** instead of once per process.
+
+## Running
+
+### Per-kind (default for CI / multi-agent setups)
+
+```bash
+agent-notes-breadcrumbs   # breadcrumb server
+agent-notes-memory        # memory server
+agent-notes-search        # search server
+```
+
+### Omnibus (single process, one model load)
+
+```bash
+agent-notes-omnibus
+# or equivalently:
+agent-notes serve --kinds breadcrumbs,memory,search
+```
+
+## Entry points
+
+| Console script | Kind(s) | Notes |
+|---|---|---|
+| `agent-notes` | Generic | `serve --kinds X,Y,...` |
+| `agent-notes-breadcrumbs` | breadcrumbs | Thin shim |
+| `agent-notes-memory` | memory | Thin shim |
+| `agent-notes-search` | search | Thin shim |
+| `agent-notes-omnibus` | breadcrumbs + memory + search | Single process |
+| `agent-notes-setup` | — | Alias for `migrate --all` |
+| `agent-notes-migrate` | — | Schema migrations from `schema/*.sql` |
+| `agent-notes-doctor` | — | Health check: DSN, schema, model, links audit |
 
 See `AGENTS.md` for build/test/lint commands and contributor conventions.

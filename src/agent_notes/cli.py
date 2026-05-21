@@ -26,8 +26,9 @@ _KIND_ALIASES = {
 def serve(kinds: list[str]) -> None:
     """Instantiate and run a server mounting the given kind registries.
 
-    In Phase 1a the kind servers don't exist yet; this raises NotImplementedError
-    for any kind so the wiring is in place for Phase 2a/3 to plug into.
+    In omnibus mode, resource handlers with different URI prefixes do not
+    collide (e.g. note://breadcrumb/ vs note://memory/). If two registries
+    register the same prefix, the last one wins via ToolRegistry.merge.
     """
     from agent_notes.core.server import Server
 
@@ -87,3 +88,8 @@ def main_memory() -> None:
 
 def main_search() -> None:
     serve(["search"])
+
+
+def main_omnibus() -> None:
+    """Convenience entry point: mount breadcrumbs, memory, and search in one process."""
+    serve(["breadcrumbs", "memory", "search"])

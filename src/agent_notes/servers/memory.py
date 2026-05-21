@@ -65,6 +65,7 @@ class MemoryServer(Server):
     def __init__(self) -> None:
         super().__init__()
         self._register_memory_tools()
+        self._register_resource_handlers()
 
     def _register_memory_tools(self) -> None:
         self.register_tool(
@@ -312,6 +313,97 @@ class MemoryServer(Server):
                 f"memory_type '{memory_type}' not found in vocabularies. "
                 f"Available: {', '.join(v.name for v in vocabs) or '(none)'}"
             )
+
+    # ------------------------------------------------------------------
+    # Resource handlers (Phase 6.1)
+    # ------------------------------------------------------------------
+
+    def _register_resource_handlers(self) -> None:
+        from agent_notes.core.resources import build_uri, parse_uri
+
+        def _list_fn(workspace_slug: str, project_slug: str) -> list[dict]:
+            ws = self._resolve_workspace(workspace_slug)
+            proj = self._resolve_project(ws.id, project_slug)
+            rows = self._list_active_memories_raw(proj.id, ws.id)
+            return [
+                {
+                    "uri": build_uri(
+                        "memory", workspace_slug, project_slug, r["name"]
+                    ),
+                    "name": r["name"],
+                    "mimeType": "text/markdown",
+                    "description": f"{r['memory_type']} — {r['body_preview'][:60]}",
+                }
+                for r in rows
+            ]
+
+        def _read_fn(workspace_slug: str, project_slug: str, name: str) -> str:
+            ws = self._resolve_workspace(workspace_slug)
+            proj = self._resolve_project(ws.id, project_slug)
+            with _conn() as conn:
+                cur = conn.cursor(row_factory=dict_row)
+                cur.execute(
+                    """
+                    SELECT id, name, memory_type, body, attributes,
+                           supersedes, created_at, updated_at
+                    FROM memories
+                    WHERE project_id = %s AND workspace_id = %s AND name = %s AND active = true
+                    """,
+                    (proj.id, ws.id, name),
+                )
+                row = cur.fetchone()
+            if row is None:
+                raise KeyError(f"Memory {name!r} not found")
+            lines = [
+                f"**{row['name']}** (type={row['memory_type']}, id={row['id']})",
+                f"Created: {row['created_at'].strftime('%Y-%m-%d %H:%M')}",
+                f"Updated: {row['updated_at'].strftime('%Y-%m-%d %H:%M')}",
+            ]
+            if row["supersedes"]:
+                lines.append(f"Supersedes: id={row['supersedes']}")
+            if row["attributes"]:
+                for k, v in row["attributes"].items():
+                    lines.append(f"  {k}: {v}")
+            lines.append("")
+            lines.append(row["body"])
+            return "\n".join(lines)
+
+        def _handler(action: str, uri_or_prefix: str) -> Any:
+            if action == "list":
+                resources: list[dict] = []
+                from agent_notes.core.db import list_projects, list_workspaces
+
+                for ws in list_workspaces():
+                    for proj in list_projects(workspace_id=ws.id):
+                        resources.extend(_list_fn(ws.slug, proj.slug))
+                return resources
+            if action == "read":
+                parsed = parse_uri(uri_or_prefix)
+                if parsed.kind != "memory":
+                    raise ValueError(f"Expected memory URI, got {parsed.kind}")
+                if parsed.project is None or parsed.identifier is None:
+                    raise ValueError(
+                        f"URI must include project and identifier: {uri_or_prefix!r}"
+                    )
+                return _read_fn(parsed.workspace, parsed.project, parsed.identifier)
+            raise ValueError(f"Unknown action: {action!r}")
+
+        self.register_resource_handler("note://memory/", _handler)
+
+    def _list_active_memories_raw(self, project_id: int, workspace_id: int) -> list[dict]:
+        with _conn() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            cur.execute(
+                """
+                SELECT id, name, memory_type, LEFT(body, 120) AS body_preview,
+                       created_at, updated_at
+                FROM memories
+                WHERE project_id = %s AND workspace_id = %s AND active = true
+                ORDER BY updated_at DESC
+                """,
+                (project_id, workspace_id),
+            )
+            return cur.fetchall()
 
     # ------------------------------------------------------------------
     # Tool implementations
