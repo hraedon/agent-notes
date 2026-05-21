@@ -271,3 +271,246 @@ class TestMemoryMCPWrapper:
         rows = cl.changes_since(since, workspace_id=self.ws.id, kind="memory")
         deleted = [r for r in rows if r.event == "deleted" and r.identifier == "mcp-del-test"]
         assert deleted, "delete_memory via MCP must write a change_log row (decision 20)"
+
+
+# ---------------------------------------------------------------------------
+# Search server — stdin-driven wrapper tests (Phase 4)
+# ---------------------------------------------------------------------------
+
+
+class TestSearchMCPWrapper:
+    """Drive SearchServer via JSON-RPC to test search wrapper/schema layer."""
+
+    @pytest.fixture(autouse=True)
+    def _setup_project(self):
+        self.ws = coredb.get_or_create_workspace("search-mcp-ws", "Search MCP WS")
+        self.proj = coredb.get_or_create_project(
+            self.ws.id,
+            slug="search-mcp-proj",
+            name="Search MCP Proj",
+        )
+        coredb.add_vocabulary(self.ws.id, "memory_type", "note")
+        for name in ("bug", "task"):
+            coredb.add_vocabulary(self.ws.id, "bc_kind", name)
+        for name in ("new", "open"):
+            coredb.add_vocabulary(self.ws.id, "bc_status", name)
+        for name in ("low", "medium"):
+            coredb.add_vocabulary(self.ws.id, "bc_severity", name)
+
+    def test_search_all_notes_wrapper(self):
+        from agent_notes.servers.search import SearchServer
+
+        server = SearchServer()
+        with patch("agent_notes.core.embed.embed", side_effect=_fake_embed):
+            responses = _drive(
+                server,
+                [
+                    _rpc("initialize", {"protocolVersion": "2024-11-05"}),
+                    _rpc(
+                        "tools/call",
+                        {
+                            "name": "search_all_notes",
+                            "arguments": {
+                                "query": "test search",
+                                "workspaces": ["search-mcp-ws"],
+                            },
+                        },
+                        req_id=2,
+                    ),
+                ],
+            )
+
+        tool_resp = responses[-1]
+        assert "result" in tool_resp, f"Unexpected response: {tool_resp}"
+        text = tool_resp["result"]["content"][0]["text"]
+        assert isinstance(text, str)
+
+    def test_trace_graph_all_wrapper(self):
+        from agent_notes.servers.search import SearchServer
+
+        server = SearchServer()
+        with patch("agent_notes.core.embed.embed", side_effect=_fake_embed):
+            responses = _drive(
+                server,
+                [
+                    _rpc("initialize", {"protocolVersion": "2024-11-05"}),
+                    _rpc(
+                        "tools/call",
+                        {
+                            "name": "trace_graph_all",
+                            "arguments": {
+                                "from_kind": "breadcrumb",
+                                "workspace": "search-mcp-ws",
+                                "project": "search-mcp-proj",
+                                "identifier": "BC-FAKE",
+                                "direction": "dependencies",
+                            },
+                        },
+                        req_id=2,
+                    ),
+                ],
+            )
+
+        tool_resp = responses[-1]
+        assert "result" in tool_resp, f"Unexpected response: {tool_resp}"
+        text = tool_resp["result"]["content"][0]["text"]
+        assert isinstance(text, str)
+
+
+# ---------------------------------------------------------------------------
+# Memory server — Phase 5 reflection wrapper tests
+# ---------------------------------------------------------------------------
+
+
+class TestReflectionMCPWrapper:
+    """Drive memory server reflection tools via JSON-RPC (Phase 5 wrappers)."""
+
+    @pytest.fixture(autouse=True)
+    def _setup_project(self):
+        self.ws = coredb.get_or_create_workspace("refl-mcp-ws", "Refl MCP WS")
+        self.proj = coredb.get_or_create_project(
+            self.ws.id,
+            slug="refl-mcp-proj",
+            name="Refl MCP Proj",
+        )
+        coredb.add_vocabulary(self.ws.id, "memory_type", "reflection")
+        coredb.add_vocabulary(self.ws.id, "memory_type", "note")
+
+    def test_find_reflections_wrapper(self):
+        from agent_notes.servers.memory import MemoryServer
+
+        server = MemoryServer()
+        responses = _drive(
+            server,
+            [
+                _rpc("initialize", {"protocolVersion": "2024-11-05"}),
+                _rpc(
+                    "tools/call",
+                    {
+                        "name": "find_reflections",
+                        "arguments": {
+                            "workspace": "refl-mcp-ws",
+                            "project": "refl-mcp-proj",
+                        },
+                    },
+                    req_id=2,
+                ),
+            ],
+        )
+
+        tool_resp = responses[-1]
+        assert "result" in tool_resp, f"Unexpected response: {tool_resp}"
+        text = tool_resp["result"]["content"][0]["text"]
+        assert isinstance(text, str)
+
+    def test_extract_gaps_wrapper(self):
+        from agent_notes.servers.memory import MemoryServer
+
+        server = MemoryServer()
+        with patch("agent_notes.core.embed.embed", side_effect=_fake_embed):
+            seed = _drive(
+                server,
+                [
+                    _rpc("initialize", {"protocolVersion": "2024-11-05"}),
+                    _rpc(
+                        "tools/call",
+                        {
+                            "name": "add_memory",
+                            "arguments": {
+                                "workspace": "refl-mcp-ws",
+                                "project": "refl-mcp-proj",
+                                "name": "reflection-mcp-test",
+                                "memory_type": "reflection",
+                                "body": (
+                                    "# Reflection\n\n## Gaps to flag\n- [[BC-MCP-1]]: Test gap.\n"
+                                ),
+                            },
+                        },
+                        req_id=2,
+                    ),
+                ],
+            )
+            assert "result" in seed[-1]
+
+        server2 = MemoryServer()
+        responses = _drive(
+            server2,
+            [
+                _rpc("initialize", {"protocolVersion": "2024-11-05"}),
+                _rpc(
+                    "tools/call",
+                    {
+                        "name": "extract_gaps",
+                        "arguments": {
+                            "workspace": "refl-mcp-ws",
+                            "project": "refl-mcp-proj",
+                            "name": "reflection-mcp-test",
+                        },
+                    },
+                    req_id=2,
+                ),
+            ],
+        )
+
+        tool_resp = responses[-1]
+        text = tool_resp["result"]["content"][0]["text"]
+        assert "BC-MCP-1" in text
+
+    def test_mark_gaps_filed_wrapper(self):
+        from agent_notes.servers.memory import MemoryServer
+
+        server = MemoryServer()
+        with patch("agent_notes.core.embed.embed", side_effect=_fake_embed):
+            seed = _drive(
+                server,
+                [
+                    _rpc("initialize", {"protocolVersion": "2024-11-05"}),
+                    _rpc(
+                        "tools/call",
+                        {
+                            "name": "add_memory",
+                            "arguments": {
+                                "workspace": "refl-mcp-ws",
+                                "project": "refl-mcp-proj",
+                                "name": "reflection-mcp-mark",
+                                "memory_type": "reflection",
+                                "body": "# Reflection\n\n## Gaps to flag\n- [[BC-X]]: Gap.\n",
+                            },
+                        },
+                        req_id=2,
+                    ),
+                ],
+            )
+            assert "result" in seed[-1]
+
+        server2 = MemoryServer()
+        responses = _drive(
+            server2,
+            [
+                _rpc("initialize", {"protocolVersion": "2024-11-05"}),
+                _rpc(
+                    "tools/call",
+                    {
+                        "name": "mark_gaps_filed",
+                        "arguments": {
+                            "workspace": "refl-mcp-ws",
+                            "project": "refl-mcp-proj",
+                            "name": "reflection-mcp-mark",
+                            "filed_identifiers": ["BC-X"],
+                        },
+                    },
+                    req_id=2,
+                ),
+            ],
+        )
+
+        tool_resp = responses[-1]
+        text = tool_resp["result"]["content"][0]["text"]
+        assert "Marked 1 gap" in text
+
+        since = datetime(2000, 1, 1, tzinfo=timezone.utc)
+        rows = cl.changes_since(since, workspace_id=self.ws.id, kind="memory")
+        updated = [
+            r for r in rows if r.event == "updated" and r.identifier == "reflection-mcp-mark"
+        ]
+        assert updated, "mark_gaps_filed via MCP must write a change_log row (decision 20)"

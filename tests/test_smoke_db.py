@@ -130,9 +130,11 @@ class TestVocabulary:
 
 class TestLinks:
     def test_add_and_remove_link(self, pg: str) -> None:
+        from agent_notes.core import links
+
         ws = coredb.get_or_create_workspace("link-ws", "Link WS")
         p = coredb.get_or_create_project(ws.id, "link-proj", "Link Proj")
-        coredb.add_link(
+        links.add_link(
             from_kind="breadcrumb",
             from_workspace=ws.id,
             from_project=p.id,
@@ -143,7 +145,7 @@ class TestLinks:
             to_identifier="mem-foo",
             relationship="relates_to",
         )
-        removed = coredb.remove_link(
+        removed = links.remove_link(
             from_kind="breadcrumb",
             from_workspace=ws.id,
             from_project=p.id,
@@ -157,9 +159,11 @@ class TestLinks:
         assert removed is True
 
     def test_remove_nonexistent_link(self, pg: str) -> None:
+        from agent_notes.core import links
+
         ws = coredb.get_or_create_workspace("link-ws2", "Link WS2")
         p = coredb.get_or_create_project(ws.id, "link-proj2", "Link Proj2")
-        removed = coredb.remove_link(
+        removed = links.remove_link(
             from_kind="breadcrumb",
             from_workspace=ws.id,
             from_project=p.id,
@@ -173,6 +177,8 @@ class TestLinks:
         assert removed is False
 
     def test_add_link_idempotent(self, pg: str) -> None:
+        from agent_notes.core import links
+
         ws = coredb.get_or_create_workspace("link-ws3", "Link WS3")
         p = coredb.get_or_create_project(ws.id, "link-proj3", "Link Proj3")
         kwargs = dict(
@@ -186,8 +192,8 @@ class TestLinks:
             to_identifier="B",
             relationship="blocks",
         )
-        coredb.add_link(**kwargs)
-        coredb.add_link(**kwargs)  # second call is ON CONFLICT DO NOTHING — no error
+        links.add_link(**kwargs)
+        links.add_link(**kwargs)  # second call is ON CONFLICT DO NOTHING — no error
 
 
 class TestChangeLog:

@@ -417,10 +417,8 @@ class BreadcrumbModel:
 
         from agent_notes.core.change_log import history as cl_history
 
-        ws_id = cls._resolve_workspace_for_project(
-            None,
-            project_id,  # type: ignore[arg-type]
-        )
+        with _conn() as conn:
+            ws_id = cls._resolve_workspace_for_project(conn, project_id)
         rows = cl_history(cls.kind, ws_id, project_id, identifier, limit=20)
         return {
             "breadcrumb": bc,
