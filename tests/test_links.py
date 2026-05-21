@@ -121,7 +121,7 @@ class TestRemoveLink:
 class TestTraceGraph:
     def test_dependencies_direct(self, pg, link_ws, link_proj) -> None:
         # A → B → C
-        for (f, t) in [("TG-A", "TG-B"), ("TG-B", "TG-C")]:
+        for f, t in [("TG-A", "TG-B"), ("TG-B", "TG-C")]:
             lnk.add_link(
                 from_kind="bc",
                 from_workspace=link_ws.id,
@@ -171,7 +171,7 @@ class TestTraceGraph:
 
     def test_max_depth_respected(self, pg, link_ws, link_proj) -> None:
         # D1 → D2 → D3 → D4; max_depth=1 should only return D2
-        for (f, t) in [("D1", "D2"), ("D2", "D3"), ("D3", "D4")]:
+        for f, t in [("D1", "D2"), ("D2", "D3"), ("D3", "D4")]:
             lnk.add_link(
                 from_kind="bc",
                 from_workspace=link_ws.id,

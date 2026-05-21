@@ -366,9 +366,7 @@ class Server:
             return f"No history for {kind}/{identifier}."
         lines = [f"{len(rows)} change(s) for {kind}/{identifier}:"]
         for r in rows:
-            lines.append(
-                f"- event={r.event} at {r.changed_at.strftime('%Y-%m-%d %H:%M')}"
-            )
+            lines.append(f"- event={r.event} at {r.changed_at.strftime('%Y-%m-%d %H:%M')}")
         return "\n".join(lines)
 
     def _tool_remove_link(self, args: dict) -> str:

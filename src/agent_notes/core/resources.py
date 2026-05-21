@@ -45,7 +45,7 @@ def parse_uri(uri: str) -> ResourceURI:
     if not uri.startswith("note://"):
         raise ValueError(f"Unsupported URI scheme: {uri!r}")
 
-    path = uri[len("note://"):]
+    path = uri[len("note://") :]
     parts = [p for p in path.split("/") if p]
 
     if not parts:

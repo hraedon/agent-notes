@@ -36,9 +36,13 @@ def serve(kinds: list[str]) -> None:
     for kind in kinds:
         canonical = _KIND_ALIASES.get(kind, kind)
         if canonical == "breadcrumbs":
-            raise NotImplementedError("breadcrumbs server not yet implemented (Phase 2a)")
+            from agent_notes.servers.breadcrumbs import BreadcrumbServer
+
+            server.merge_registry(BreadcrumbServer())
         elif canonical == "memory":
-            raise NotImplementedError("memory server not yet implemented (Phase 3)")
+            from agent_notes.servers.memory import MemoryServer
+
+            server.merge_registry(MemoryServer())
         elif canonical == "search":
             raise NotImplementedError("search server not yet implemented (Phase 4)")
         else:

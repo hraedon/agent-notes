@@ -257,10 +257,8 @@ def archive_vocabulary(workspace_id: int, kind_namespace: str, name: str) -> Non
 def delete_vocabulary(workspace_id: int, kind_namespace: str, name: str) -> None:
     """Delete a vocabulary entry after reference-checking across kind tables (decision 9).
 
-    Phase 1a stub: no kind tables exist yet. TODO: when adding kind tables in
-    Phase 2a (breadcrumbs) and Phase 3 (memories), add reference checks here:
-      - breadcrumbs: CHECK WHERE kind = %s OR status = %s OR severity = %s
-      - memories: CHECK WHERE memory_type = %s
+    Phase 3: reference checks for memory_type are active.
+    Phase 2a: reference checks for bc_kind/bc_status/bc_severity are active.
     Any row found → raise ValueError("vocabulary entry still referenced in <table>").
     """
     # Stub reference check — always passes in Phase 1a (no kind tables).
@@ -276,13 +274,60 @@ def delete_vocabulary(workspace_id: int, kind_namespace: str, name: str) -> None
 
 
 def _check_vocab_references(workspace_id: int, kind_namespace: str, name: str) -> None:
-    """Stub reference check (decision 9). Returns 'no references' in Phase 1a.
+    """Reference check across kind tables (decision 9).
 
-    TODO Phase 2a: scan breadcrumbs table.
     TODO Phase 3: scan memories table.
     TODO Phase 5+: scan reflections table if dedicated server is built.
     """
-    pass  # no kind tables exist yet
+    with _conn() as conn:
+        cur = conn.cursor()
+        if kind_namespace == "bc_kind":
+            cur.execute(
+                "SELECT 1 FROM breadcrumbs "
+                "WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = %s) "
+                "AND kind = %s LIMIT 1",
+                (workspace_id, name),
+            )
+            if cur.fetchone():
+                raise ValueError(
+                    f"Cannot delete vocabulary entry: kind '{name}' "
+                    f"is still referenced by breadcrumbs"
+                )
+        elif kind_namespace == "bc_status":
+            cur.execute(
+                "SELECT 1 FROM breadcrumbs "
+                "WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = %s) "
+                "AND status = %s LIMIT 1",
+                (workspace_id, name),
+            )
+            if cur.fetchone():
+                raise ValueError(
+                    f"Cannot delete vocabulary entry: status '{name}' "
+                    f"is still referenced by breadcrumbs"
+                )
+        elif kind_namespace == "bc_severity":
+            cur.execute(
+                "SELECT 1 FROM breadcrumbs "
+                "WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = %s) "
+                "AND severity = %s LIMIT 1",
+                (workspace_id, name),
+            )
+            if cur.fetchone():
+                raise ValueError(
+                    f"Cannot delete vocabulary entry: severity '{name}' "
+                    f"is still referenced by breadcrumbs"
+                )
+        elif kind_namespace == "memory_type":
+            cur.execute(
+                "SELECT 1 FROM memories "
+                "WHERE workspace_id = %s AND memory_type = %s AND active = true LIMIT 1",
+                (workspace_id, name),
+            )
+            if cur.fetchone():
+                raise ValueError(
+                    f"Cannot delete vocabulary entry: memory_type '{name}' "
+                    f"is still referenced by active memories"
+                )
 
 
 def _row_to_vocab(row: dict) -> Vocab:
