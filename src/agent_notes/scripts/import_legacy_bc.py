@@ -141,7 +141,7 @@ def _copy_breadcrumbs(ws_id: int) -> list[dict]:
     return rows
 
 
-def _insert_breadcrumbs_copy(rows: list[dict], project_id: int) -> None:
+def _insert_breadcrumbs_copy(conn: psycopg.Connection, rows: list[dict], project_id: int) -> None:
     if not rows:
         return
     columns = [
@@ -164,40 +164,34 @@ def _insert_breadcrumbs_copy(rows: list[dict], project_id: int) -> None:
         "closed_at",
     ]
     col_str = ", ".join(columns)
-    with _get_new_conn() as conn:
-        with conn.cursor() as cur:
-            # Use COPY for speed.
-            import io
+    import psycopg.sql
 
-            buf = io.StringIO()
-            for r in rows:
-                vals = [
-                    str(project_id),
-                    r["identifier"],
-                    r["title"],
-                    r.get("body", ""),
-                    r["kind"],
-                    r["status"],
-                    r.get("severity", "medium"),
-                    psycopg.types.json.Jsonb(r.get("external_refs") or {}).dumpb().decode(),
-                    psycopg.types.json.Jsonb(r.get("diagnostic_keys") or {}).dumpb().decode(),
-                    None,  # embedding re-computed later
-                    # TODO: pull breadcrumbs_dir from projects row instead of
-                    # hardcoding; works because all consumer repos use "breadcrumbs"
-                    # (YAGNI until a project diverges)
-                    _normalize_file_path(r.get("file_path"), "breadcrumbs"),
-                    str(r.get("frontmatter_version", 1)),
-                    r.get("projection_sha256") if r.get("projection_sha256") else "\\N",
-                    "false",
-                    r["created_at"].isoformat() if r.get("created_at") else "\\N",
-                    r["updated_at"].isoformat() if r.get("updated_at") else "\\N",
-                    r["closed_at"].isoformat() if r.get("closed_at") else "\\N",
-                ]
-                buf.write("\t".join(str(v) for v in vals) + "\n")
-            buf.seek(0)
-            with cur.copy(f"COPY breadcrumbs ({col_str}) FROM STDIN") as copy:
-                copy.write(buf.read().encode())
-        conn.commit()
+    placeholders = ", ".join(["%s"] * len(columns))
+    insert_sql = psycopg.sql.SQL(
+        f"INSERT INTO breadcrumbs ({col_str}) VALUES ({placeholders}) ON CONFLICT DO NOTHING"
+    )
+    cur = conn.cursor()
+    for r in rows:
+        vals = [
+            project_id,
+            r["identifier"],
+            r["title"],
+            r.get("body", ""),
+            r["kind"],
+            r["status"],
+            r.get("severity", "medium"),
+            psycopg.types.json.Jsonb(r.get("external_refs") or {}),
+            psycopg.types.json.Jsonb(r.get("diagnostic_keys") or {}),
+            None,  # embedding re-computed later
+            _normalize_file_path(r.get("file_path"), "breadcrumbs"),
+            r.get("frontmatter_version", 1),
+            r.get("projection_sha256") if r.get("projection_sha256") else None,
+            False,
+            r.get("filed_at"),
+            r.get("updated_at"),
+            r.get("closed_at"),
+        ]
+        cur.execute(insert_sql, vals)
 
 
 def _batch_change_log(rows: list[dict], ws_id: int, project_id: int) -> None:
@@ -221,22 +215,15 @@ def _batch_change_log(rows: list[dict], ws_id: int, project_id: int) -> None:
     if not vals:
         return
     with _get_new_conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO change_log (kind, workspace_id, project_id,
-                                    identifier, event, payload, changed_at)
-            SELECT * FROM UNNEST(%s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                [v[0] for v in vals],
-                [v[1] for v in vals],
-                [v[2] for v in vals],
-                [v[3] for v in vals],
-                [v[4] for v in vals],
-                [v[5] for v in vals],
-                [v[6] for v in vals],
-            ),
-        )
+        for v in vals:
+            conn.execute(
+                """
+                INSERT INTO change_log (kind, workspace_id, project_id,
+                                        identifier, event, payload, changed_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                v,
+            )
         conn.commit()
 
 
@@ -250,16 +237,33 @@ def _reembed(project_id: int) -> None:
         rows = cur.fetchall()
     total = len(rows)
     print(f"Re-embedding {total} breadcrumbs ...")
+    if not total:
+        return
+    batch = []
+    batch_size = 50
     for i, r in enumerate(rows, 1):
         vec = embed(f"{r['title']} {r['body']}", task="document")
-        with _get_new_conn() as conn:
-            conn.execute(
-                "UPDATE breadcrumbs SET embedding = %s WHERE project_id = %s AND identifier = %s",
-                (vec.tolist(), r["project_id"], r["identifier"]),
-            )
-            conn.commit()
-        if i % 50 == 0:
+        batch.append((r["project_id"], r["identifier"], vec.tolist()))
+        if len(batch) >= batch_size:
+            with _get_new_conn() as conn:
+                with conn.transaction():
+                    for pid, ident, vec_list in batch:
+                        conn.execute(
+                            "UPDATE breadcrumbs SET embedding = %s "
+                            "WHERE project_id = %s AND identifier = %s",
+                            (vec_list, pid, ident),
+                        )
+            batch = []
             print(f"  {i}/{total} done")
+    if batch:
+        with _get_new_conn() as conn:
+            with conn.transaction():
+                for pid, ident, vec_list in batch:
+                    conn.execute(
+                        "UPDATE breadcrumbs SET embedding = %s "
+                        "WHERE project_id = %s AND identifier = %s",
+                        (vec_list, pid, ident),
+                    )
     print("Re-embedding complete.")
 
 
@@ -278,9 +282,11 @@ def main() -> None:
 
     with _get_new_conn() as conn:
         _disable_notify(conn)
-        _insert_breadcrumbs_copy(rows, proj_id)
+        _insert_breadcrumbs_copy(conn, rows, proj_id)
+        conn.commit()
         _batch_change_log(rows, ws_id, proj_id)
         _enable_notify(conn)
+        conn.commit()
     print("Rows copied and change_log batch-inserted.")
 
     _reembed(proj_id)

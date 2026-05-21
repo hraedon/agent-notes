@@ -30,35 +30,24 @@ import sys
 def _find_legacy_memories(legacy_dsn: str) -> list[dict]:
     """Read memories from the legacy memory-mcp database.
 
-    Adjust the SELECT columns and table name to match the actual legacy schema.
-    Expected columns: id, name, project (TEXT), memory_type, body,
-                      supersedes (nullable BIGINT), attributes (JSONB).
+    Adjusts SELECT to match the actual legacy schema (UUID ids, optional columns).
     """
     import psycopg
     from psycopg.rows import dict_row
 
     with psycopg.connect(legacy_dsn, row_factory=dict_row) as conn:
         cur = conn.cursor()
-        try:
-            cur.execute(
-                """
-                SELECT id, name, project, memory_type, body,
-                       supersedes, attributes, created_at, updated_at
-                FROM memories
-                ORDER BY id
-                """
-            )
-        except psycopg.Error:
-            conn.rollback()
-            cur.execute(
-                """
-                SELECT id, name, project, memory_type, body,
-                       supersedes, attributes, created_at, updated_at
-                FROM memory
-                ORDER BY id
-                """
-            )
-            return cur.fetchall()
+        # Legacy schema has: id (UUID), name, project, memory_type, body,
+        # embedding, created_at, updated_at, supersedes (UUID), active (bool),
+        # tags (ARRAY), description.  No attributes column.
+        cur.execute(
+            """
+            SELECT id, name, project, memory_type, body,
+                   supersedes, created_at, updated_at
+            FROM memories
+            ORDER BY id
+            """
+        )
         return cur.fetchall()
 
 
@@ -115,7 +104,6 @@ def run_import(legacy_dsn: str, new_dsn: str) -> None:
                 body = row.get("body", "")
                 name = row["name"]
                 memory_type = row.get("memory_type", "note")
-                attributes = row.get("attributes") or {}
                 supersedes = row.get("supersedes")
 
                 vec = embed(body, task="document") if body.strip() else None
@@ -137,7 +125,7 @@ def run_import(legacy_dsn: str, new_dsn: str) -> None:
                         body,
                         vec.tolist() if vec is not None else None,
                         id_map.get(supersedes) if supersedes else None,
-                        psycopg.types.json.Jsonb(attributes),
+                        psycopg.types.json.Jsonb({}),
                         row.get("created_at"),
                         row.get("updated_at"),
                     ),
