@@ -522,6 +522,8 @@ class TestReflectionMCPWrapper:
 
 
 class TestBreadcrumbResourceMCPWrapper:
+    """Tests that confirm KeyError from missing args is NOT swallowed as Unknown tool."""
+
     @pytest.fixture(autouse=True)
     def _setup_project(self):
         self.ws = coredb.get_or_create_workspace("res-bc-ws", "Res BC WS")
@@ -535,6 +537,37 @@ class TestBreadcrumbResourceMCPWrapper:
         coredb.add_vocabulary(self.ws.id, "bc_kind", "bug")
         coredb.add_vocabulary(self.ws.id, "bc_status", "new")
         coredb.add_vocabulary(self.ws.id, "bc_severity", "medium")
+
+    def test_missing_required_arg_returns_argument_error(self):
+        """If a required argument is missing, report it instead of 'Unknown tool'."""
+        from agent_notes.servers.breadcrumbs import BreadcrumbServer
+
+        server = BreadcrumbServer()
+        responses = _drive(
+            server,
+            [
+                _rpc("initialize", {"protocolVersion": "2024-11-05"}),
+                _rpc(
+                    "tools/call",
+                    {
+                        # file_breadcrumb exists, but omit required 'kind'
+                        "name": "file_breadcrumb",
+                        "arguments": {
+                            "workspace": "res-bc-ws",
+                            "project": "res-bc-proj",
+                            "title": "Missing kind arg",
+                            "status": "new",
+                        },
+                    },
+                    req_id=2,
+                ),
+            ],
+        )
+        tool_resp = responses[-1]
+        assert "error" in tool_resp, f"Expected error response, got: {tool_resp}"
+        msg = tool_resp["error"]["message"]
+        assert "Tool argument missing" in msg, f"Expected 'Tool argument missing', got: {msg}"
+        assert "Unknown tool" not in msg, f"Must not conflate missing arg with unknown tool: {msg}"
 
     def test_resources_list_and_read_breadcrumb(self):
         from agent_notes.servers.breadcrumbs import BreadcrumbServer
@@ -657,9 +690,25 @@ class TestOmnibusMCPWrapper:
         coredb.add_vocabulary(self.ws.id, "memory_type", "note")
 
     def test_omnibus_tools_list_union(self):
-        # serve() instantiates and runs, blocking on stdio. We test via
-        # manual Server construction instead of calling serve().
-        pass
+        from agent_notes.core.server import Server
+        from agent_notes.servers.breadcrumbs import BreadcrumbServer
+        from agent_notes.servers.memory import MemoryServer
+        from agent_notes.servers.search import SearchServer
+
+        omnibus = Server()
+        collisions_bc = omnibus.merge_registry(BreadcrumbServer())
+        collisions_mem = omnibus.merge_registry(MemoryServer())
+        collisions_search = omnibus.merge_registry(SearchServer())
+
+        assert collisions_bc == []
+        assert "trace_graph" in collisions_mem
+        assert collisions_search == []
+
+        tool_names = {t["name"] for t in omnibus._registry.list_tools()}
+        assert "file_breadcrumb" in tool_names
+        assert "add_memory" in tool_names
+        assert "search_all_notes" in tool_names
+        assert "trace_graph_all" in tool_names
 
     # Can't use serve directly — it blocks on run(). Build manually.
     def test_omnibus_tools_list_and_call(self):

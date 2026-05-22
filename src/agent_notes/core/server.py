@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from typing import Any
 
-from agent_notes.core.mcp import ToolRegistry, _err, _ok, _send
+from agent_notes.core.mcp import ToolNotFoundError, ToolRegistry, _err, _ok, _send
 
 PROTOCOL_VERSION = "2024-11-05"
 
@@ -39,9 +39,12 @@ class Server:
     def register_resource_handler(self, uri_prefix: str, fn: Any) -> None:
         self._registry.register_resource_handler(uri_prefix, fn)
 
-    def merge_registry(self, other: "Server") -> None:
-        """Merge another server's registry into this one (omnibus mode, decision 12)."""
-        self._registry.merge(other._registry)
+    def merge_registry(self, other: "Server") -> list[str]:
+        """Merge another server's registry into this one (omnibus mode, decision 12).
+
+        Returns a list of non-core tool name collisions (empty if no conflicts).
+        """
+        return self._registry.merge(other._registry)
 
     # ------------------------------------------------------------------
     # Core tools wired automatically on every server (decision 6 / §6)
@@ -417,8 +420,10 @@ class Server:
         try:
             text = self._registry.call(name, tool_args)
             _send(_ok(req_id, text))
-        except KeyError:
+        except ToolNotFoundError:
             _send(_err(req_id, -32601, f"Unknown tool: {name}"))
+        except KeyError as exc:
+            _send(_err(req_id, -32601, f"Tool argument missing: {exc}"))
         except Exception as exc:
             _send(_ok(req_id, f"Error: {exc}"))
 

@@ -39,6 +39,16 @@ def _err(req_id: Any, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
 
 
+_CORE_TOOL_NAMES = frozenset({
+    "list_workspaces", "list_projects", "list_vocabulary", "archive_vocabulary",
+    "changes_since", "add_link", "remove_link", "history",
+})
+
+
+class ToolNotFoundError(Exception):
+    """Raised when a requested tool name is absent from the registry."""
+
+
 class ToolRegistry:
     """Per-class tool registry so multiple kind registries compose cleanly (decision 12)."""
 
@@ -57,7 +67,7 @@ class ToolRegistry:
     def call(self, name: str, args: dict) -> str:
         fn = self._fns.get(name)
         if fn is None:
-            raise KeyError(name)
+            raise ToolNotFoundError(name)
         return fn(args)
 
     def list_tools(self) -> list[dict]:
@@ -66,12 +76,29 @@ class ToolRegistry:
     def list_resource_handlers(self) -> list[tuple[str, Any]]:
         return list(self._resource_handlers)
 
-    def merge(self, other: "ToolRegistry") -> None:
-        """Merge another registry into this one (omnibus composition, decision 12)."""
+    def merge(self, other: "ToolRegistry") -> list[str]:
+        """Merge another registry into this one (omnibus composition, decision 12).
+
+        Core tools (list_workspaces, etc.) are silently deduplicated because
+        they are functionally identical across kind servers. Non-core tool
+        name collisions are skipped (first registration wins) and returned
+        so the caller can surface them.
+
+        Resource handlers are deduplicated by URI prefix: if the same prefix
+        is already registered, the duplicate is silently skipped.
+        """
+        collisions: list[str] = []
         for tool in other._tools:
             name = tool["name"]
-            if name not in self._fns:
+            if name in self._fns:
+                if name not in _CORE_TOOL_NAMES:
+                    collisions.append(name)
+            else:
                 self._tools.append(tool)
                 self._fns[name] = other._fns[name]
+        existing_prefixes = {prefix for prefix, _ in self._resource_handlers}
         for prefix, fn in other._resource_handlers:
-            self._resource_handlers.append((prefix, fn))
+            if prefix not in existing_prefixes:
+                self._resource_handlers.append((prefix, fn))
+                existing_prefixes.add(prefix)
+        return collisions
