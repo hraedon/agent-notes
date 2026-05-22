@@ -700,9 +700,11 @@ class TestOmnibusMCPWrapper:
         collisions_mem = omnibus.merge_registry(MemoryServer())
         collisions_search = omnibus.merge_registry(SearchServer())
 
-        assert collisions_bc == []
+        # resolve_project is now a core tool registered by every server,
+        # so each merge produces a collision (first-registration-wins).
+        assert "trace_graph" not in collisions_bc
         assert "trace_graph" in collisions_mem
-        assert collisions_search == []
+        assert "trace_graph" not in collisions_search
 
         tool_names = {t["name"] for t in omnibus._registry.list_tools()}
         assert "file_breadcrumb" in tool_names

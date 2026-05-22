@@ -1,160 +1,121 @@
-# Plan 002 — Writer Provenance, Curation Primitives, and Onboarding Ergonomics
+# Plan 002 — Onboarding Ergonomics, Bug Cleanup, and Deferred Curation
 
-Status: Proposed (v0.1, drafted 2026-05-21 by Claude Opus 4.7 in conversation with plm; awaiting peer review against Plan 001's discipline)
-Scope: Targeted follow-on to Plan 001. Adds writer attribution, low-cost memory curation, and onboarding/path-resolution ergonomics. Does NOT touch the storage substrate, the transport model, or the omnibus/per-kind binary split — those calls in Plan 001 stand.
-Consumers: same as Plan 001 (sf2, substrate, sf1, plus Claude Code / agy / OpenCode / Gemini harnesses).
-Reference: spawned from a Gemini-authored `generalization_proposals.md`; the rejected branches (pluggable storage, CRDT federation, multi-transport hub, autonomous LLM synthesis) are recorded in §6 with rejection rationale so the next reviewer doesn't re-litigate them.
+Status: Revised v0.2 (2026-05-22). v0.1 bundled three orthogonal mini-features; v0.2 re-prioritizes around what real production use has actually demanded, and slots in the active-breadcrumb bug cleanup as a precondition. Provenance and curation move to "do when triggered" instead of "do next."
+Scope: Targeted follow-on to Plan 001. Adds path-based project resolution, an onboarding CLI, and a queued-but-not-blocked backlog. Does NOT touch the storage substrate or the projection question (that lives in Plan 003).
+Consumers: same as Plan 001.
+Supersedes: §1–§9 of Plan 002 v0.1 (the structure is preserved; the prioritization changed).
 
 ## 1. Why now
 
-Plan 001 closed Phase 6 and the new server is in production. Five hours of real usage surfaced one bug bundle (BC-001..005) and two recurring friction points:
+Plan 001 closed. Five hours of production use surfaced:
 
-1. **"Who wrote this?"** — `change_log.actor` is a TEXT column that nothing populates today. As more agents (Claude lineages, agy, OpenCode) write into one DB, attribution becomes load-bearing for trust, debugging, and selective ignoring.
-2. **"Where am I?"** — every kind tool requires `workspace` + `project` slugs as args. Agents don't know them on first call; the human or a `list_projects` round-trip has to bridge. Project creation is currently a Python one-liner against `core.db` — not user-facing.
+1. **Bug cluster around projection + project registration** (BC-006, BC-007). The "search before filing" workflow is broken cross-project. Projections silently divert to `/tmp/` when `breadcrumbs_dir` is unset. Both are foundational — they invalidate the dedup story other features lean on.
+2. **"Where am I?" friction.** Every kind tool takes `(workspace, project)`. Agents know their cwd. Bridging that gap is the highest-payoff single change visible in production traffic.
+3. ~~"Who wrote this?"~~ — Real but speculative. Today's only writer is Claude Code. Provenance is cheap to add and the migration cost grows with row count, but it doesn't unblock anything visible right now. Demoted from §2 of v0.1 to §6 of v0.2.
 
-Curation (Gemini's #4, distilled) is a smaller motivation but a worthwhile companion phase since the schema changes overlap.
+Plan 003 takes up the larger architectural question (drop markdown projection, add web frontend) that BC-006 hints at. Plan 002 stays small and operational.
 
 ## 2. Design decisions
 
-Numbered to extend Plan 001's sequence (decisions 1–26 are reserved).
+Numbered to extend Plan 001's sequence (decisions 1–26 reserved). v0.1's decisions 27–34 are kept where they survived re-prioritization; their numbers are preserved for traceability.
 
-27. **Writer provenance is first-class columns on `change_log`, not JSONB.** Extends decision 23 (load-bearing attrs → columns). Add `agent_lineage`, `harness`, and `environment` as nullable TEXT columns. Reason: any future filter ("show me memories written by claude-opus-4-7 from antigravity-cli") or audit ("which lineage produced the bogus run of memories?") must run as cheap indexed predicates, not JSONB path queries. JSONB stays for genuinely unbounded provenance metadata (`git_context`, `model_temperature`, etc.) under a single `provenance JSONB` column.
+32. **`agent-notes init <path>` is a first-class CLI.** (Was decision 32 in v0.1, unchanged.) Walks up to find the git root; defaults workspace=`default`, project=dirname, `breadcrumbs_dir`=`breadcrumbs` relative to repo root, `repo_root`=absolute path. Idempotent upsert. Reason: registering a project today requires a Python one-liner against `core.db`. One command, one path, done.
 
-28. **Provenance is set by the harness, not invented by the server.** The MCP server reads three env vars (`AGENT_NOTES_AGENT_LINEAGE`, `AGENT_NOTES_HARNESS`, `AGENT_NOTES_ENV`) on each tool call and stamps `change_log` with their values. The kind tools never guess. If a harness doesn't set them, the columns are NULL — which is honest and queryable, not a fabricated default.
+33. **Path-based project resolution is a core helper, not per-kind logic.** (Was decision 33 in v0.1, unchanged.) New core tool `resolve_project(path)` returns `{workspace, project, repo_root}` by longest-prefix match against `projects.repo_root`. Kind tools accept either `(workspace, project)` *or* `path`, with `path` taking precedence when both are passed.
 
-29. **Provenance is recorded at `change_log` only, not duplicated on kind rows.** Kind tables stay minimal. Anyone who wants "who wrote BC-184?" runs the existing `history` tool, which already filters `change_log` by `(kind, identifier)` — provenance falls out for free. Reason: kind tables are the read-hot path; bloating them with attribution columns we'd hit in <5% of queries is a poor trade.
+35. **Bug cleanup blocks the rest of this plan.** BC-006 and BC-007 are in scope for Phase 7a as preconditions, not as a separate phase. Reason: 7a's `agent-notes init` populates `breadcrumbs_dir` (which makes BC-006's silent /tmp fallback impossible) and `resolve_project` is the same code path that needs to participate in `find_breadcrumbs`' WHERE-clause assembly (BC-007). Fixing them together avoids touching the same code twice.
 
-30. **`mark_stale` is a column flip on memories, not a deletion.** Add `stale BOOLEAN NOT NULL DEFAULT FALSE` and `stale_reason TEXT` to `memories`. `search_memory` filters them out by default (`stale=false`), with an `include_stale: true` opt-in. Reason: deletion is irreversible; staleness preserves the audit trail and lets a future reflection ask "what did we believe in March that turned out wrong?" The decision to mark stale is made by an agent or human; the server doesn't infer staleness from age.
+36. **Provenance, staleness, and `suggest_duplicates` are deferred to "when triggered."** (Replaces v0.1's Phase 7b and 7c as the next steps.) The schema migrations are pre-designed (§4 below) so the trigger event is "second harness starts writing" / "stale memory bites" / "duplicate cluster bites" — at which point the corresponding sub-phase ships in a session, not a month.
 
-31. **`suggest_duplicates` extends to memories.** Breadcrumbs already have this tool. Re-implement the same cosine-similarity-over-embeddings logic for memories, surfaced via `memory.suggest_duplicates`. The output is a *list of candidates with scores*, not auto-merges. Reason: the cheap half of Gemini's "synthesis" pipeline is the dupe finder; the expensive half (LLM merge) ships failure modes — confident-but-wrong canon. Stop at the candidate list and let a human or session decide.
+37. **Decisions 27–31 from v0.1 stand as-is, just not next.** The schema delta and tool surface in v0.1 §3–§4 for provenance and staleness are still the correct shape when the trigger fires. Captured here so future-me doesn't redesign them.
 
-32. **`agent-notes init <path>` is a first-class CLI.** Replaces the Python one-liner currently needed to register a project. Argument: a filesystem path. Behavior:
-    - Walk up to find the git root (or use the path as-is); use the dir name as the project slug unless `--project` overrides.
-    - Default workspace = `default`; `--workspace` overrides.
-    - `breadcrumbs_dir` defaults to `breadcrumbs` relative to repo root; `repo_root` is the absolute path.
-    - Idempotent: re-running upserts.
-    Reason: every new project today requires touching three things (workspace, project, breadcrumbs_dir). One command, one path, done.
+38. **Plan 002 gets one round of peer review, not five.** (Procedural.) Plan 001's five-round discipline was load-bearing for greenfield architecture. Plan 002 is additive ergonomics; one round is enough.
 
-33. **Path-based project resolution is a core helper, not per-kind logic.** New core tool `resolve_project(path)` returns `{workspace, project}` by matching `path` against `projects.repo_root` (longest-prefix wins). Kind tools accept either `(workspace, project)` *or* `path`, with `path` taking precedence when both are passed. Reason: agents know where they're working (cwd, an open file); making them know workspace+project slug names is friction that shows up in every tool call. The MCP server already has the path→project mapping; expose it.
+## 3. Tool surface delta (Phase 7a only)
 
-34. **No new transports, no new substrates, no auto-synthesis.** Stated for the record (§6 explains why each was considered and rejected). This plan is additive, not architectural.
+- **`resolve_project(path)`** — new core tool. Returns `{workspace, project, repo_root}` or a structured `PROJECT_NOT_REGISTERED` error.
+- **All kind tools that take `(workspace, project)`** — gain optional `path` argument; `path` wins when both are passed.
+- **`find_breadcrumbs`** — WHERE-clause assembly fixed (BC-007). Parametric test covers (`project` set/unset) × (additional filters set/unset).
+- **`query_breadcrumbs`** — `is_open` status mapping documented in the tool description (BC-007 follow-up).
+- **`file_breadcrumb`** — refuses to project when `breadcrumbs_dir` is unset; returns `PROJECT_NOT_CONFIGURED` with the remediation in the error (BC-006). DB row is still written. *Note: if Plan 003 lands first, this whole branch goes away — see Plan 003 §5 for the ordering question.*
+- **`agent-notes init <path>`** — CLI (not MCP tool). Idempotent.
 
-## 3. Schema delta
+## 4. Schema delta (deferred phases only — kept for traceability)
+
+When provenance ships (decision 36 trigger fires):
 
 ```sql
--- Decision 27: first-class provenance columns on change_log
 ALTER TABLE change_log
-    ADD COLUMN agent_lineage TEXT,     -- e.g. 'claude-opus-4-7', 'gemini-2.5-flash'
-    ADD COLUMN harness       TEXT,     -- e.g. 'claude-code', 'antigravity-cli', 'opencode'
-    ADD COLUMN environment   TEXT,     -- e.g. 'local', 'sandbox', 'ci'
+    ADD COLUMN agent_lineage TEXT,
+    ADD COLUMN harness       TEXT,
+    ADD COLUMN environment   TEXT,
     ADD COLUMN provenance    JSONB NOT NULL DEFAULT '{}';
+CREATE INDEX idx_change_log_lineage ON change_log (agent_lineage, changed_at DESC);
+```
 
-CREATE INDEX idx_change_log_lineage
-    ON change_log (agent_lineage, changed_at DESC);
+When staleness ships:
 
--- (Existing `actor TEXT` column from Plan 001 is retained for human/user identity;
--- agent_lineage is its agent-side counterpart. Both can be populated when known.)
-
--- Decision 30: staleness on memories
+```sql
 ALTER TABLE memories
     ADD COLUMN stale        BOOLEAN NOT NULL DEFAULT FALSE,
     ADD COLUMN stale_reason TEXT,
     ADD COLUMN stale_at     TIMESTAMPTZ;
-
 CREATE INDEX idx_memories_active_fresh
-    ON memories (project_id, name)
-    WHERE active = true AND stale = false;
--- Search default path: WHERE active AND NOT stale. Existing partial unique
--- index on (project_id, name) WHERE active still holds; add this one alongside.
+    ON memories (project_id, name) WHERE active = true AND stale = false;
 ```
 
-No changes to `breadcrumbs`, `links`, `workspaces`, `projects`, or vocabularies.
-
-## 4. Tool surface delta
-
-New / extended tools:
-
-- **`resolve_project(path)`** (core helper, decision 33): returns `{workspace, project, repo_root}` for the longest-prefix match against `projects.repo_root`. Available to every kind server.
-- **All kind tools that currently take `(workspace, project)`**: gain an optional `path` parameter; when set, it's resolved via `resolve_project` and overrides explicit args.
-- **`memory.mark_stale(name, reason)`** (decision 30): flips the staleness flag with a required human-readable reason. Stamps `change_log` with `event='marked_stale'`.
-- **`memory.suggest_duplicates(project, threshold=0.85, limit=20)`** (decision 31): returns ranked candidate pairs above threshold. Output is *informational* — no merges, no mutations.
-- **`search_memory`**: gains `include_stale: boolean = false` flag.
-
-New / extended CLI:
-
-- **`agent-notes init <path>`** (decision 32): registers workspace + project + repo_root + breadcrumbs_dir in one call. Idempotent.
-- **`agent-notes-doctor`**: gains a "provenance env vars" section showing what the current shell would stamp.
+No changes to `breadcrumbs`, `links`, `workspaces`, `projects`, or vocabularies for Phase 7a.
 
 ## 5. Phased implementation
 
-Each phase is one Sonnet dispatch (4–8h). Sub-phases parallelize where noted.
-
-### Phase 7a — Onboarding ergonomics (low risk, high signal)
+### Phase 7a — Onboarding ergonomics + active-bug cleanup (one session)
 
 | # | Task | Outcome |
 |---|---|---|
-| 7a.1 | `agent-notes init <path>` CLI (decision 32) | New project registered with one command; idempotent re-runs upsert |
-| 7a.2 | Core helper `resolve_project(path)` (decision 33); register as MCP tool on every kind server | Path-based resolution available to all kinds |
-| 7a.3 | Extend kind tools' input schemas to accept `path` alongside `(workspace, project)`; precedence: path > explicit args | Existing call sites keep working; new path-based calls work too |
-| 7a.4 | Tests + AGENTS.md update | `make test` green; convention documented |
+| 7a.0 | Confirm omnibus + doctor in-flight changes are committed and `tests/test_omnibus.py` is green (carries forward BC-001/003/004 resolution) | No drift between active resolved/ dir and main; preconditions clear |
+| 7a.1 | Fix BC-007: `find_breadcrumbs` WHERE-clause / parameter list assembly; `query_breadcrumbs` `is_open` documented | Parametric test exercises all four arg combinations; both tools work cross-project |
+| 7a.2 | Fix BC-006: `file_breadcrumb` refuses to write projection when `breadcrumbs_dir` is unset; error names the remediation | No more silent /tmp writes; DB row still written; close 006 |
+| 7a.3 | `agent-notes init <path>` CLI (decision 32) | New project registered idempotently with one command |
+| 7a.4 | Core helper `resolve_project(path)`; register as MCP tool on every kind server (decision 33) | Path-based resolution available to all kinds |
+| 7a.5 | Extend kind tools' input schemas to accept `path` alongside `(workspace, project)`; precedence path > explicit args | Existing call sites unchanged; new call sites can pass `path` |
+| 7a.6 | Tests + AGENTS.md update | `make test` green; convention documented |
 
-### Phase 7b — Writer provenance
+### Phase 7b — Writer provenance (deferred, ships when triggered)
 
-| # | Task | Outcome |
-|---|---|---|
-| 7b.1 | Schema migration for `change_log` provenance columns + index (decision 27) | Migration runs idempotently against existing data (existing rows have NULL provenance, which is correct — we didn't track it before) |
-| 7b.2 | Read provenance env vars in `core.server`; thread through all `change_log.write_change` call sites | Every new `change_log` row carries provenance when the harness provides it |
-| 7b.3 | `agent-notes-doctor` shows current env's provenance values (decision 28) | New users see what their session would stamp; missing values are obvious |
-| 7b.4 | Update `history` tool output to surface provenance columns | `history` answers "who wrote this?" with no extra query |
-| 7b.5 | Add `agent_lineage` / `harness` filters to `changes_since` | "Show me what claude-opus wrote since yesterday" works |
-| 7b.6 | Document the three env vars in AGENTS.md and the per-harness README sections | Harness operators (including the user's MCP configs) know what to set |
+Trigger: second harness (agy, OpenCode, or other) starts writing into the shared DB, OR the user explicitly asks to debug attribution.
 
-### Phase 7c — Curation primitives (depends on 7b for `change_log` write-site changes)
+Tasks unchanged from v0.1 §5 (7b.1–7b.6). Schema delta in §4. Estimated one session when triggered.
 
-| # | Task | Outcome |
-|---|---|---|
-| 7c.1 | Schema migration for `memories.stale` / `stale_reason` / `stale_at` + filtered index (decision 30) | Migration runs idempotently |
-| 7c.2 | `memory.mark_stale` tool; writes `event='marked_stale'` to change_log | Memories can be retired without deletion |
-| 7c.3 | `search_memory` filters `stale=false` by default; `include_stale: true` opt-in | Token noise reduced; opt-in for retrospection |
-| 7c.4 | `memory.suggest_duplicates` tool (decision 31) | Candidate pairs surface; no autonomous merging |
-| 7c.5 | Tests covering both tools | `make test` green |
+### Phase 7c — Curation primitives (deferred, ships when triggered)
 
-### Phase 7d (optional) — Wire harness configs
+Trigger: memory table grows past ~500 rows AND search noise becomes a complaint, OR a duplicate cluster bites and a human asks for the dupe-finder.
 
-| # | Task | Outcome |
-|---|---|---|
-| 7d.1 | Update Claude Code `claude mcp` registrations to set provenance env vars | All three agent-notes servers stamp `agent_lineage=claude-opus-4-7`, `harness=claude-code` |
-| 7d.2 | Same for agy's `~/.gemini/config/mcp_config.json` and any OpenCode config | Cross-agent attribution works end-to-end |
+Tasks unchanged from v0.1 §5 (7c.1–7c.5). Schema delta in §4. Estimated one session when triggered.
 
-7d is mechanical and lives outside the repo, but the plan is incomplete without it landing.
+### Phase 7d — Removed
+
+v0.1's "wire harness configs" phase was mechanical and lives outside the repo. It ships alongside 7b naturally; no plan slot needed.
 
 ## 6. Considered and rejected
 
-These items came from Gemini's `generalization_proposals.md` (2026-05-21). They were considered, rejected, and recorded here so the next reviewer doesn't re-open them without new evidence.
+Inherited from v0.1 §6 (R1–R6) and still rejected for the same reasons. Two new entries:
 
-| # | Proposal | Rejection rationale |
-|---|---|---|
-| R1 | Pluggable storage adapters (SQLite, Git-JSON) | Plan 001 decisions 1, 3, 22 committed to one Postgres database. `pgvector` + HNSW + `change_log` triggers + `NOTIFY` are load-bearing; a SQLite adapter rebuilds the stack on a weaker substrate, a Git-JSON adapter loses vector search. The portability problem we actually have is RAM, mitigated by omnibus mode (Plan 001 decision 12). No friction has emerged that justifies the duplication. |
-| R2 | Provenance in `change_log.platform_metadata JSONB` | Reshaped, not rejected. Plan 001 decision 23 explicitly says trigger-/query-load-bearing attributes belong in columns; only unbounded extras stay in JSONB. Decision 27 splits this into both halves. |
-| R3 | Multi-transport HTTP/SSE/WebSocket hub | Current consumers (sf2, substrate, sf1) all share one homelab Postgres. Stdio works. "Multi-node swarms" is a speculative use case, not a real one. The "central hub" is the existing DB. |
-| R4 | CRDT federation of memory state across nodes | Vector embeddings, supersedes chains, and the `links` 9-column composite PK have no natural CRDT representation. Research project, not a feature. |
-| R5 | Autonomous LLM-driven memory synthesis ("merge these 10 dupes into a guideline") | Ships confident-but-wrong canon. The decision-grade output that matters is the dupe candidate list (decision 31 keeps that); the synthesis step is the unsafe half and removed. |
-| R6 | Half-life / time-based memory decay | "Old = wrong" is a vibes-based policy. Staleness is a flip with a *reason* (decision 30), not a clock. Time-based decay can be added later if a concrete pattern of stale-by-age emerges that an agent or human couldn't catch. |
+| # | Proposal | Source | Rejection rationale |
+|---|---|---|---|
+| R7 | Add `projects:` array argument to `find_breadcrumbs` / `search_memory` for cross-project search | Kimi 2026-05-22 | Plan 001 decision 10 split kind-local from cross-kind for performance. `search_all_notes` already exists. The friction is that agents don't know it exists; the fix is a better tool description and `/start`-skill orientation, not widening the kind tools. |
+| R8 | `file_breadcrumbs` (plural) batch tool | Kimi 2026-05-22 | /end files 2–3 breadcrumbs per session. 10× round-trip reduction on tiny numbers is YAGNI. Revisit when a workflow files >20 at once. |
 
 ## 7. Risks and mitigations
 
-- **Provenance NULL backfill**: existing `change_log` rows have NULL `agent_lineage` / `harness` / `environment`. Acceptable — we didn't track these before; pretending we did is dishonest. Mitigation: NULL is a queryable value; "show me unattributed history" is itself a useful query.
-- **Harness env vars not set everywhere**: agy / OpenCode / future harnesses may not all stamp the vars. Mitigation: doctor surfaces what's set (Phase 7b.3); documentation includes a copy-pasteable env block for each harness; columns are nullable so missing values don't break writes.
-- **Path-based resolution ambiguity**: a path under `/projects/substrate/lib/foo` should resolve to `substrate`, not to a hypothetical `substrate-lib` project. Mitigation: longest-prefix-match on `projects.repo_root` (decision 33). Edge case (path doesn't match any project) returns an error, not a guess.
-- **`stale=true` is human-meaningful but search-invisible by default**: users may write memories and never see them again if they get marked stale by another agent. Mitigation: `mark_stale` always writes a `change_log` event; `history` and `changes_since` surface it; `include_stale` opt-in keeps the data discoverable.
-- **`suggest_duplicates` on memories at scale**: cosine-over-embeddings is O(n²) for pair generation. Mitigation: use the existing HNSW index path (KNN per row, threshold filter); cap output at `limit`. Same shape as the working breadcrumbs implementation.
+- **BC-006 fix interacts with Plan 003.** If Plan 003 drops projection entirely, BC-006's `PROJECT_NOT_CONFIGURED` error becomes vestigial. Mitigation: see Plan 003 §5 ordering question. The most conservative path is "fix BC-006 inside Phase 7a, then have Plan 003 delete the projection branch wholesale" — slightly more code churn, but it lets 7a ship without waiting for Plan 003 review.
+- **Path resolution ambiguity** (kept from v0.1): longest-prefix match on `projects.repo_root`; no-match returns a structured error, never a guess.
+- **`agent-notes init` running outside a git repo**: detect and either use the path as-is or refuse — pick at implementation time, document either way.
 
 ## 8. Open questions
 
-1. **Should `breadcrumbs` get the same `stale` flag?** Arguably yes (terminal statuses like `resolved`/`wont_fix` already cover it, but a `stale-after-shipped` semantic differs). Deferred — bring up in Phase 7c review.
-2. **Should `resolve_project` cache the path → project map in-process?** `projects` is small (4 rows today) and read-mostly; probably no, but if `tools/list` round-trip becomes a hot path we'll measure.
-3. **Provenance on `breadcrumbs.body` updates that happen via `update_breadcrumb`**: confirmed yes — `change_log` already records `event='updated'`; provenance lands there.
+1. **7a-vs-Plan-003 ordering.** Discussed in Plan 003 §5. Default: 7a first because it unblocks bug fixes; Plan 003 deletes obsoleted code afterward.
+2. **`agent-notes init` and existing on-disk breadcrumbs** (substrate's case): should `init` ingest existing `breadcrumbs/*.md` if it finds them, or stay agnostic? Probably ingest (idempotent, one-line invocation), but mark for confirmation during 7a.
 
 ## 9. Status
 
-Proposed; ready for peer review (sonnet / kimi / deepseek round). Plan 001's review discipline applies: rejections welcome, but each must come with new evidence, not a restatement of the proposal it's rejecting.
+Revised v0.2; ready for one round of peer review (decision 38). Plan 001's "rejections need new evidence" discipline still applies.

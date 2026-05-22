@@ -334,21 +334,25 @@ class BreadcrumbModel:
         limit: int = 10,
     ) -> list[dict]:
         conditions = ["b.embedding IS NOT NULL"]
-        params: list[Any] = []
+        where_params: list[Any] = []
 
         if project_id is not None:
             conditions.append("b.project_id = %s")
-            params.append(project_id)
+            where_params.append(project_id)
         if workspace_id is not None:
             conditions.append(
                 "EXISTS (SELECT 1 FROM projects p "
                 "WHERE p.id = b.project_id AND p.workspace_id = %s)"
             )
-            params.append(workspace_id)
+            where_params.append(workspace_id)
 
         where = " AND ".join(conditions)
-        params.append(query_vec)
-        params.append(min(limit, 50))
+        limit_val = min(limit, 50)
+
+        # Params must appear in the same order as placeholders in the SQL:
+        #   $1 = SELECT distance, $2-$N = WHERE conditions,
+        #   ${N+1} = ORDER BY distance, ${N+2} = LIMIT.
+        params: list[Any] = [query_vec] + where_params + [query_vec, limit_val]
 
         with _conn() as conn:
             cur = conn.cursor(row_factory=dict_row)
@@ -357,11 +361,11 @@ class BreadcrumbModel:
                 SELECT b.*,
                        p.slug AS project_slug,
                        p.workspace_id AS workspace_id,
-                       b.embedding <=> %s AS distance
+                       b.embedding <=> %s::vector AS distance
                 FROM breadcrumbs b
                 JOIN projects p ON p.id = b.project_id
                 WHERE {where}
-                ORDER BY b.embedding <=> %s
+                ORDER BY b.embedding <=> %s::vector
                 LIMIT %s
                 """,
                 params,

@@ -298,6 +298,71 @@ def test_delete_vocab_referenced_by_bc(default_project):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# find_breadcrumbs (BC-007 regression: parametric placeholder/param tests)
+# ---------------------------------------------------------------------------
+
+
+def _setup_two_bcs(default_project):
+    """File two breadcrumbs with distinct titles for find_breadcrumbs tests."""
+    BreadcrumbModel.file_breadcrumb(
+        project_id=default_project.id,
+        identifier="BC-FIND-01",
+        title="First searchable breadcrumb about pooling",
+        status="open",
+        embedding=[float(i) for i in range(768)],
+    )
+    BreadcrumbModel.file_breadcrumb(
+        project_id=default_project.id,
+        identifier="BC-FIND-02",
+        title="Second searchable breadcrumb about vectors",
+        status="open",
+        # Different vector to ensure a deterministic ordering.
+        embedding=[float(i + 100) for i in range(768)],
+    )
+
+
+def test_find_breadcrumbs_parametric(default_project):
+    """Exercise (project set/unset) × (embedding limit 10).
+
+    Regression for BC-007: placeholder/parameter mismatch was raised when
+    optional filters were present or absent in various combinations.
+    """
+    from agent_notes.servers.breadcrumbs import BreadcrumbServer
+
+    srv = BreadcrumbServer()
+
+    # 1) workspace + project + query
+    result = srv._tool_find_breadcrumbs({
+        "workspace": "default",
+        "project": "sf2",
+        "query": "pooling",
+        "limit": 2,
+    })
+    # Must not raise a param mismatch; should return a readable string.
+    assert "placeholders" not in result.lower()
+    assert "parameter" not in result.lower()
+    assert "breadcrumb" in result.lower() or "no matching" in result.lower()
+
+    # 2) workspace only (no project)
+    result = srv._tool_find_breadcrumbs({
+        "workspace": "default",
+        "query": "pooling",
+        "limit": 2,
+    })
+    assert "placeholders" not in result.lower()
+    assert "parameter" not in result.lower()
+
+    # 3) workspace only with different query
+    result = srv._tool_find_breadcrumbs({
+        "workspace": "default",
+        "query": "vectors",
+        "limit": 2,
+    })
+    assert "placeholders" not in result.lower()
+    assert "parameter" not in result.lower()
+
+
 def test_breadcrumb_server_tools_present():
     from agent_notes.servers.breadcrumbs import BreadcrumbServer
 

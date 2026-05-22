@@ -98,6 +98,14 @@ class BreadcrumbServer(Server):
         else:
             current_file_path = old_file_path
 
+        # BC-006: refuse to write projection when breadcrumbs_dir is unset.
+        if not getattr(project, 'breadcrumbs_dir', None):
+            return (
+                "Error: this project has no breadcrumbs_dir configured. "
+                "Run `agent-notes init <path>` to register the project, "
+                "then re-file the breadcrumb."
+            )
+
         absolute = self._absolute_path(project, current_file_path)
         content = build_breadcrumb_markdown(row)
         outcome = safe_write(absolute, content, expected_sha256)
@@ -258,10 +266,6 @@ class BreadcrumbServer(Server):
                         },
                         "external_refs": {"type": "object"},
                         "diagnostic_keys": {"type": "object"},
-                        "file_path": {
-                            "type": "string",
-                            "description": "Canonical relative path (overrides auto-computation)",
-                        },
                     },
                     "required": ["workspace", "project", "title", "kind", "status"],
                 },
@@ -497,7 +501,6 @@ class BreadcrumbServer(Server):
         severity = args.get("severity", "medium")
         external_refs = args.get("external_refs")
         diagnostic_keys = args.get("diagnostic_keys")
-        file_path = args.get("file_path")
 
         # Decision 26: embed BEFORE transaction.
         vec = embed(title + " " + body, task="document")
@@ -513,7 +516,6 @@ class BreadcrumbServer(Server):
             external_refs=external_refs,
             diagnostic_keys=diagnostic_keys,
             embedding=vec.tolist(),
-            file_path=file_path,
         )
         allocated_id = row["identifier"]
         base_msg = (

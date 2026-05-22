@@ -74,6 +74,26 @@ class Server:
             self._tool_list_projects,
         )
         self.register_tool(
+            "resolve_project",
+            {
+                "description": (
+                    "Resolve a filesystem path to a registered project. "
+                    "Returns workspace, project, and repo_root."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Filesystem path (absolute or relative)",
+                        },
+                    },
+                    "required": ["path"],
+                },
+            },
+            self._tool_resolve_project,
+        )
+        self.register_tool(
             "list_vocabulary",
             {
                 "description": "List vocabulary entries for a workspace and optional kind namespace.",  # noqa: E501
@@ -244,6 +264,23 @@ class Server:
             repo = f" repo={p.repo_root}" if p.repo_root else ""
             lines.append(f"- **{p.slug}** — {p.name}{repo} (workspace_id={p.workspace_id})")
         return "\n".join(lines)
+
+    def _tool_resolve_project(self, args: dict) -> str:
+        from agent_notes.core import db
+
+        path = args.get("path", "")
+        if not path:
+            return "Error: path is required"
+        try:
+            result = db.resolve_project(path)
+            return (
+                f"Project resolved from {path!r}:\n"
+                f"- Workspace: {result['workspace']}\n"
+                f"- Project: {result['project']}\n"
+                f"- Repo root: {result['repo_root']}\n"
+            )
+        except ValueError as exc:
+            return f"Error: {exc}"
 
     def _tool_list_vocabulary(self, args: dict) -> str:
         from agent_notes.core import db

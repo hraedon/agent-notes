@@ -25,6 +25,11 @@ def _print_section(title: str) -> None:
     print(f"{'─' * 60}")
 
 
+def _print_result(ok: bool, msg: str) -> None:
+    status = "PASS" if ok else "FAIL"
+    print(f"  {status}: {msg}")
+
+
 def _check_dsn() -> tuple[bool, str]:
     try:
         from agent_notes.core.db import _conn
@@ -251,48 +256,59 @@ def run() -> int:
 
     all_ok = True
 
+    # Tier 1: prerequisites (DSN + schema). If these fail, skip heavy checks.
     ok, msg = _check_dsn()
     _print_section("1. DSN Reachable")
-    status = "✅ PASS" if ok else "❌ FAIL"
-    print(f"{status}: {msg}")
+    _print_result(ok, msg)
     all_ok = all_ok and ok
+    dsn_ok = ok
 
     ok, msg = _check_schema()
     _print_section("2. Schema Up to Date")
-    status = "✅ PASS" if ok else "❌ FAIL"
-    print(f"{status}: {msg}")
+    _print_result(ok, msg)
     all_ok = all_ok and ok
+    schema_ok = ok
 
+    if not (dsn_ok and schema_ok):
+        for name in (
+            "3. Embedding Model",
+            "4. breadcrumbs_dir Write Access",
+            "5. Links Audit",
+            "6. Vocabulary Integrity",
+        ):
+            _print_section(name)
+            print("  SKIPPED: prerequisite check(s) failed (DSN / Schema)")
+        _print_section("Summary")
+        print("One or more prerequisite checks failed.")
+        return 1
+
+    # Tier 2: heavy checks (require working DB).
     ok, msg = _check_embedding()
     _print_section("3. Embedding Model")
-    status = "✅ PASS" if ok else "❌ FAIL"
-    print(f"{status}: {msg}")
+    _print_result(ok, msg)
     all_ok = all_ok and ok
 
     ok, msg = _check_breadcrumbs_dir()
     _print_section("4. breadcrumbs_dir Write Access")
-    status = "✅ PASS" if ok else "❌ FAIL"
-    print(f"{status}: {msg}")
+    _print_result(ok, msg)
     all_ok = all_ok and ok
 
     ok, msg = _check_links_audit()
     _print_section("5. Links Audit")
-    status = "✅ PASS" if ok else "❌ FAIL"
-    print(f"{status}: {msg}")
+    _print_result(ok, msg)
     all_ok = all_ok and ok
 
     ok, msg = _check_vocab_integrity()
     _print_section("6. Vocabulary Integrity")
-    status = "✅ PASS" if ok else "❌ FAIL"
-    print(f"{status}: {msg}")
+    _print_result(ok, msg)
     all_ok = all_ok and ok
 
     _print_section("Summary")
     if all_ok:
-        print("✅ All checks passed.")
+        print("All checks passed.")
         return 0
     else:
-        print("❌ One or more checks failed.")
+        print("One or more checks failed.")
         return 1
 
 

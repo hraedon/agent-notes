@@ -108,3 +108,23 @@ class TestDoctorDanglingLink:
         captured = capsys.readouterr()
         assert code == 1, f"Expected failure, got: {captured.out}"
         assert "Dangling" in captured.out
+
+
+class TestDoctorSkipsOnDsnFailure:
+    """BC-002: heavy checks are skipped when prerequisites fail."""
+
+    def test_skips_embedding_when_dsn_fails(self, capsys):
+        from agent_notes.scripts.doctor import run
+
+        with patch(
+            "agent_notes.scripts.doctor._check_dsn",
+            return_value=(False, "DSN not set"),
+        ):
+            code = run()
+        captured = capsys.readouterr()
+        assert code == 1
+        assert "SKIPPED" in captured.out
+        assert "prerequisite" in captured.out.lower()
+        assert "Embedding Model" in captured.out
+        assert "Links Audit" in captured.out
+        assert "Vocabulary Integrity" in captured.out

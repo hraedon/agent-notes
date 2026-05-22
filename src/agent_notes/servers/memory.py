@@ -462,28 +462,11 @@ class MemoryServer(Server):
             )
             new_id = cur.fetchone()["id"]
 
-            # Mirror supersedes into links for trace_graph (§4.3).
-            if old_id is not None:
-                cur.execute(
-                    """
-                    INSERT INTO links
-                        (from_kind, from_workspace, from_project, from_identifier,
-                         to_kind, to_workspace, to_project, to_identifier, relationship)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT DO NOTHING
-                    """,
-                    (
-                        _KIND,
-                        ws.id,
-                        proj.id,
-                        str(new_id),
-                        _KIND,
-                        ws.id,
-                        proj.id,
-                        str(old_id),
-                        "supersedes",
-                    ),
-                )
+            # The supersedes chain is tracked via the memories.supersedes column
+            # and surfaced via the history tool / change_log. It is NOT mirrored
+            # into the links table because all revisions share the same name — a
+            # link with from_identifier=name, to_identifier=name would be a
+            # self-referencing loop, useless for traversal.
 
             # Write change_log: event='filed' (decision 20).
             write_change(

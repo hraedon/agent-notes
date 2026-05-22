@@ -164,6 +164,39 @@ def list_projects(workspace_id: int | None = None) -> list[Project]:
         return [_row_to_project(r) for r in cur.fetchall()]
 
 
+def resolve_project(path: str) -> dict:
+    """Return project matching a filesystem path by longest-prefix match on repo_root.
+
+    Returns dict: {"workspace": <slug>, "project": <slug>, "repo_root": <str>}
+    Raises ValueError with a structured PROJECT_NOT_REGISTERED error if no match.
+    """
+    import os
+    abs_path = os.path.abspath(path)
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT p.id, p.slug AS project, p.repo_root,
+                   w.slug AS workspace
+            FROM projects p
+            JOIN workspaces w ON w.id = p.workspace_id
+            ORDER BY LENGTH(p.repo_root) DESC
+            """
+        )
+        for row in cur.fetchall():
+            rr = row["repo_root"]
+            if rr and abs_path.startswith(rr):
+                return {
+                    "workspace": row["workspace"],
+                    "project": row["project"],
+                    "repo_root": row["repo_root"],
+                }
+    raise ValueError(
+        f"PROJECT_NOT_REGISTERED: no project found for path {abs_path!r}. "
+        f"Run `agent-notes init {abs_path}` to register."
+    )
+
+
 def _row_to_project(row: dict) -> Project:
     return Project(
         id=row["id"],
