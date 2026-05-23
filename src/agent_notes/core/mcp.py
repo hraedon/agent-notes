@@ -39,10 +39,18 @@ def _err(req_id: Any, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
 
 
-_CORE_TOOL_NAMES = frozenset({
-    "list_workspaces", "list_projects", "list_vocabulary", "archive_vocabulary",
-    "changes_since", "add_link", "remove_link", "history",
-})
+_CORE_TOOL_NAMES = frozenset(
+    {
+        "list_workspaces",
+        "list_projects",
+        "list_vocabulary",
+        "archive_vocabulary",
+        "changes_since",
+        "add_link",
+        "remove_link",
+        "history",
+    }
+)
 
 
 class ToolNotFoundError(Exception):

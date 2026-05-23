@@ -61,9 +61,7 @@ class BreadcrumbServer(Server):
             )
             return [
                 {
-                    "uri": build_uri(
-                        "breadcrumb", workspace_slug, project_slug, r["identifier"]
-                    ),
+                    "uri": build_uri("breadcrumb", workspace_slug, project_slug, r["identifier"]),
                     "name": r["identifier"],
                     "mimeType": "text/markdown",
                     "description": f"{r['kind']} / {r['status']} — {r['title']}",
@@ -108,8 +106,7 @@ class BreadcrumbServer(Server):
             "file_breadcrumb",
             {
                 "description": (
-                    "File (create or upsert) a breadcrumb. "
-                    "Embedding is computed automatically."
+                    "File (create or upsert) a breadcrumb. Embedding is computed automatically."
                 ),
                 "inputSchema": {
                     "type": "object",

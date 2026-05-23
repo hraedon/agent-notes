@@ -276,32 +276,38 @@ def test_find_breadcrumbs_parametric(default_project):
     srv = BreadcrumbServer()
 
     # 1) workspace + project + query
-    result = srv._tool_find_breadcrumbs({
-        "workspace": "default",
-        "project": "sf2",
-        "query": "pooling",
-        "limit": 2,
-    })
+    result = srv._tool_find_breadcrumbs(
+        {
+            "workspace": "default",
+            "project": "sf2",
+            "query": "pooling",
+            "limit": 2,
+        }
+    )
     # Must not raise a param mismatch; should return a readable string.
     assert "placeholders" not in result.lower()
     assert "parameter" not in result.lower()
     assert "breadcrumb" in result.lower() or "no matching" in result.lower()
 
     # 2) workspace only (no project)
-    result = srv._tool_find_breadcrumbs({
-        "workspace": "default",
-        "query": "pooling",
-        "limit": 2,
-    })
+    result = srv._tool_find_breadcrumbs(
+        {
+            "workspace": "default",
+            "query": "pooling",
+            "limit": 2,
+        }
+    )
     assert "placeholders" not in result.lower()
     assert "parameter" not in result.lower()
 
     # 3) workspace only with different query
-    result = srv._tool_find_breadcrumbs({
-        "workspace": "default",
-        "query": "vectors",
-        "limit": 2,
-    })
+    result = srv._tool_find_breadcrumbs(
+        {
+            "workspace": "default",
+            "query": "vectors",
+            "limit": 2,
+        }
+    )
     assert "placeholders" not in result.lower()
     assert "parameter" not in result.lower()
 

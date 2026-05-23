@@ -81,10 +81,7 @@ def _check_embedding() -> tuple[bool, str]:
         dim = int(vec.shape[0])
         msg = f"Model loaded in {elapsed:.2f}s, dim={dim}"
         if expected_dim and expected_dim != dim:
-            warn = (
-                f"{msg}; WARNING: "
-                f"AGENT_NOTES_EMBED_DIM={expected_dim} but model emits {dim}"
-            )
+            warn = f"{msg}; WARNING: AGENT_NOTES_EMBED_DIM={expected_dim} but model emits {dim}"
             return False, warn
         return True, msg
     except Exception as exc:

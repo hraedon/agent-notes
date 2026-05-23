@@ -33,7 +33,6 @@ class LinkedNode:
     identifier: str
     relationship: str
     depth: int
-    # TODO Phase 2: join to kind table to populate title/status.
     title: str | None = None
     status: str | None = None
     extra: dict = field(default_factory=dict)
@@ -179,15 +178,7 @@ def trace_graph(
     `direction='dependencies'` follows outgoing edges (from → to).
     `direction='dependents'` follows incoming edges (to → from).
 
-    The CTE structure is correct for Phase 1b. TODO Phase 2: add a JOIN back
-    to the kind table (parameterised by `kind`) to populate `title` and
-    `status` on each `LinkedNode`. At that point, replace the stub:
-
-        JOIN {kind}s k ON k.project_id = node_project AND k.identifier = node_id
-        -- or for memory: JOIN memories m ON ...
-
-    For now the function returns `title=None` / `status=None` since no kind
-    tables exist yet. Dangling links are returned as-is (§10 risk register).
+    Dangling links are returned as-is (§10 risk register).
     """
     if direction == "dependencies":
         # Follow outgoing edges: anchor is the FROM node.

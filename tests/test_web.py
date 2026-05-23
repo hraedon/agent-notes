@@ -137,13 +137,15 @@ class TestMemoryRoutes:
             from agent_notes.servers.memory import MemoryServer
 
             srv = MemoryServer()
-            srv._tool_add_memory({
-                "workspace": "web-ws",
-                "project": "web-proj",
-                "name": "test-memory",
-                "memory_type": "note",
-                "body": "A test memory for the web view",
-            })
+            srv._tool_add_memory(
+                {
+                    "workspace": "web-ws",
+                    "project": "web-proj",
+                    "name": "test-memory",
+                    "memory_type": "note",
+                    "body": "A test memory for the web view",
+                }
+            )
 
         resp = client.get("/workspaces/web-ws/web-proj/memories/test-memory")
         assert resp.status_code == 200

@@ -146,8 +146,12 @@ class TestOmnibusMounting:
             ("resolved", True, False, 100),
         ]:
             coredb.add_vocabulary(
-                self.ws.id, "bc_status", name,
-                is_terminal=is_term, is_open=is_open, sort_order=sort,
+                self.ws.id,
+                "bc_status",
+                name,
+                is_terminal=is_term,
+                is_open=is_open,
+                sort_order=sort,
             )
         for name in ("low", "medium", "high"):
             coredb.add_vocabulary(self.ws.id, "bc_severity", name)

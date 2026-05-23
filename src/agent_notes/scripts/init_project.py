@@ -26,10 +26,7 @@ def main(args) -> None:
 
     repo_root = _find_git_root(abs_path)
     if repo_root is None:
-        print(
-            f"Warning: no git root found above {abs_path!r}. "
-            "Using the path itself as repo_root."
-        )
+        print(f"Warning: no git root found above {abs_path!r}. Using the path itself as repo_root.")
         repo_root = abs_path
 
     slug = os.path.basename(repo_root)

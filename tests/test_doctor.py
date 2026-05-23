@@ -39,9 +39,7 @@ class TestDoctorClean:
     def test_doctor_clean_exit_code(self, capsys):
         from agent_notes.scripts.doctor import run
 
-        with patch(
-            "agent_notes.scripts.doctor._check_embedding", return_value=(True, "mocked")
-        ):
+        with patch("agent_notes.scripts.doctor._check_embedding", return_value=(True, "mocked")):
             code = run()
         captured = capsys.readouterr()
         assert code == 0, f"Doctor failed: {captured.out}"
@@ -80,17 +78,24 @@ class TestDoctorDanglingLink:
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT DO NOTHING
                 """,
-                ("breadcrumb", ws.id, proj.id, "NONEXISTENT",
-                 "memory", ws.id, proj.id, "ghost", "relates_to"),
+                (
+                    "breadcrumb",
+                    ws.id,
+                    proj.id,
+                    "NONEXISTENT",
+                    "memory",
+                    ws.id,
+                    proj.id,
+                    "ghost",
+                    "relates_to",
+                ),
             )
             conn.commit()
 
     def test_doctor_catches_dangling_link(self, capsys):
         from agent_notes.scripts.doctor import run
 
-        with patch(
-            "agent_notes.scripts.doctor._check_embedding", return_value=(True, "mocked")
-        ):
+        with patch("agent_notes.scripts.doctor._check_embedding", return_value=(True, "mocked")):
             code = run()
         captured = capsys.readouterr()
         assert code == 1, f"Expected failure, got: {captured.out}"

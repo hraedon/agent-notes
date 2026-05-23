@@ -327,9 +327,7 @@ class MemoryServer(Server):
             rows = self._list_active_memories_raw(proj.id, ws.id)
             return [
                 {
-                    "uri": build_uri(
-                        "memory", workspace_slug, project_slug, r["name"]
-                    ),
+                    "uri": build_uri("memory", workspace_slug, project_slug, r["name"]),
                     "name": r["name"],
                     "mimeType": "text/markdown",
                     "description": f"{r['memory_type']} — {r['body_preview'][:60]}",
@@ -382,9 +380,7 @@ class MemoryServer(Server):
                 if parsed.kind != "memory":
                     raise ValueError(f"Expected memory URI, got {parsed.kind}")
                 if parsed.project is None or parsed.identifier is None:
-                    raise ValueError(
-                        f"URI must include project and identifier: {uri_or_prefix!r}"
-                    )
+                    raise ValueError(f"URI must include project and identifier: {uri_or_prefix!r}")
                 return _read_fn(parsed.workspace, parsed.project, parsed.identifier)
             raise ValueError(f"Unknown action: {action!r}")
 

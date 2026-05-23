@@ -5,11 +5,10 @@ Usage:
     AGENT_NOTES_LEGACY_DSN=postgresql://... \
     python -m agent_notes.scripts.import_legacy_bc
 
-Phase 2a.3 requirements:
+Requirements:
 - COPY (not per-row INSERT) for speed.
 - Single batch INSERT into change_log (trigger disabled for speed).
 - Seed vocabularies with is_terminal / is_open / sort_order columns.
-- Normalize legacy file_path values to repo-relative-under-breadcrumbs_dir form.
 - Re-embed in-process (~1 minute for ~250 rows).
 """
 
@@ -117,20 +116,6 @@ def _resolve_project(workspace_id: int, proj_slug: str) -> int:
     if proj is None:
         proj = db.get_or_create_project(workspace_id, proj_slug, proj_slug)
     return proj.id
-
-
-def _normalize_file_path(raw: str | None, breadcrumbs_dir: str) -> str | None:
-    """Strip absolute prefix and breadcrumbs_dir to leave a clean relative path."""
-    if not raw:
-        return None
-    # Remove leading absolute or repo-relative prefix up to breadcrumbs_dir.
-    # e.g. "/projects/sf2/breadcrumbs/resolved/RFC-031.md" → "resolved/RFC-031.md"
-    # or "breadcrumbs/resolved/RFC-031.md" → "resolved/RFC-031.md"
-    parts = raw.replace("\\", "/").split("/")
-    if breadcrumbs_dir in parts:
-        idx = parts.index(breadcrumbs_dir) + 1
-        return "/".join(parts[idx:])
-    return raw.lstrip("/")
 
 
 def _copy_breadcrumbs(ws_id: int) -> list[dict]:

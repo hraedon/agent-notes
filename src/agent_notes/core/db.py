@@ -168,6 +168,7 @@ def resolve_project(path: str) -> dict:
     Raises ValueError with a structured PROJECT_NOT_REGISTERED error if no match.
     """
     import os
+
     abs_path = os.path.abspath(path)
     with _conn() as conn:
         cur = conn.cursor()
@@ -303,11 +304,7 @@ def delete_vocabulary(workspace_id: int, kind_namespace: str, name: str) -> None
 
 
 def _check_vocab_references(workspace_id: int, kind_namespace: str, name: str) -> None:
-    """Reference check across kind tables (decision 9).
-
-    TODO Phase 3: scan memories table.
-    TODO Phase 5+: scan reflections table if dedicated server is built.
-    """
+    """Reference check across kind tables (decision 9)."""
     with _conn() as conn:
         cur = conn.cursor()
         if kind_namespace == "bc_kind":

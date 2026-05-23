@@ -92,6 +92,7 @@ def main() -> None:
         serve(kinds)
     elif args.command == "init":
         from agent_notes.scripts.init_project import main as init_main
+
         init_main(args)
     else:
         parser.print_help()
