@@ -67,7 +67,7 @@ def write_change(
     """INSERT a change_log row inside an already-open connection.
 
     Callers are responsible for the event type: 'filed' / 'updated' /
-    'status_changed' / 'deleted' / 'projection_written' (decision 20).
+    'status_changed' / 'deleted' (decision 20).
     The NOTIFY trigger fires automatically on each INSERT.
 
     Returns the new row id.

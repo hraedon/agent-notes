@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Workspace: {{ workspace.slug }}{% endblock %}
+{% block content %}
+<h1>{{ workspace.name }}</h1>
+<p class="meta">Workspace: {{ workspace.slug }}</p>
+
+<h2>Projects</h2>
+{% if projects %}
+<table>
+    <tr><th>Slug</th><th>Name</th><th>Repo Root</th></tr>
+    {% for p in projects %}
+    <tr>
+        <td><a href="/workspaces/{{ workspace.slug }}/{{ p.slug }}">{{ p.slug }}</a></td>
+        <td>{{ p.name }}</td>
+        <td>{{ p.repo_root or '—' }}</td>
+    </tr>
+    {% endfor %}
+</table>
+{% else %}
+<p class="empty">No projects in this workspace.</p>
+{% endif %}
+{% endblock %}

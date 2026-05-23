@@ -21,7 +21,6 @@ def default_project():
         slug="sf2",
         name="sf2",
         repo_root="/projects/sf2",
-        breadcrumbs_dir="breadcrumbs",
     )
     return proj
 
@@ -197,62 +196,6 @@ def test_change_log_written_on_status_change(default_project):
     events = [r.event for r in rows]
     assert "filed" in events
     assert "status_changed" in events
-
-
-# ---------------------------------------------------------------------------
-# audit / projection_dirty
-# ---------------------------------------------------------------------------
-
-
-def test_audit_returns_dirty(default_project):
-    BreadcrumbModel.file_breadcrumb(
-        project_id=default_project.id,
-        identifier="BC-011",
-        title="Dirty",
-        status="new",
-        embedding=_vec768(),
-    )
-    with coredb._conn() as conn:
-        conn.execute(
-            "UPDATE breadcrumbs SET projection_dirty = true "
-            "WHERE project_id = %s AND identifier = %s",
-            (default_project.id, "BC-011"),
-        )
-    dirty = BreadcrumbModel.audit(project_id=default_project.id)
-    assert any(r["identifier"] == "BC-011" for r in dirty)
-
-
-# ---------------------------------------------------------------------------
-# compute_projection_paths
-# ---------------------------------------------------------------------------
-
-
-def test_compute_paths(default_project):
-    BreadcrumbModel.file_breadcrumb(
-        project_id=default_project.id,
-        identifier="BC-012",
-        title="Paths",
-        status="new",
-        embedding=_vec768(),
-        file_path="active/BC-012.md",
-    )
-    paths = BreadcrumbModel.compute_projection_paths(default_project.id, "BC-012")
-    assert paths["old_repo_relative"] == "breadcrumbs/active/BC-012.md"
-    assert paths["new_repo_relative"] == "breadcrumbs/active/BC-012.md"
-
-
-def test_compute_paths_terminal_status(default_project):
-    BreadcrumbModel.file_breadcrumb(
-        project_id=default_project.id,
-        identifier="BC-013",
-        title="Paths resolved",
-        status="resolved",
-        embedding=_vec768(),
-        file_path="active/BC-013.md",
-    )
-    paths = BreadcrumbModel.compute_projection_paths(default_project.id, "BC-013")
-    # Because status is resolved, the *canonical* new path is resolved/
-    assert "resolved/BC-013.md" in paths["new_repo_relative"]
 
 
 # ---------------------------------------------------------------------------

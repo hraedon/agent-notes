@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}{{ memory.name }}{% endblock %}
+{% block content %}
+<h1>{{ memory.name }}</h1>
+<p class="meta">
+    <a href="/workspaces/{{ workspace.slug }}/{{ project.slug }}">{{ project.slug }}</a>
+    &middot; type={{ memory.memory_type }}
+    &middot; id={{ memory.id }}
+</p>
+<p class="meta">
+    Created: {{ memory.created_at.strftime('%Y-%m-%d %H:%M') if memory.created_at else '' }}
+    &middot; Updated: {{ memory.updated_at.strftime('%Y-%m-%d %H:%M') if memory.updated_at else '' }}
+</p>
+{% if memory.supersedes %}
+<p class="meta">Supersedes: id={{ memory.supersedes }}</p>
+{% endif %}
+{% if memory.attributes %}
+<h2>Attributes</h2>
+<pre>{{ memory.attributes }}</pre>
+{% endif %}
+{% if memory.body %}
+<h2>Body</h2>
+<pre>{{ memory.body }}</pre>
+{% else %}
+<p class="empty">No body content.</p>
+{% endif %}
+{% endblock %}

@@ -30,16 +30,11 @@ class TestDoctorClean:
             slug="doc-proj",
             name="Doc Proj",
             repo_root="/tmp",
-            breadcrumbs_dir="bc_test_dir",
         )
         coredb.add_vocabulary(ws.id, "bc_kind", "bug")
         coredb.add_vocabulary(ws.id, "bc_status", "new")
         coredb.add_vocabulary(ws.id, "bc_severity", "medium")
         coredb.add_vocabulary(ws.id, "memory_type", "note")
-        # Ensure /tmp/bc_test_dir exists for write-check
-        import os
-
-        os.makedirs("/tmp/bc_test_dir", exist_ok=True)
 
     def test_doctor_clean_exit_code(self, capsys):
         from agent_notes.scripts.doctor import run
@@ -55,7 +50,6 @@ class TestDoctorClean:
         assert "Schema" in captured.out
         assert "Links Audit" in captured.out
         assert "Vocabulary Integrity" in captured.out
-        assert "breadcrumbs_dir" in captured.out.lower()
         assert "All checks passed" in captured.out
 
 
@@ -68,17 +62,12 @@ class TestDoctorDanglingLink:
             slug="doc-link-proj",
             name="Doc Link Proj",
             repo_root="/tmp",
-            breadcrumbs_dir="bc_test_dir2",
         )
         coredb.add_vocabulary(ws.id, "bc_kind", "bug")
         coredb.add_vocabulary(ws.id, "bc_status", "new")
         coredb.add_vocabulary(ws.id, "bc_severity", "medium")
         coredb.add_vocabulary(ws.id, "memory_type", "note")
-        import os
 
-        os.makedirs("/tmp/bc_test_dir2", exist_ok=True)
-
-        # Insert a dangling link manually
         from agent_notes.core.db import _conn
 
         with _conn() as conn:
@@ -91,10 +80,8 @@ class TestDoctorDanglingLink:
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT DO NOTHING
                 """,
-                # fmt: off
                 ("breadcrumb", ws.id, proj.id, "NONEXISTENT",
                  "memory", ws.id, proj.id, "ghost", "relates_to"),
-                # fmt: on
             )
             conn.commit()
 
@@ -111,8 +98,6 @@ class TestDoctorDanglingLink:
 
 
 class TestDoctorSkipsOnDsnFailure:
-    """BC-002: heavy checks are skipped when prerequisites fail."""
-
     def test_skips_embedding_when_dsn_fails(self, capsys):
         from agent_notes.scripts.doctor import run
 

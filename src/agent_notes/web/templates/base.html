@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}agent-notes{% endblock %}</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 1rem 2rem; max-width: 960px; color: #1a1a1a; }
+        nav { margin-bottom: 1.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid #e0e0e0; }
+        nav a { margin-right: 1rem; text-decoration: none; color: #0066cc; }
+        nav a:hover { text-decoration: underline; }
+        h1 { font-size: 1.5rem; margin-top: 0; }
+        h2 { font-size: 1.2rem; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 1rem; }
+        th, td { text-align: left; padding: 0.4rem 0.8rem; border-bottom: 1px solid #eee; }
+        th { background: #f5f5f5; font-weight: 600; }
+        a { color: #0066cc; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .tag { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 3px; font-size: 0.85rem; margin-right: 0.3rem; }
+        .tag-open { background: #e6f7e6; color: #1a7a1a; }
+        .tag-closed { background: #f7e6e6; color: #7a1a1a; }
+        .tag-terminal { background: #f0f0f0; color: #555; }
+        .meta { color: #666; font-size: 0.9rem; }
+        .empty { color: #999; font-style: italic; padding: 1rem 0; }
+        pre { background: #f8f8f8; padding: 1rem; border-radius: 4px; overflow-x: auto; white-space: pre-wrap; }
+        .search-form { margin-bottom: 1rem; }
+        .search-form input[type=text] { width: 60%; padding: 0.4rem; font-size: 1rem; }
+        .search-form button { padding: 0.4rem 1rem; font-size: 1rem; }
+    </style>
+</head>
+<body>
+    <nav>
+        <a href="/">Home</a>
+        <a href="/search">Search</a>
+    </nav>
+    {% block content %}{% endblock %}
+</body>
+</html>

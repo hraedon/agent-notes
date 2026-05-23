@@ -6,7 +6,7 @@ Consolidates and supersedes the standalone `breadcrumb-mcp` and `memory-mcp` pro
 
 ## Status
 
-Phases 0–5 complete. Phase 6 in progress.
+Phases 0–7a complete. Phase 8a (web frontend, projection removal) complete.
 
 ## Quickstart
 
@@ -41,6 +41,16 @@ agent-notes-omnibus
 agent-notes serve --kinds breadcrumbs,memory,search
 ```
 
+### Web viewer (read-only)
+
+```bash
+agent-notes-web
+# Opens on http://127.0.0.1:8765
+# Port configurable via AGENT_NOTES_WEB_PORT env var
+```
+
+Browse breadcrumbs, memories, and run semantic search from a browser. No auth; localhost-only.
+
 ## Entry points
 
 | Console script | Kind(s) | Notes |
@@ -50,8 +60,10 @@ agent-notes serve --kinds breadcrumbs,memory,search
 | `agent-notes-memory` | memory | Thin shim |
 | `agent-notes-search` | search | Thin shim |
 | `agent-notes-omnibus` | breadcrumbs + memory + search | Single process |
+| `agent-notes-web` | — | Read-only browser viewer |
 | `agent-notes-setup` | — | Alias for `migrate --all` |
 | `agent-notes-migrate` | — | Schema migrations from `schema/*.sql` |
 | `agent-notes-doctor` | — | Health check: DSN, schema, model, links audit |
+| `agent-notes-import-reflections` | — | One-time reflection import |
 
 See `AGENTS.md` for build/test/lint commands and contributor conventions.

@@ -1,6 +1,6 @@
 # Plan 001 — agent-notes-mcp Architecture and Phased Implementation
 
-Status: Proposed (v1.5, absorbs Kimi round-5 schema fixes and GLM's first-round feedback; DeepSeek approved v1.4. Plan is converging — ready for Phase 0 once this round is reviewed.)
+Status: Complete (all phases shipped). Projection layer removed in Plan 003 Phase 8a (decisions 39–48).
 Scope: Greenfield consolidation of `breadcrumb-mcp` and `memory-mcp` into a shared-core, thin-server architecture. Foundation for `reflections`, `decisions`, and future agent-notes kinds.
 Consumers: sf2, substrate, sf1, and the Claude Code / OpenCode / Gemini CLI harness configs.
 Supersedes: `breadcrumb-mcp/plans/001..003`, `memory-mcp/plans/001`.

@@ -66,7 +66,6 @@ class Project:
     slug: str
     name: str
     repo_root: str | None
-    breadcrumbs_dir: str | None
     created_at: datetime
 
 
@@ -126,21 +125,19 @@ def get_or_create_project(
     slug: str,
     name: str,
     repo_root: str | None = None,
-    breadcrumbs_dir: str | None = None,
 ) -> Project:
     with _conn() as conn:
         cur = conn.cursor()
         cur.execute(
             """
-            INSERT INTO projects (workspace_id, slug, name, repo_root, breadcrumbs_dir)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO projects (workspace_id, slug, name, repo_root)
+            VALUES (%s, %s, %s, %s)
             ON CONFLICT (workspace_id, slug) DO UPDATE SET
                 name = EXCLUDED.name,
-                repo_root = COALESCE(EXCLUDED.repo_root, projects.repo_root),
-                breadcrumbs_dir = COALESCE(EXCLUDED.breadcrumbs_dir, projects.breadcrumbs_dir)
-            RETURNING id, workspace_id, slug, name, repo_root, breadcrumbs_dir, created_at
+                repo_root = COALESCE(EXCLUDED.repo_root, projects.repo_root)
+            RETURNING id, workspace_id, slug, name, repo_root, created_at
             """,
-            (workspace_id, slug, name, repo_root, breadcrumbs_dir),
+            (workspace_id, slug, name, repo_root),
         )
         conn.commit()
         row = cur.fetchone()
@@ -152,13 +149,13 @@ def list_projects(workspace_id: int | None = None) -> list[Project]:
         cur = conn.cursor()
         if workspace_id is not None:
             cur.execute(
-                "SELECT id, workspace_id, slug, name, repo_root, breadcrumbs_dir, created_at "
+                "SELECT id, workspace_id, slug, name, repo_root, created_at "
                 "FROM projects WHERE workspace_id = %s ORDER BY slug",
                 (workspace_id,),
             )
         else:
             cur.execute(
-                "SELECT id, workspace_id, slug, name, repo_root, breadcrumbs_dir, created_at "
+                "SELECT id, workspace_id, slug, name, repo_root, created_at "
                 "FROM projects ORDER BY workspace_id, slug"
             )
         return [_row_to_project(r) for r in cur.fetchall()]
@@ -204,7 +201,6 @@ def _row_to_project(row: dict) -> Project:
         slug=row["slug"],
         name=row["name"],
         repo_root=row.get("repo_root"),
-        breadcrumbs_dir=row.get("breadcrumbs_dir"),
         created_at=row["created_at"],
     )
 

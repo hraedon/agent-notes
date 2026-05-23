@@ -137,7 +137,6 @@ class TestOmnibusMounting:
             slug="omnibus-proj",
             name="Omnibus Proj",
             repo_root="/tmp",
-            breadcrumbs_dir="breadcrumbs",
         )
         for name in ("bug", "task"):
             coredb.add_vocabulary(self.ws.id, "bc_kind", name)

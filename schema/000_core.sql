@@ -24,12 +24,8 @@ CREATE TABLE IF NOT EXISTS projects (
     workspace_id    INTEGER NOT NULL REFERENCES workspaces(id),
     slug            TEXT    NOT NULL,
     name            TEXT    NOT NULL,
-    -- repo_root restored per Kimi round-5 #3: needed so the /end skill can
-    -- compute repo-relative paths for git mv (decision 15).
+    -- repo_root restored per Kimi round-5 #3: used by resolve_project (Plan 002).
     repo_root       TEXT,
-    -- breadcrumbs_dir is repo-relative or absolute prefix where BC files live,
-    -- e.g. 'breadcrumbs' or '/projects/substrate/breadcrumbs'.
-    breadcrumbs_dir TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (workspace_id, slug)
 );

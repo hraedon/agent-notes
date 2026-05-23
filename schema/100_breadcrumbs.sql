@@ -78,13 +78,6 @@ CREATE TABLE IF NOT EXISTS breadcrumbs (
 
     frontmatter_version SMALLINT NOT NULL DEFAULT 1,
 
-    -- Projection-related columns (decision 17 / 24)
-    projection_sha256   BYTEA,
-    projection_dirty    BOOLEAN NOT NULL DEFAULT FALSE,
-
-    -- Canonical path relative to projects.breadcrumbs_dir (§4.2)
-    file_path           TEXT,
-
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     closed_at           TIMESTAMPTZ
@@ -98,10 +91,6 @@ CREATE INDEX IF NOT EXISTS idx_breadcrumbs_embedding
 
 CREATE INDEX IF NOT EXISTS idx_breadcrumbs_status
     ON breadcrumbs (project_id, status);
-
-CREATE INDEX IF NOT EXISTS idx_breadcrumbs_projection_dirty
-    ON breadcrumbs (project_id, projection_dirty)
-    WHERE projection_dirty = true;
 
 -- ---------------------------------------------------------------------------
 -- Status-change trigger: writes to change_log + maintains closed_at

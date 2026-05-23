@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} — {{ workspace.slug }}{% endblock %}
+{% block content %}
+<h1>{{ project.name }}</h1>
+<p class="meta">Project {{ project.slug }} in workspace <a href="/workspaces/{{ workspace.slug }}">{{ workspace.slug }}</a></p>
+
+<h2>Breadcrumbs ({{ breadcrumbs|length }})</h2>
+{% if breadcrumbs %}
+<table>
+    <tr><th>ID</th><th>Title</th><th>Kind</th><th>Status</th><th>Updated</th></tr>
+    {% for bc in breadcrumbs %}
+    <tr>
+        <td><a href="/workspaces/{{ workspace.slug }}/{{ project.slug }}/breadcrumbs/{{ bc.identifier }}">{{ bc.identifier }}</a></td>
+        <td>{{ bc.title }}</td>
+        <td>{{ bc.kind }}</td>
+        <td>
+            {% if bc.status in ['resolved', 'closed', 'wont_fix', 'duplicate'] %}
+            <span class="tag tag-terminal">{{ bc.status }}</span>
+            {% elif bc.status in ['new', 'open'] %}
+            <span class="tag tag-open">{{ bc.status }}</span>
+            {% else %}
+            <span class="tag">{{ bc.status }}</span>
+            {% endif %}
+        </td>
+        <td class="meta">{{ bc.updated_at.strftime('%Y-%m-%d %H:%M') if bc.updated_at else '' }}</td>
+    </tr>
+    {% endfor %}
+</table>
+{% else %}
+<p class="empty">No breadcrumbs in this project.</p>
+{% endif %}
+
+<h2>Memories ({{ memories|length }})</h2>
+{% if memories %}
+<table>
+    <tr><th>Name</th><th>Type</th><th>Preview</th><th>Updated</th></tr>
+    {% for m in memories %}
+    <tr>
+        <td><a href="/workspaces/{{ workspace.slug }}/{{ project.slug }}/memories/{{ m.name }}">{{ m.name }}</a></td>
+        <td>{{ m.memory_type }}</td>
+        <td class="meta">{{ (m.body_preview or '')[:60] }}</td>
+        <td class="meta">{{ m.updated_at.strftime('%Y-%m-%d %H:%M') if m.updated_at else '' }}</td>
+    </tr>
+    {% endfor %}
+</table>
+{% else %}
+<p class="empty">No memories in this project.</p>
+{% endif %}
+{% endblock %}

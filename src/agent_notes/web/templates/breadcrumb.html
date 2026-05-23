@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}{{ breadcrumb.identifier }} — {{ breadcrumb.title }}{% endblock %}
+{% block content %}
+<h1>{{ breadcrumb.identifier }}</h1>
+<p class="meta">
+    <a href="/workspaces/{{ workspace.slug }}/{{ project.slug }}">{{ project.slug }}</a>
+    &middot; {{ breadcrumb.kind }}
+    &middot; {{ breadcrumb.status }}
+    &middot; {{ breadcrumb.severity }}
+</p>
+<p class="meta">
+    Created: {{ breadcrumb.created_at.strftime('%Y-%m-%d %H:%M') if breadcrumb.created_at else '' }}
+    &middot; Updated: {{ breadcrumb.updated_at.strftime('%Y-%m-%d %H:%M') if breadcrumb.updated_at else '' }}
+</p>
+
+{% if breadcrumb.external_refs %}
+<h2>External Refs</h2>
+<pre>{{ breadcrumb.external_refs }}</pre>
+{% endif %}
+
+{% if breadcrumb.diagnostic_keys %}
+<h2>Diagnostic Keys</h2>
+<pre>{{ breadcrumb.diagnostic_keys }}</pre>
+{% endif %}
+
+{% if breadcrumb.body %}
+<h2>Body</h2>
+<pre>{{ breadcrumb.body }}</pre>
+{% else %}
+<p class="empty">No body content.</p>
+{% endif %}
+{% endblock %}

@@ -66,7 +66,6 @@ class TestBreadcrumbMCPWrapper:
             slug="bc-mcp-proj",
             name="BC MCP Proj",
             repo_root="/tmp",
-            breadcrumbs_dir="breadcrumbs",
         )
         for name in ("bug", "task", "todo"):
             coredb.add_vocabulary(self.ws.id, "bc_kind", name)
@@ -532,7 +531,6 @@ class TestBreadcrumbResourceMCPWrapper:
             slug="res-bc-proj",
             name="Res BC Proj",
             repo_root="/tmp",
-            breadcrumbs_dir="breadcrumbs",
         )
         coredb.add_vocabulary(self.ws.id, "bc_kind", "bug")
         coredb.add_vocabulary(self.ws.id, "bc_status", "new")
@@ -682,7 +680,6 @@ class TestOmnibusMCPWrapper:
             slug="omni-proj",
             name="Omni Proj",
             repo_root="/tmp",
-            breadcrumbs_dir="breadcrumbs",
         )
         coredb.add_vocabulary(self.ws.id, "bc_kind", "bug")
         coredb.add_vocabulary(self.ws.id, "bc_status", "new")

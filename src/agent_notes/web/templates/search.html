@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Search{% endblock %}
+{% block content %}
+<h1>Search</h1>
+<div class="search-form">
+    <form action="/search" method="get">
+        <input type="text" name="q" value="{{ query }}" placeholder="Semantic search across all notes..." autofocus>
+        <button type="submit">Search</button>
+    </form>
+</div>
+
+{% if query %}
+<h2>Results for "{{ query }}" ({{ results|length }})</h2>
+{% if results %}
+<table>
+    <tr><th>Kind</th><th>Identifier</th><th>Distance</th></tr>
+    {% for r in results %}
+    <tr>
+        <td>{{ r.kind }}</td>
+        <td><a href="/workspaces/{{ r.workspace_slug }}/{{ r.project_slug }}/{{ r.kind }}s/{{ r.identifier }}">{{ r.identifier }}</a></td>
+        <td class="meta">{{ '%.3f'|format(r.distance) }}</td>
+    </tr>
+    {% endfor %}
+</table>
+{% else %}
+<p class="empty">No results found.</p>
+{% endif %}
+{% endif %}
+{% endblock %}

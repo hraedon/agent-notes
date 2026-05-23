@@ -21,10 +21,6 @@ class BreadcrumbModel:
 
     kind = "breadcrumb"
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _resolve_workspace_for_project(conn: psycopg.Connection, project_id: int) -> int:
         cur = conn.cursor()
@@ -50,10 +46,6 @@ class BreadcrumbModel:
         if cur.fetchone() is None:
             raise ValueError(f"Unknown {kind_namespace} value: {name!r}")
 
-    # ------------------------------------------------------------------
-    # CRUD
-    # ------------------------------------------------------------------
-
     @classmethod
     def file_breadcrumb(
         cls,
@@ -67,7 +59,6 @@ class BreadcrumbModel:
         external_refs: dict | None = None,
         diagnostic_keys: dict | None = None,
         embedding: Any | None = None,
-        file_path: str | None = None,
         frontmatter_version: int = 1,
     ) -> dict:
         with _conn() as conn:
@@ -76,7 +67,6 @@ class BreadcrumbModel:
             cls._validate_vocab(conn, workspace_id, "bc_status", status)
             cls._validate_vocab(conn, workspace_id, "bc_severity", severity)
 
-            # Auto-allocate identifier if not provided (legacy parity).
             if identifier is None:
                 cur = conn.cursor(row_factory=psycopg.rows.tuple_row)
                 cur.execute("SELECT allocate_bc_identifier(%s)", (project_id,))
@@ -87,8 +77,8 @@ class BreadcrumbModel:
                 """
                 INSERT INTO breadcrumbs
                     (project_id, identifier, title, body, kind, status, severity,
-                     external_refs, diagnostic_keys, embedding, file_path, frontmatter_version)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     external_refs, diagnostic_keys, embedding, frontmatter_version)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (project_id, identifier) DO UPDATE SET
                     title           = EXCLUDED.title,
                     body            = EXCLUDED.body,
@@ -98,7 +88,6 @@ class BreadcrumbModel:
                     external_refs   = EXCLUDED.external_refs,
                     diagnostic_keys = EXCLUDED.diagnostic_keys,
                     embedding       = EXCLUDED.embedding,
-                    file_path       = COALESCE(EXCLUDED.file_path, breadcrumbs.file_path),
                     frontmatter_version = EXCLUDED.frontmatter_version,
                     updated_at      = now()
                 RETURNING *
@@ -114,7 +103,6 @@ class BreadcrumbModel:
                     psycopg.types.json.Jsonb(external_refs or {}),
                     psycopg.types.json.Jsonb(diagnostic_keys or {}),
                     embedding,
-                    file_path,
                     frontmatter_version,
                 ),
             )
@@ -144,7 +132,6 @@ class BreadcrumbModel:
         external_refs: dict | None = None,
         diagnostic_keys: dict | None = None,
         embedding: Any | None = None,
-        file_path: str | None = None,
         frontmatter_version: int | None = None,
     ) -> dict:
         with _conn() as conn:
@@ -190,9 +177,6 @@ class BreadcrumbModel:
             if embedding is not None:
                 sets.append("embedding = %s")
                 params.append(embedding)
-            if file_path is not None:
-                sets.append("file_path = %s")
-                params.append(file_path)
             if frontmatter_version is not None:
                 sets.append("frontmatter_version = %s")
                 params.append(frontmatter_version)
@@ -262,10 +246,6 @@ class BreadcrumbModel:
             )
             conn.commit()
             return True
-
-    # ------------------------------------------------------------------
-    # Queries
-    # ------------------------------------------------------------------
 
     @classmethod
     def query_breadcrumbs(
@@ -349,9 +329,6 @@ class BreadcrumbModel:
         where = " AND ".join(conditions)
         limit_val = min(limit, 50)
 
-        # Params must appear in the same order as placeholders in the SQL:
-        #   $1 = SELECT distance, $2-$N = WHERE conditions,
-        #   ${N+1} = ORDER BY distance, ${N+2} = LIMIT.
         params: list[Any] = [query_vec] + where_params + [query_vec, limit_val]
 
         with _conn() as conn:
@@ -436,79 +413,3 @@ class BreadcrumbModel:
                 for r in rows
             ],
         }
-
-    @classmethod
-    def audit(cls, project_id: int | None = None) -> list[dict]:
-        conditions = ["projection_dirty = true"]
-        params: list[Any] = []
-        if project_id is not None:
-            conditions.append("project_id = %s")
-            params.append(project_id)
-        where = " AND ".join(conditions)
-        params.append(200)
-
-        with _conn() as conn:
-            cur = conn.cursor(row_factory=dict_row)
-            cur.execute(
-                f"""
-                SELECT project_id, identifier, title,
-                       status, file_path, projection_dirty, updated_at
-                FROM breadcrumbs
-                WHERE {where}
-                ORDER BY updated_at DESC
-                LIMIT %s
-                """,
-                params,
-            )
-            return [dict(r) for r in cur.fetchall()]
-
-    @classmethod
-    def compute_projection_paths(
-        cls,
-        project_id: int,
-        identifier: str,
-        target_status: str | None = None,
-    ) -> dict:
-        with _conn() as conn:
-            cur = conn.cursor(row_factory=dict_row)
-            cur.execute(
-                """
-                SELECT b.file_path, b.status, p.breadcrumbs_dir, p.repo_root
-                FROM breadcrumbs b
-                JOIN projects p ON p.id = b.project_id
-                WHERE b.project_id = %s AND b.identifier = %s
-                """,
-                (project_id, identifier),
-            )
-            row = cur.fetchone()
-            if row is None:
-                raise ValueError(f"Breadcrumb not found: {identifier!r}")
-
-        status = target_status if target_status else row["status"]
-        status_dir = _status_to_dir(status)
-        new_file_path = f"{status_dir}/{identifier}.md"
-
-        breadcrumbs_dir = (row["breadcrumbs_dir"] or "").strip("/")
-        repo_root = row["repo_root"]
-
-        old_file_path = row["file_path"] or new_file_path
-
-        def _abs(fp: str) -> str:
-            if repo_root:
-                return f"{repo_root}/{breadcrumbs_dir}/{fp}".replace("//", "/")
-            return f"/{breadcrumbs_dir}/{fp}".replace("//", "/")
-
-        def _repo_rel(fp: str) -> str:
-            return f"{breadcrumbs_dir}/{fp}".strip("/")
-
-        return {
-            "old_absolute": _abs(old_file_path),
-            "new_absolute": _abs(new_file_path),
-            "old_repo_relative": _repo_rel(old_file_path),
-            "new_repo_relative": _repo_rel(new_file_path),
-        }
-
-
-def _status_to_dir(status: str) -> str:
-    terminal_dirs = {"resolved", "closed", "wont_fix", "duplicate"}
-    return "resolved" if status in terminal_dirs else "active"

@@ -4,9 +4,8 @@ Checks:
 1. DSN reachable
 2. Schema up to date (core tables present)
 3. Embedding model loads
-4. Per-project breadcrumbs_dir write access
-5. Links audit (dangling links)
-6. Vocabulary integrity
+4. Links audit (dangling links)
+5. Vocabulary integrity
 
 Exit code: 0 if all healthy, 1 if any check failed.
 """
@@ -16,7 +15,6 @@ from __future__ import annotations
 import os
 import sys
 import time
-from pathlib import Path
 
 
 def _print_section(title: str) -> None:
@@ -93,38 +91,12 @@ def _check_embedding() -> tuple[bool, str]:
         return False, str(exc)
 
 
-def _check_breadcrumbs_dir() -> tuple[bool, str]:
-    try:
-        from agent_notes.core.db import list_projects
-
-        problems: list[str] = []
-        projects = list_projects()
-        checked = 0
-        for p in projects:
-            if not p.breadcrumbs_dir:
-                continue
-            checked += 1
-            repo_root = p.repo_root or "/tmp"
-            bcd = p.breadcrumbs_dir.strip("/")
-            path = Path(f"{repo_root}/{bcd}")
-            if not path.exists():
-                problems.append(f"project {p.slug}: breadcrumbs_dir does not exist: {path}")
-            elif not os.access(path, os.W_OK):
-                problems.append(f"project {p.slug}: breadcrumbs_dir not writable: {path}")
-        if problems:
-            return False, "; ".join(problems)
-        return True, f"All {checked} breadcrumbs_dir entries OK"
-    except Exception as exc:
-        return False, str(exc)
-
-
 def _check_links_audit() -> tuple[bool, str]:
     try:
         from agent_notes.core.db import _conn
 
         with _conn() as conn:
             cur = conn.cursor()
-            # Dangling from_kind='breadcrumb' rows: links left join breadcrumbs
             cur.execute(
                 """
                 SELECT COUNT(*) AS cnt FROM links l
@@ -136,7 +108,6 @@ def _check_links_audit() -> tuple[bool, str]:
             )
             dangle_bc_from = cur.fetchone()["cnt"]
 
-            # Dangling to_kind='memory' rows
             cur.execute(
                 """
                 SELECT COUNT(*) AS cnt FROM links l
@@ -149,7 +120,6 @@ def _check_links_audit() -> tuple[bool, str]:
             )
             dangle_mem_to = cur.fetchone()["cnt"]
 
-            # Dangling from_kind='memory' rows
             cur.execute(
                 """
                 SELECT COUNT(*) AS cnt FROM links l
@@ -180,7 +150,6 @@ def _check_vocab_integrity() -> tuple[bool, str]:
 
         with _conn() as conn:
             cur = conn.cursor()
-            # Check breadcrumbs kind/status/severity
             cur.execute(
                 """
                 SELECT DISTINCT kind FROM breadcrumbs b
@@ -229,7 +198,6 @@ def _check_vocab_integrity() -> tuple[bool, str]:
             if row:
                 return False, f"Orphan breadcrumb severity: {row[0]}"
 
-            # Check memories memory_type
             cur.execute(
                 """
                 SELECT DISTINCT memory_type FROM memories m
@@ -256,7 +224,6 @@ def run() -> int:
 
     all_ok = True
 
-    # Tier 1: prerequisites (DSN + schema). If these fail, skip heavy checks.
     ok, msg = _check_dsn()
     _print_section("1. DSN Reachable")
     _print_result(ok, msg)
@@ -272,9 +239,8 @@ def run() -> int:
     if not (dsn_ok and schema_ok):
         for name in (
             "3. Embedding Model",
-            "4. breadcrumbs_dir Write Access",
-            "5. Links Audit",
-            "6. Vocabulary Integrity",
+            "4. Links Audit",
+            "5. Vocabulary Integrity",
         ):
             _print_section(name)
             print("  SKIPPED: prerequisite check(s) failed (DSN / Schema)")
@@ -282,24 +248,18 @@ def run() -> int:
         print("One or more prerequisite checks failed.")
         return 1
 
-    # Tier 2: heavy checks (require working DB).
     ok, msg = _check_embedding()
     _print_section("3. Embedding Model")
     _print_result(ok, msg)
     all_ok = all_ok and ok
 
-    ok, msg = _check_breadcrumbs_dir()
-    _print_section("4. breadcrumbs_dir Write Access")
-    _print_result(ok, msg)
-    all_ok = all_ok and ok
-
     ok, msg = _check_links_audit()
-    _print_section("5. Links Audit")
+    _print_section("4. Links Audit")
     _print_result(ok, msg)
     all_ok = all_ok and ok
 
     ok, msg = _check_vocab_integrity()
-    _print_section("6. Vocabulary Integrity")
+    _print_section("5. Vocabulary Integrity")
     _print_result(ok, msg)
     all_ok = all_ok and ok
 

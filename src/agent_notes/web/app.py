@@ -1,0 +1,256 @@
+"""FastAPI application for the agent-notes web viewer (Plan 003, Phase 8a).
+
+Read-only routes for browsing breadcrumbs, memories, and workspaces/projects.
+Server-rendered HTML via Jinja2 templates (decision 44).
+Bound to 127.0.0.1 only (decision 43).
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+import jinja2
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
+
+from agent_notes.core.db import _conn, list_projects, list_workspaces
+
+TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+
+app = FastAPI(title="agent-notes-web", docs_url=None, redoc_url=None)
+
+_jinja_env = jinja2.Environment(
+    loader=jinja2.FileSystemLoader(str(TEMPLATES_DIR)),
+    autoescape=jinja2.select_autoescape(["html"]),
+    enable_async=False,
+)
+
+
+def _render(template_name: str, status_code: int = 200, **context) -> HTMLResponse:
+    tmpl = _jinja_env.get_template(template_name)
+    html = tmpl.render(**context)
+    return HTMLResponse(content=html, status_code=status_code)
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    workspaces = list_workspaces()
+    return _render("index.html", workspaces=workspaces)
+
+
+@app.get("/workspaces/{workspace_slug}", response_class=HTMLResponse)
+async def workspace_detail(request: Request, workspace_slug: str):
+    ws = _find_workspace(workspace_slug)
+    if ws is None:
+        return _render("404.html", status_code=404, thing="workspace")
+    projects = list_projects(workspace_id=ws.id)
+    return _render("workspace.html", workspace=ws, projects=projects)
+
+
+@app.get("/workspaces/{workspace_slug}/{project_slug}", response_class=HTMLResponse)
+async def project_detail(request: Request, workspace_slug: str, project_slug: str):
+    ws = _find_workspace(workspace_slug)
+    if ws is None:
+        return _render("404.html", status_code=404, thing="project")
+    proj = _find_project(ws.id, project_slug)
+    if proj is None:
+        return _render("404.html", status_code=404, thing="project")
+
+    breadcrumbs = _query_breadcrumbs(proj.id)
+    memories = _query_memories(proj.id, ws.id)
+    return _render(
+        "project.html",
+        workspace=ws,
+        project=proj,
+        breadcrumbs=breadcrumbs,
+        memories=memories,
+    )
+
+
+@app.get(
+    "/workspaces/{workspace_slug}/{project_slug}/breadcrumbs/{identifier}",
+    response_class=HTMLResponse,
+)
+async def breadcrumb_detail(
+    request: Request,
+    workspace_slug: str,
+    project_slug: str,
+    identifier: str,
+):
+    ws = _find_workspace(workspace_slug)
+    proj = _find_project(ws.id, project_slug) if ws else None
+    if ws is None or proj is None:
+        return _render("404.html", status_code=404, thing="breadcrumb")
+
+    bc = _get_breadcrumb(proj.id, identifier)
+    if bc is None:
+        return _render("404.html", status_code=404, thing="breadcrumb")
+    return _render(
+        "breadcrumb.html",
+        workspace=ws,
+        project=proj,
+        breadcrumb=bc,
+    )
+
+
+@app.get(
+    "/workspaces/{workspace_slug}/{project_slug}/memories/{name}",
+    response_class=HTMLResponse,
+)
+async def memory_detail(
+    request: Request,
+    workspace_slug: str,
+    project_slug: str,
+    name: str,
+):
+    ws = _find_workspace(workspace_slug)
+    proj = _find_project(ws.id, project_slug) if ws else None
+    if ws is None or proj is None:
+        return _render("404.html", status_code=404, thing="memory")
+
+    mem = _get_memory(proj.id, ws.id, name)
+    if mem is None:
+        return _render("404.html", status_code=404, thing="memory")
+    return _render(
+        "memory.html",
+        workspace=ws,
+        project=proj,
+        memory=mem,
+    )
+
+
+@app.get("/search", response_class=HTMLResponse)
+async def search(request: Request, q: str = ""):
+    results: list[dict] = []
+    if q:
+        from agent_notes.core.embed import embed
+
+        vec = embed(q, task="query").tolist()
+        results = _search_all(vec, limit=20)
+    return _render("search.html", query=q, results=results)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _find_workspace(slug: str):
+    workspaces = list_workspaces()
+    return next((w for w in workspaces if w.slug == slug), None)
+
+
+def _find_project(workspace_id: int, slug: str):
+    projects = list_projects(workspace_id=workspace_id)
+    return next((p for p in projects if p.slug == slug), None)
+
+
+def _query_breadcrumbs(project_id: int) -> list[dict]:
+    with _conn() as conn:
+        from psycopg.rows import dict_row
+
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            "SELECT identifier, title, kind, status, severity, created_at, updated_at "
+            "FROM breadcrumbs WHERE project_id = %s ORDER BY updated_at DESC LIMIT 200",
+            (project_id,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def _query_memories(project_id: int, workspace_id: int) -> list[dict]:
+    with _conn() as conn:
+        from psycopg.rows import dict_row
+
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            "SELECT name, memory_type, LEFT(body, 120) AS body_preview, "
+            "created_at, updated_at "
+            "FROM memories WHERE project_id = %s AND workspace_id = %s AND active = true "
+            "ORDER BY updated_at DESC LIMIT 200",
+            (project_id, workspace_id),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def _get_breadcrumb(project_id: int, identifier: str) -> dict | None:
+    with _conn() as conn:
+        from psycopg.rows import dict_row
+
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            "SELECT * FROM breadcrumbs WHERE project_id = %s AND identifier = %s",
+            (project_id, identifier),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def _get_memory(project_id: int, workspace_id: int, name: str) -> dict | None:
+    with _conn() as conn:
+        from psycopg.rows import dict_row
+
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            "SELECT id, name, memory_type, body, attributes, "
+            "supersedes, created_at, updated_at "
+            "FROM memories WHERE project_id = %s AND workspace_id = %s "
+            "AND name = %s AND active = true",
+            (project_id, workspace_id, name),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def _search_all(query_vec: list[float], limit: int = 20) -> list[dict]:
+    with _conn() as conn:
+        from psycopg.rows import dict_row
+
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT 'breadcrumb' AS kind, b.identifier, b.title,
+                   b.embedding <=> %s::vector AS distance,
+                   p.slug AS project_slug, w.slug AS workspace_slug
+            FROM breadcrumbs b
+            JOIN projects p ON p.id = b.project_id
+            JOIN workspaces w ON w.id = p.workspace_id
+            WHERE b.embedding IS NOT NULL
+            ORDER BY b.embedding <=> %s::vector
+            LIMIT %s
+            """,
+            (query_vec, query_vec, limit),
+        )
+        bc_rows = [dict(r) for r in cur.fetchall()]
+
+        cur.execute(
+            """
+            SELECT 'memory' AS kind, m.name AS identifier, m.name AS title,
+                   m.embedding <=> %s::vector AS distance,
+                   p.slug AS project_slug, w.slug AS workspace_slug
+            FROM memories m
+            JOIN projects p ON p.id = m.project_id
+            JOIN workspaces w ON w.id = p.workspace_id
+            WHERE m.embedding IS NOT NULL AND m.active = true
+            ORDER BY m.embedding <=> %s::vector
+            LIMIT %s
+            """,
+            (query_vec, query_vec, limit),
+        )
+        mem_rows = [dict(r) for r in cur.fetchall()]
+
+    combined = bc_rows + mem_rows
+    combined.sort(key=lambda r: r["distance"])
+    return combined[:limit]
+
+
+def create_app() -> FastAPI:
+    return app
+
+
+def main() -> None:
+    import uvicorn
+
+    port = int(os.environ.get("AGENT_NOTES_WEB_PORT", "8765"))
+    uvicorn.run(app, host="127.0.0.1", port=port)

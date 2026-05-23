@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}agent-notes — Home{% endblock %}
+{% block content %}
+<h1>agent-notes</h1>
+<p class="meta">Read-only viewer for breadcrumbs, memories, and linked notes.</p>
+
+<div class="search-form">
+    <form action="/search" method="get">
+        <input type="text" name="q" placeholder="Semantic search..." autofocus>
+        <button type="submit">Search</button>
+    </form>
+</div>
+
+<h2>Workspaces</h2>
+{% if workspaces %}
+<table>
+    <tr><th>Slug</th><th>Name</th></tr>
+    {% for ws in workspaces %}
+    <tr>
+        <td><a href="/workspaces/{{ ws.slug }}">{{ ws.slug }}</a></td>
+        <td>{{ ws.name }}</td>
+    </tr>
+    {% endfor %}
+</table>
+{% else %}
+<p class="empty">No workspaces registered.</p>
+{% endif %}
+{% endblock %}

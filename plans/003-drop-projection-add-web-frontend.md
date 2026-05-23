@@ -1,6 +1,6 @@
 # Plan 003 — Drop Markdown Projection, Add Web Frontend
 
-Status: Proposed (v0.1, drafted 2026-05-22). Awaiting one round of peer review.
+Status: Phase 8a complete (2026-05-23). Projection layer removed, web frontend shipped. Phases 8b (editing) and 8c (export) deferred until triggered.
 Scope: Architectural pivot. Removes the markdown projection layer wholesale (Plan 001 decisions 4, 8, 15, 17, 20, 24 and supporting apparatus) and replaces the "human reads breadcrumbs in the repo" workflow with a localhost web frontend that reads and writes via the existing model layer.
 Consumers: same as Plan 001, plus future browser-based consumers.
 Supersedes: the projection-related portions of Plan 001 (§3 `core/projection.py`, decisions 4/8/15/17/20/24, Phase 2b projection wiring, AGENTS.md "End of session" projection clause).

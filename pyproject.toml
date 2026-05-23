@@ -9,7 +9,8 @@ dependencies = [
     "sentence-transformers>=3.0",
     "numpy>=1.24",
     "einops>=0.7",
-    "python-frontmatter>=1.1",
+    "fastapi>=0.100",
+    "uvicorn>=0.20",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +33,7 @@ agent-notes-migrate     = "agent_notes.scripts.migrate:main"
 agent-notes-import-reflections = "agent_notes.scripts.import_reflections:main"
 agent-notes-doctor      = "agent_notes.scripts.doctor:main"
 agent-notes-omnibus    = "agent_notes.cli:main_omnibus"
+agent-notes-web        = "agent_notes.web.app:main"
 # agent-notes-reflections added only if Phase 3.6 spike (decision 25) concludes
 # memories don't suffice for the reflection use case.
 
