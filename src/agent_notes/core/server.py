@@ -357,9 +357,9 @@ class Server:
             return f"No changes since {since_str}."
         lines = [f"{len(rows)} change(s) since {since_str}:"]
         for r in rows:
+            ts = r['changed_at'].strftime('%Y-%m-%d %H:%M')
             lines.append(
-                f"- [{r['kind']}] {r['identifier']} event={r['event']}"
-                f" at {r['changed_at'].strftime('%Y-%m-%d %H:%M')}"
+                f"- [{r['kind']}] {r['identifier']} event={r['event']} at {ts}"
             )
         return "\n".join(lines)
 

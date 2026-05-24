@@ -228,8 +228,10 @@ def _reembed(project_id: int) -> None:
                 with conn.transaction():
                     for pid, ident, vec_list in batch:
                         conn.execute(
-                            "UPDATE breadcrumbs SET embedding = %s "
-                            "WHERE project_id = %s AND identifier = %s",
+                            (
+                                "UPDATE breadcrumbs SET embedding = %s "
+                                "WHERE project_id = %s AND identifier = %s"
+                            ),
                             (vec_list, pid, ident),
                         )
             batch = []
@@ -239,8 +241,10 @@ def _reembed(project_id: int) -> None:
             with conn.transaction():
                 for pid, ident, vec_list in batch:
                     conn.execute(
-                        "UPDATE breadcrumbs SET embedding = %s "
-                        "WHERE project_id = %s AND identifier = %s",
+                        (
+                            "UPDATE breadcrumbs SET embedding = %s "
+                            "WHERE project_id = %s AND identifier = %s"
+                        ),
                         (vec_list, pid, ident),
                     )
     print("Re-embedding complete.")

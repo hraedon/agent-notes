@@ -21,7 +21,8 @@ from psycopg.rows import dict_row
 from agent_notes.core import change_log as cl
 from agent_notes.core import db as coredb
 from agent_notes.core import links as lnk
-from agent_notes.servers.memory import MemoryServer, _parse_wikilinks
+from agent_notes.core.memory_model import parse_wikilinks as _parse_wikilinks
+from agent_notes.servers.memory import MemoryServer
 
 
 @pytest.fixture(scope="module")

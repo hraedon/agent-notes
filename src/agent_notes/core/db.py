@@ -24,8 +24,7 @@ def _get_pool() -> ConnectionPool:
     if _pool is None:
         if not _DSN:
             raise RuntimeError(
-                "AGENT_NOTES_DSN environment variable is not set. "
-                "Example: postgresql://user:pass@localhost/agent_notes"
+                "AGENT_NOTES_DSN environment variable is not set. Example: postgresql://user:pass@localhost/agent_notes"
             )
         _pool = ConnectionPool(
             _DSN,
@@ -155,8 +154,10 @@ def list_projects(workspace_id: int | None = None) -> list[Project]:
             )
         else:
             cur.execute(
-                "SELECT id, workspace_id, slug, name, repo_root, created_at "
-                "FROM projects ORDER BY workspace_id, slug"
+                (
+                    "SELECT id, workspace_id, slug, name, repo_root, created_at "
+                    "FROM projects ORDER BY workspace_id, slug"
+                )
             )
         return [_row_to_project(r) for r in cur.fetchall()]
 
@@ -277,8 +278,10 @@ def archive_vocabulary(workspace_id: int, kind_namespace: str, name: str) -> Non
     with _conn() as conn:
         cur = conn.cursor()
         cur.execute(
-            "UPDATE vocabularies SET archived = true "
-            "WHERE workspace_id = %s AND kind_namespace = %s AND name = %s",
+            (
+                "UPDATE vocabularies SET archived = true "
+                "WHERE workspace_id = %s AND kind_namespace = %s AND name = %s"
+            ),
             (workspace_id, kind_namespace, name),
         )
         conn.commit()
@@ -296,8 +299,10 @@ def delete_vocabulary(workspace_id: int, kind_namespace: str, name: str) -> None
     with _conn() as conn:
         cur = conn.cursor()
         cur.execute(
-            "DELETE FROM vocabularies "
-            "WHERE workspace_id = %s AND kind_namespace = %s AND name = %s",
+            (
+                "DELETE FROM vocabularies "
+                "WHERE workspace_id = %s AND kind_namespace = %s AND name = %s"
+            ),
             (workspace_id, kind_namespace, name),
         )
         conn.commit()
@@ -316,8 +321,8 @@ def _check_vocab_references(workspace_id: int, kind_namespace: str, name: str) -
             )
             if cur.fetchone():
                 raise ValueError(
-                    f"Cannot delete vocabulary entry: kind '{name}' "
-                    f"is still referenced by breadcrumbs"
+                    "Cannot delete vocabulary entry: "
+                    f"kind '{name}' is still referenced by breadcrumbs"
                 )
         elif kind_namespace == "bc_status":
             cur.execute(
@@ -328,8 +333,8 @@ def _check_vocab_references(workspace_id: int, kind_namespace: str, name: str) -
             )
             if cur.fetchone():
                 raise ValueError(
-                    f"Cannot delete vocabulary entry: status '{name}' "
-                    f"is still referenced by breadcrumbs"
+                    "Cannot delete vocabulary entry: "
+                    f"status '{name}' is still referenced by breadcrumbs"
                 )
         elif kind_namespace == "bc_severity":
             cur.execute(
@@ -340,19 +345,21 @@ def _check_vocab_references(workspace_id: int, kind_namespace: str, name: str) -
             )
             if cur.fetchone():
                 raise ValueError(
-                    f"Cannot delete vocabulary entry: severity '{name}' "
-                    f"is still referenced by breadcrumbs"
+                    "Cannot delete vocabulary entry: "
+                    f"severity '{name}' is still referenced by breadcrumbs"
                 )
         elif kind_namespace == "memory_type":
             cur.execute(
-                "SELECT 1 FROM memories "
-                "WHERE workspace_id = %s AND memory_type = %s AND active = true LIMIT 1",
+                (
+                    "SELECT 1 FROM memories WHERE workspace_id = %s "
+                    "AND memory_type = %s AND active = true LIMIT 1"
+                ),
                 (workspace_id, name),
             )
             if cur.fetchone():
                 raise ValueError(
-                    f"Cannot delete vocabulary entry: memory_type '{name}' "
-                    f"is still referenced by active memories"
+                    "Cannot delete vocabulary entry: "
+                    f"memory_type '{name}' is still referenced by active memories"
                 )
 
 

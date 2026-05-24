@@ -6,7 +6,7 @@ Consolidates and supersedes the standalone `breadcrumb-mcp` and `memory-mcp` pro
 
 ## Status
 
-Phases 0–7a complete. Phase 8a (web frontend, projection removal) complete.
+Phases 0–7a complete. Phase 8a (web frontend, projection removal) complete. **Phase 9a (CLI flattening) in progress** — the CLI is the new primary surface; MCP servers are deprecated.
 
 ## Quickstart
 
@@ -19,26 +19,48 @@ export AGENT_NOTES_DSN="postgresql://user:pass@host:5432/agent_notes"
 
 # Create schema
 agent-notes-setup
+
+# Register your project
+agent-notes init .
+
+# File a breadcrumb
+agent-notes breadcrumb file --title "Found a bug" --kind bug --status new
+
+# Add a memory
+agent-notes memory add --name "postgres-tuning" --body "..." --type note
 ```
 
-For machines with **<32 GB RAM**, prefer `agent-notes-omnibus` over running per-kind binaries — it loads the embedding model **once** instead of once per process.
+### CLI surface
 
-## Running
-
-### Per-kind (default for CI / multi-agent setups)
-
-```bash
-agent-notes-breadcrumbs   # breadcrumb server
-agent-notes-memory        # memory server
-agent-notes-search        # search server
 ```
+agent-notes init [path]
+agent-notes resolve [--path PATH] [--json]
+agent-notes doctor [--json]
 
-### Omnibus (single process, one model load)
+agent-notes breadcrumb file --title T --body B [--type ...] [--status ...] [--path PATH] [--json]
+agent-notes breadcrumb update <id> [--status ...] [--body ...] [--json]
+agent-notes breadcrumb get <id> [--json]
+agent-notes breadcrumb find [--status ...] [--type ...] [--text ...] [--path PATH] [--json]
+agent-notes breadcrumb query "<filter>" [--json]
 
-```bash
-agent-notes-omnibus
-# or equivalently:
-agent-notes serve --kinds breadcrumbs,memory,search
+agent-notes memory add --name N --body B [--type ...] [--path PATH] [--json]
+agent-notes memory get <name> [--json]
+agent-notes memory list [--path PATH] [--json]
+agent-notes memory search "<query>" [--path PATH] [--json]
+agent-notes memory delete <name>
+
+agent-notes link add --from <kind:id> --to <kind:id> --type <type>
+agent-notes link remove --from <kind:id> --to <kind:id> --type <type>
+agent-notes link trace <kind:id> [--all] [--depth N] [--json]
+
+agent-notes search all "<query>" [--path PATH] [--json]
+
+agent-notes vocabulary list [--kind ...] [--path PATH] [--json]
+agent-notes vocabulary archive <kind> <value>
+
+agent-notes changes since <timestamp-or-id> [--json]
+
+agent-notes install-skills [--target claude|opencode] [--dry-run]
 ```
 
 ### Web viewer (read-only)
@@ -53,17 +75,19 @@ Browse breadcrumbs, memories, and run semantic search from a browser. No auth; l
 
 ## Entry points
 
-| Console script | Kind(s) | Notes |
+| Console script | Kind(s) | Status |
 |---|---|---|
-| `agent-notes` | Generic | `serve --kinds X,Y,...` |
-| `agent-notes-breadcrumbs` | breadcrumbs | Thin shim |
-| `agent-notes-memory` | memory | Thin shim |
-| `agent-notes-search` | search | Thin shim |
-| `agent-notes-omnibus` | breadcrumbs + memory + search | Single process |
+| `agent-notes` | Generic | CLI (new primary surface) |
+| `agent-notes-breadcrumbs` | breadcrumbs | **Deprecated** (Phase 9a+) |
+| `agent-notes-memory` | memory | **Deprecated** (Phase 9a+) |
+| `agent-notes-search` | search | **Deprecated** (Phase 9a+) |
+| `agent-notes-omnibus` | breadcrumbs + memory + search | **Deprecated** (Phase 9a+) |
 | `agent-notes-web` | — | Read-only browser viewer |
 | `agent-notes-setup` | — | Alias for `migrate --all` |
 | `agent-notes-migrate` | — | Schema migrations from `schema/*.sql` |
 | `agent-notes-doctor` | — | Health check: DSN, schema, model, links audit |
 | `agent-notes-import-reflections` | — | One-time reflection import |
+
+MCP entry points remain operational during Phase 9a–9c but are scheduled for removal in Phase 9d.
 
 See `AGENTS.md` for build/test/lint commands and contributor conventions.

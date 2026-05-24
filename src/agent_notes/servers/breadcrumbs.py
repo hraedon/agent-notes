@@ -13,11 +13,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent_notes.core.breadcrumbs_model import BreadcrumbModel
 from agent_notes.core.db import list_projects, list_workspaces
 from agent_notes.core.links import trace_graph as core_trace_graph
 from agent_notes.core.server import Server
-
-from .breadcrumbs_model import BreadcrumbModel
 
 _KIND = "breadcrumb"
 
