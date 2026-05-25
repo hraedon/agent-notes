@@ -135,7 +135,8 @@ def run_import(legacy_dsn: str, new_dsn: str) -> None:
 
                 cur.execute(
                     """
-                    INSERT INTO change_log (kind, workspace_id, project_id, identifier, event, payload)
+                    INSERT INTO change_log
+                        (kind, workspace_id, project_id, identifier, event, payload)
                     SELECT 'memory', %s, project_id, name, 'filed',
                            jsonb_build_object('id', id, 'source', 'legacy_import')
                     FROM memories WHERE workspace_id = %s

@@ -175,7 +175,8 @@ def test_bridge_end_to_end_delivers_post():
     assert rx["body"]["kind"] == "note-change"
     # The change_log NOTIFY payload carries the kind/identifier of the row.
     meta = rx["body"]["meta"]
-    assert meta.get("agent_notes_identifier") == "BC-BRIDGE-1" or "BC-BRIDGE-1" in rx["body"]["content"]
+    assert meta.get("agent_notes_identifier") == "BC-BRIDGE-1" or \
+        "BC-BRIDGE-1" in rx["body"]["content"]
 
 
 def test_doctor_bridge_target_unset_passes():

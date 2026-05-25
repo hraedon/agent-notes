@@ -7,6 +7,7 @@ strings. CLI and legacy MCP server both consume the same model.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
@@ -15,6 +16,8 @@ from psycopg.rows import dict_row
 
 from agent_notes.core.change_log import write_change
 from agent_notes.core.db import _conn
+
+_log = logging.getLogger(__name__)
 
 _KIND = "memory"
 
@@ -137,7 +140,7 @@ def _auto_create_wikilinks(
                 relationship="relates_to",
             )
         except (psycopg.Error, ValueError):
-            pass
+            _log.debug("wikilink auto-create skipped: %s -> %s", name, ref_name, exc_info=True)
 
 
 def get_memory(workspace_id: int, project_id: int, name: str) -> dict | None:

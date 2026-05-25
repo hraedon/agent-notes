@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from typing import Any
 
 from agent_notes.core.mcp import ToolNotFoundError, ToolRegistry, _err, _ok, _send
+
+_log = logging.getLogger(__name__)
 
 PROTOCOL_VERSION = "2024-11-05"
 
@@ -461,6 +464,7 @@ class Server:
         except KeyError as exc:
             _send(_err(req_id, -32601, f"Tool argument missing: {exc}"))
         except Exception:
+            _log.exception("Unhandled error in tool %r", name)
             _send(_err(req_id, -32603, "Internal error"))
 
     def _handle_resources_list(self, req_id: Any) -> None:
@@ -471,7 +475,7 @@ class Server:
                 if isinstance(listed, list):
                     resources.extend(listed)
             except Exception:
-                pass
+                _log.warning("Resource handler %r raised during list", prefix, exc_info=True)
         _send({"jsonrpc": "2.0", "id": req_id, "result": {"resources": resources}})
 
     def _handle_resources_read(self, req_id: Any, params: dict) -> None:
@@ -507,7 +511,8 @@ class Server:
                 continue
             try:
                 req = json.loads(raw_line)
-            except Exception:
+            except json.JSONDecodeError:
+                _log.warning("Invalid JSON on stdin (len=%d)", len(raw_line))
                 continue
 
             req_id = req.get("id")

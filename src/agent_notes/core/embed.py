@@ -45,11 +45,17 @@ def embed(text: str, task: str = "document") -> np.ndarray:
     task='document' prefixes with 'search_document:' (for stored notes).
     task='query'    prefixes with 'search_query:' (for search queries).
 
-    TODO Phase 2a: validate returned dim against AGENT_NOTES_EMBED_DIM and
-    raise at server startup if they mismatch the vector column dimension read
-    via information_schema.
+    Validates the returned dimension against AGENT_NOTES_EMBED_DIM on first
+    encode and caches the result; mismatches raise RuntimeError to protect
+    the pgvector column from silent dimension drift.
     """
     prefix = "search_query" if task == "query" else "search_document"
     model = _get_model()
     vec: np.ndarray = model.encode(f"{prefix}: {text}", normalize_embeddings=True)
+    if vec.shape[0] != _EMBED_DIM:
+        raise RuntimeError(
+            f"Embedding dimension mismatch: model returned {vec.shape[0]}, "
+            f"expected {_EMBED_DIM} (AGENT_NOTES_EMBED_DIM). "
+            f"Recreate the pgvector column or set AGENT_NOTES_EMBED_DIM={vec.shape[0]}."
+        )
     return vec

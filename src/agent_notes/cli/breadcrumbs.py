@@ -73,7 +73,8 @@ def cmd_bc_update(args: argparse.Namespace) -> int:
         fields["title"] = args.title
     if args.body is not None and args.append_body is not None:
         if use_json:
-            print(json.dumps({"error": "--body and --append-body are mutually exclusive"}, indent=2))
+            msg = "--body and --append-body are mutually exclusive"
+            print(json.dumps({"error": msg}, indent=2))
         else:
             print("Error: --body and --append-body are mutually exclusive")
         return EXIT_CONFLICT
@@ -175,7 +176,8 @@ def cmd_bc_find(args: argparse.Namespace) -> int:
             ws = next((w for w in list_workspaces() if w.slug == args.workspace), None)
             if ws is None:
                 if use_json:
-                    print(json.dumps({"error": f"workspace '{args.workspace}' not found"}, indent=2))
+                    msg = f"workspace '{args.workspace}' not found"
+                    print(json.dumps({"error": msg}, indent=2))
                 else:
                     print(f"Workspace '{args.workspace}' not found.")
                 return EXIT_NOT_FOUND
