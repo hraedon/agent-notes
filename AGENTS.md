@@ -49,6 +49,16 @@ In-process lazy singleton (decision 2). 270MB nomic model loads on first call; t
 
 Add it to the relevant numbered decision in `plans/001-architecture-and-implementation.md` (and now `plans/004-flatten-cli-and-async-bridge.md`). Don't bury rationale in code comments — the plan is where peers look.
 
+## Skills
+
+Agent-facing workflows ship as skills under `skills/`:
+`file-breadcrumb`, `update-breadcrumb`, `find-breadcrumb`, `add-memory`,
+`start`, `reflect`, `end`. Each is a Markdown SKILL.md that shells to
+`agent-notes <noun> <verb> --json` and carries the per-workflow
+judgment in prose. Install with `agent-notes install-skills --target
+claude` (idempotent). opencode target is deferred — see Plan 004
+question Q4 and `skills/opencode/README.md`.
+
 ## End of session
 
 `/end` runs `reflect` and commits any working-directory changes. There is no projection to rebuild (Plan 003 decision 46). The server never runs `git` itself (decision 15). During Phase 9a+, `/end` should use the CLI (`agent-notes`) instead of MCP tools where possible.

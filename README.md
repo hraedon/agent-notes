@@ -63,6 +63,38 @@ agent-notes changes since <timestamp-or-id> [--json]
 agent-notes install-skills [--target claude|opencode] [--dry-run]
 ```
 
+### Skills (Claude Code / opencode)
+
+This repo ships skill prose under `skills/` that turns the CLI into
+a discoverable agent surface. Each skill carries the *judgment* —
+when to file a breadcrumb, what fields matter, how to phrase a memory
+— alongside a thin shell to the CLI. Per Plan 004 decision 53, the
+CLI is dumb storage; the policy lives in the skill Markdown.
+
+| Skill | Purpose |
+|---|---|
+| `file-breadcrumb` | "I found a problem worth tracking" workflow. |
+| `update-breadcrumb` | Status transitions, body appends, resolving. |
+| `find-breadcrumb` | Search-before-file dedup helper. |
+| `add-memory` | Cross-session fact recording with naming/dedup. |
+| `start` | Session-start orientation. |
+| `reflect` | Write a session reflection (now via CLI, not MCP). |
+| `end` | Wrap-up: reconcile breadcrumbs, reflect, commit. |
+
+Install into Claude Code with:
+
+```bash
+agent-notes install-skills --target claude
+# or to preview without writing:
+agent-notes install-skills --target claude --dry-run
+```
+
+This copies each `skills/<name>/SKILL.md` to
+`~/.claude/skills/<name>/SKILL.md`. Re-running is idempotent — a
+second invocation with no source changes reports `unchanged` for
+every skill. `--target opencode` is deferred (Plan 004 Q4); see
+`skills/opencode/README.md`.
+
 ### Web viewer (read-only)
 
 ```bash

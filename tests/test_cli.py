@@ -274,6 +274,109 @@ def test_link_trace_all(default_project):
     assert "memory" in kinds
 
 
+def test_install_skills_claude_dry_run():
+    """install-skills --target claude --dry-run reports what would happen, writes nothing."""
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / "skills"
+        dest = Path(td) / "claude-skills"
+        # Build a small fixture skill tree
+        skill_dir = src / "demo-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("---\nname: demo-skill\n---\nbody\n")
+        # opencode subtree must be skipped, even if it contains a SKILL.md
+        oc = src / "opencode" / "demo"
+        oc.mkdir(parents=True)
+        (oc / "SKILL.md").write_text("opencode\n")
+
+        result = _run(
+            "install-skills",
+            "--target",
+            "claude",
+            "--dry-run",
+            "--source",
+            str(src),
+            "--dest",
+            str(dest),
+            "--json",
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        data = json.loads(result.stdout)
+        names = {s["name"] for s in data["skills"]}
+        assert names == {"demo-skill"}
+        assert data["dry_run"] is True
+        assert data["skills"][0]["status"] == "created"
+        # Dry run must not write
+        assert not (dest / "demo-skill" / "SKILL.md").exists()
+
+
+def test_install_skills_claude_idempotent():
+    """Second run on identical content reports unchanged."""
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / "skills"
+        dest = Path(td) / "claude-skills"
+        skill_dir = src / "demo-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("---\nname: demo-skill\n---\nbody\n")
+
+        common = [
+            "install-skills",
+            "--target",
+            "claude",
+            "--source",
+            str(src),
+            "--dest",
+            str(dest),
+            "--json",
+        ]
+        first = _run(*common, check=False)
+        assert first.returncode == 0
+        assert (dest / "demo-skill" / "SKILL.md").is_file()
+        data1 = json.loads(first.stdout)
+        assert data1["skills"][0]["status"] == "created"
+
+        second = _run(*common, check=False)
+        assert second.returncode == 0
+        data2 = json.loads(second.stdout)
+        assert data2["skills"][0]["status"] == "unchanged"
+
+
+def test_install_skills_claude_updates_changed_content():
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / "skills"
+        dest = Path(td) / "claude-skills"
+        skill_dir = src / "demo-skill"
+        skill_dir.mkdir(parents=True)
+        skill_file = skill_dir / "SKILL.md"
+        skill_file.write_text("v1\n")
+
+        common = [
+            "install-skills",
+            "--target",
+            "claude",
+            "--source",
+            str(src),
+            "--dest",
+            str(dest),
+            "--json",
+        ]
+        _run(*common, check=False)
+        skill_file.write_text("v2\n")
+        result = _run(*common, check=False)
+        assert result.returncode == 0
+        data = json.loads(result.stdout)
+        assert data["skills"][0]["status"] == "updated"
+        installed = (dest / "demo-skill" / "SKILL.md").read_text()
+        assert installed == "v2\n"
+
+
+def test_install_skills_opencode_deferred():
+    result = _run("install-skills", "--target", "opencode", "--json", check=False)
+    assert result.returncode == 3
+    data = json.loads(result.stdout)
+    assert "not yet implemented" in data["error"]
+
+
 def test_changes_since(default_project):
     result = _run(
         "changes",
