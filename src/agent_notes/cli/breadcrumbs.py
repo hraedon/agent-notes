@@ -69,8 +69,25 @@ def cmd_bc_update(args: argparse.Namespace) -> int:
     fields: dict[str, Any] = {}
     if args.title is not None:
         fields["title"] = args.title
+    if args.body is not None and args.append_body is not None:
+        if use_json:
+            print(json.dumps({"error": "--body and --append-body are mutually exclusive"}, indent=2))
+        else:
+            print("Error: --body and --append-body are mutually exclusive")
+        return EXIT_CONFLICT
     if args.body is not None:
         fields["body"] = args.body
+    if args.append_body is not None:
+        old = BreadcrumbModel.get_breadcrumb(proj_id, args.identifier)
+        if old is None:
+            if use_json:
+                print(json.dumps({"error": "not found"}, indent=2))
+            else:
+                print(f"Breadcrumb '{args.identifier}' not found.")
+            return EXIT_NOT_FOUND
+        existing = (old.get("body") or "").rstrip()
+        sep = "\n\n" if existing else ""
+        fields["body"] = f"{existing}{sep}{args.append_body}"
     if args.type is not None:
         fields["kind"] = args.type
     if args.status is not None:
@@ -133,13 +150,42 @@ def cmd_bc_get(args: argparse.Namespace) -> int:
 
 def cmd_bc_find(args: argparse.Namespace) -> int:
     use_json = getattr(args, "json", False)
-    try:
-        ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
-    except SystemExit as exc:
-        return exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED  # type: ignore[arg-type]
+    scope = getattr(args, "scope", None) or "project"
 
     from agent_notes.core.breadcrumbs_model import BreadcrumbModel
+    from agent_notes.core.db import list_workspaces
     from agent_notes.core.embed import embed
+
+    proj_id: int | None = None
+    ws_id: int | None = None
+
+    if scope == "global":
+        pass
+    elif scope == "workspace":
+        # Resolve workspace from --workspace or --path; project is intentionally ignored.
+        if args.workspace:
+            ws = next((w for w in list_workspaces() if w.slug == args.workspace), None)
+            if ws is None:
+                if use_json:
+                    print(json.dumps({"error": f"workspace '{args.workspace}' not found"}, indent=2))
+                else:
+                    print(f"Workspace '{args.workspace}' not found.")
+                return EXIT_NOT_FOUND
+            ws_id = ws.id
+        else:
+            try:
+                ws_id, _proj_id, _ws_slug, _proj_slug = _resolve(
+                    args.workspace, args.project, args.path
+                )
+            except SystemExit as exc:
+                return exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED  # type: ignore[arg-type]
+    else:  # scope == "project" (default)
+        try:
+            ws_id, proj_id, _ws_slug, _proj_slug = _resolve(
+                args.workspace, args.project, args.path
+            )
+        except SystemExit as exc:
+            return exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED  # type: ignore[arg-type]
 
     if args.text:
         vec = embed(args.text, task="query").tolist()
@@ -214,7 +260,13 @@ def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
     bc_update = bc_sub.add_parser("update", help="Update a breadcrumb")
     bc_update.add_argument("identifier")
     bc_update.add_argument("--title", default=None)
-    bc_update.add_argument("--body", default=None)
+    bc_update.add_argument("--body", default=None, help="Replace body entirely")
+    bc_update.add_argument(
+        "--append-body",
+        default=None,
+        dest="append_body",
+        help="Append text to the existing body (separated by a blank line)",
+    )
     bc_update.add_argument("--type", default=None, dest="type")
     bc_update.add_argument("--status", default=None)
     bc_update.add_argument("--severity", default=None)
@@ -231,6 +283,15 @@ def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
     bc_find.add_argument("--type", default=None, dest="type")
     bc_find.add_argument("--text", default=None)
     bc_find.add_argument("--limit", type=int, default=None)
+    bc_find.add_argument(
+        "--scope",
+        choices=["project", "workspace", "global"],
+        default="project",
+        help=(
+            "Search scope. 'project' (default) uses --path/--workspace+--project. "
+            "'workspace' broadens to the workspace. 'global' ignores both."
+        ),
+    )
     _add_common(bc_find)
     bc_find.set_defaults(func=cmd_bc_find)
 

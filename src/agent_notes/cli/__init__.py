@@ -19,6 +19,7 @@ from agent_notes.cli.memory import register_memory_parsers
 from agent_notes.cli.search import register_search_parsers
 from agent_notes.cli.skills import register_skills_parser
 from agent_notes.cli.vocabulary import register_vocabulary_parsers
+from agent_notes.cli.workspace import register_workspace_parsers
 
 
 def cmd_init(path: str | None) -> int:
@@ -103,6 +104,7 @@ def main() -> int:
     register_link_parsers(sub)
     register_search_parsers(sub)
     register_vocabulary_parsers(sub)
+    register_workspace_parsers(sub)
     register_changes_parsers(sub)
     register_skills_parser(sub)
 

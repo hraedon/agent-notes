@@ -15,6 +15,16 @@ Run this when:
 - The user asks "where did we leave off?" or "what's outstanding?"
 - You're picking up work from a different model or session.
 
+If you need to know which workspaces exist (e.g. to broaden a search
+beyond the current path), use:
+
+```
+agent-notes workspace list --json
+```
+
+It returns `id`, `slug`, `name`, and `project_count` for every
+workspace. Don't go fishing through `vocabulary list` for this.
+
 ## Three quick lookups
 
 Run all three (parallel-safe), then synthesize a compact briefing.

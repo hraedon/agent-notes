@@ -64,10 +64,10 @@ agent-notes breadcrumb update <identifier> \
 
 Two things to know about the CLI:
 
-- `--body` **replaces** the body. To append, first
-  `agent-notes breadcrumb get <id> --json`, take the existing `body`,
-  concatenate your note with a `\n\n---\n\n<date>: ` separator, then
-  pass the combined string. There is no `--append-body` flag yet.
+- `--body` **replaces** the body. To add new context without losing the
+  old, use `--append-body "<note>"` — the CLI inserts a blank-line
+  separator and writes atomically. `--body` and `--append-body` are
+  mutually exclusive.
 - You can pass `--status` alone to transition without touching body.
 
 Parse the JSON response. Confirm the new status to the user.

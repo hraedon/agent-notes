@@ -49,19 +49,24 @@ The CLI gives you two complementary tools; use both.
    reflection, not a breadcrumb. Useful when you don't know which form
    prior context took.
 
-## Scope: project and global
+## Scope: project, workspace, global
 
-By default, `--path` scopes to the current project. To check across
-the whole workspace (e.g. cross-project patterns, infrastructure
-issues that recur), pass `--workspace <ws>` without `--project`:
+Pass `--scope` to broaden the search:
+
+- `--scope project` (default) — current project only, resolved from
+  `--path` or `--workspace`/`--project`.
+- `--scope workspace` — every project in the current workspace.
+- `--scope global` — everything the user has access to; no `--path` or
+  `--workspace` required.
 
 ```
-agent-notes breadcrumb find --workspace default --text "<query>" --json
+agent-notes breadcrumb find --path <repo-path> --scope workspace --text "<q>" --json
+agent-notes breadcrumb find --scope global --text "<q>" --json
 ```
 
-Do both project-scoped and workspace-scoped searches when the issue
-might plausibly affect more than one project. The marginal cost is
-~one CLI call.
+Do both project-scoped and workspace- (or global-) scoped searches when
+the issue might plausibly affect more than one project. The marginal
+cost is ~one CLI call.
 
 ## Interpreting results
 

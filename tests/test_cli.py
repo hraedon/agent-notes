@@ -377,6 +377,145 @@ def test_install_skills_opencode_deferred():
     assert "not yet implemented" in data["error"]
 
 
+def test_breadcrumb_update_append_body(default_project):
+    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
+
+    BreadcrumbModel.file_breadcrumb(
+        default_project.id,
+        identifier="BC-APPEND-1",
+        title="Append target",
+        body="initial line",
+        kind="observation",
+        status="open",
+        embedding=[0.0] * 768,
+    )
+    result = _run(
+        "breadcrumb",
+        "update",
+        "BC-APPEND-1",
+        "--workspace",
+        "default",
+        "--project",
+        "sf2",
+        "--append-body",
+        "added context",
+        "--json",
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    assert data["breadcrumb"]["body"] == "initial line\n\nadded context"
+
+    # And --body still replaces.
+    result = _run(
+        "breadcrumb",
+        "update",
+        "BC-APPEND-1",
+        "--workspace",
+        "default",
+        "--project",
+        "sf2",
+        "--body",
+        "replaced",
+        "--json",
+        check=False,
+    )
+    assert result.returncode == 0
+    data = json.loads(result.stdout)
+    assert data["breadcrumb"]["body"] == "replaced"
+
+    # Mutual exclusion.
+    result = _run(
+        "breadcrumb",
+        "update",
+        "BC-APPEND-1",
+        "--workspace",
+        "default",
+        "--project",
+        "sf2",
+        "--body",
+        "x",
+        "--append-body",
+        "y",
+        "--json",
+        check=False,
+    )
+    assert result.returncode == 4  # EXIT_CONFLICT
+
+
+def test_breadcrumb_find_scopes(default_project):
+    from agent_notes.core import db as _db
+    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
+
+    ws = _db.get_or_create_workspace("default", "Default Workspace")
+    other_proj = _db.get_or_create_project(
+        ws.id, slug="other", name="other", repo_root="/projects/other"
+    )
+
+    BreadcrumbModel.file_breadcrumb(
+        default_project.id,
+        identifier="BC-SCOPE-PROJ",
+        title="Scope proj",
+        kind="observation",
+        status="open",
+        embedding=[0.0] * 768,
+    )
+    BreadcrumbModel.file_breadcrumb(
+        other_proj.id,
+        identifier="BC-SCOPE-OTHER",
+        title="Scope other",
+        kind="observation",
+        status="open",
+        embedding=[0.0] * 768,
+    )
+
+    # project scope: only sees sf2's BC
+    r = _run(
+        "breadcrumb", "find",
+        "--workspace", "default", "--project", "sf2",
+        "--scope", "project", "--status", "open", "--json",
+        check=False,
+    )
+    assert r.returncode == 0
+    ids = {b["identifier"] for b in json.loads(r.stdout)["breadcrumbs"]}
+    assert "BC-SCOPE-PROJ" in ids
+    assert "BC-SCOPE-OTHER" not in ids
+
+    # workspace scope: sees both
+    r = _run(
+        "breadcrumb", "find",
+        "--workspace", "default",
+        "--scope", "workspace", "--status", "open", "--json",
+        check=False,
+    )
+    assert r.returncode == 0, r.stderr
+    ids = {b["identifier"] for b in json.loads(r.stdout)["breadcrumbs"]}
+    assert "BC-SCOPE-PROJ" in ids
+    assert "BC-SCOPE-OTHER" in ids
+
+    # global scope: sees both (no --workspace required)
+    r = _run(
+        "breadcrumb", "find",
+        "--scope", "global", "--status", "open", "--json",
+        check=False,
+    )
+    assert r.returncode == 0, r.stderr
+    ids = {b["identifier"] for b in json.loads(r.stdout)["breadcrumbs"]}
+    assert {"BC-SCOPE-PROJ", "BC-SCOPE-OTHER"}.issubset(ids)
+
+
+def test_workspace_list(default_project):
+    r = _run("workspace", "list", "--json", check=False)
+    assert r.returncode == 0, r.stderr
+    data = json.loads(r.stdout)
+    slugs = {w["slug"] for w in data["workspaces"]}
+    assert "default" in slugs
+    default_entry = next(w for w in data["workspaces"] if w["slug"] == "default")
+    assert "id" in default_entry
+    assert "name" in default_entry
+    assert default_entry["project_count"] >= 1
+
+
 def test_changes_since(default_project):
     result = _run(
         "changes",
