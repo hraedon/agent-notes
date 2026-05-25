@@ -307,7 +307,15 @@ def find_reflections(
     project_id: int | None = None,
     query_vec: Any | None = None,
     limit: int = 10,
+    include_body: bool = False,
 ) -> list[dict]:
+    """Find reflection-type memories.
+
+    When `include_body=False` (default), the `body` column is returned as an
+    empty string (cheap projection). When `include_body=True`, full body is
+    returned. Pass `query_vec` for embedding-similarity ordering; otherwise
+    rows are ordered by `updated_at DESC`.
+    """
     conditions = ["active = true", "workspace_id = %s", "memory_type = 'reflection'"]
     params: list[Any] = [workspace_id]
 
@@ -327,11 +335,13 @@ def find_reflections(
         select_score = ""
         params_with_vec = params + [min(limit, 50)]
 
+    body_expr = "body" if include_body else "LEFT(body, 0) AS body"
+
     with _conn() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             f"""
-            SELECT id, name, LEFT(body, 0) AS body, attributes,
+            SELECT id, name, {body_expr}, attributes,
                    created_at, updated_at{select_score}
             FROM memories
             WHERE {where}
@@ -349,40 +359,14 @@ def find_reflections_with_body(
     query_vec: Any | None = None,
     limit: int = 10,
 ) -> list[dict]:
-    """Same as find_reflections but returns full body."""
-    conditions = ["active = true", "workspace_id = %s", "memory_type = 'reflection'"]
-    params: list[Any] = [workspace_id]
-
-    if project_id is not None:
-        conditions.append("project_id = %s")
-        params.append(project_id)
-
-    if query_vec is not None:
-        conditions.append("embedding IS NOT NULL")
-        where = " AND ".join(conditions)
-        order_clause = "ORDER BY embedding <=> %s::vector"
-        select_score = ", 1 - (embedding <=> %s::vector) AS score"
-        params_with_vec = [query_vec] + params + [query_vec, min(limit, 50)]
-    else:
-        where = " AND ".join(conditions)
-        order_clause = "ORDER BY updated_at DESC"
-        select_score = ""
-        params_with_vec = params + [min(limit, 50)]
-
-    with _conn() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            f"""
-            SELECT id, name, body, attributes,
-                   created_at, updated_at{select_score}
-            FROM memories
-            WHERE {where}
-            {order_clause}
-            LIMIT %s
-            """,
-            params_with_vec,
-        )
-        return [dict(r) for r in cur.fetchall()]
+    """Deprecated thin wrapper. Use `find_reflections(..., include_body=True)`."""
+    return find_reflections(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        query_vec=query_vec,
+        limit=limit,
+        include_body=True,
+    )
 
 
 def extract_gaps(workspace_id: int, project_id: int, name: str) -> dict:

@@ -21,9 +21,6 @@ from agent_notes.core.memory_model import (
     find_reflections as model_find_reflections,
 )
 from agent_notes.core.memory_model import (
-    find_reflections_with_body as model_find_reflections_with_body,
-)
-from agent_notes.core.memory_model import (
     get_memory as model_get_memory,
 )
 from agent_notes.core.memory_model import (
@@ -482,35 +479,19 @@ class MemoryServer(Server):
         limit = min(int(args.get("limit", 10)), 50)
         include_body = bool(args.get("include_body", False))
 
-        if query:
-            vec = embed(query, task="query")
-            if project_slug:
-                proj = self._resolve_project(ws.id, project_slug)
-                rows = (
-                    model_find_reflections_with_body(ws.id, proj.id, vec.tolist(), limit)
-                    if include_body
-                    else model_find_reflections(ws.id, proj.id, vec.tolist(), limit)
-                )
-            else:
-                rows = (
-                    model_find_reflections_with_body(ws.id, None, vec.tolist(), limit)
-                    if include_body
-                    else model_find_reflections(ws.id, None, vec.tolist(), limit)
-                )
-        else:
-            if project_slug:
-                proj = self._resolve_project(ws.id, project_slug)
-                rows = (
-                    model_find_reflections_with_body(ws.id, proj.id, None, limit)
-                    if include_body
-                    else model_find_reflections(ws.id, proj.id, None, limit)
-                )
-            else:
-                rows = (
-                    model_find_reflections_with_body(ws.id, None, None, limit)
-                    if include_body
-                    else model_find_reflections(ws.id, None, None, limit)
-                )
+        proj_id = None
+        if project_slug:
+            proj = self._resolve_project(ws.id, project_slug)
+            proj_id = proj.id
+
+        query_vec = embed(query, task="query").tolist() if query else None
+        rows = model_find_reflections(
+            workspace_id=ws.id,
+            project_id=proj_id,
+            query_vec=query_vec,
+            limit=limit,
+            include_body=include_body,
+        )
 
         if not rows:
             return "No reflection memories found."
