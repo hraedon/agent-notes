@@ -215,6 +215,34 @@ def _check_vocab_integrity() -> tuple[bool, str]:
         return False, str(exc)
 
 
+def _check_bridge_target() -> tuple[bool, str]:
+    """If AGENT_NOTES_BRIDGE_TARGET is set, attempt a probe POST.
+
+    Accepts any 2xx/4xx as 'reachable' — agent-wake's ingest returns 403 for an
+    unsigned/empty body, which still proves the server is up. Connection-refused
+    or timeout is a fail.
+    """
+    target = os.environ.get("AGENT_NOTES_BRIDGE_TARGET")
+    if not target:
+        return True, "AGENT_NOTES_BRIDGE_TARGET not set (bridge disabled — OK)"
+    try:
+        import urllib.error
+        import urllib.request
+
+        req = urllib.request.Request(target, data=b"", method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=2.0) as resp:
+                return True, f"Bridge target reachable ({target}, HTTP {resp.status})"
+        except urllib.error.HTTPError as exc:
+            if 400 <= exc.code < 500:
+                return True, f"Bridge target reachable ({target}, HTTP {exc.code})"
+            return False, f"Bridge target HTTP {exc.code}"
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            return False, f"Bridge target unreachable: {exc}"
+    except Exception as exc:
+        return False, str(exc)
+
+
 def run() -> int:
     """Run all checks and print a summary. Returns exit code."""
     print("agent-notes-doctor — health check\n")
@@ -257,6 +285,11 @@ def run() -> int:
 
     ok, msg = _check_vocab_integrity()
     _print_section("5. Vocabulary Integrity")
+    _print_result(ok, msg)
+    all_ok = all_ok and ok
+
+    ok, msg = _check_bridge_target()
+    _print_section("6. Bridge Target")
     _print_result(ok, msg)
     all_ok = all_ok and ok
 

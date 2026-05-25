@@ -95,6 +95,34 @@ second invocation with no source changes reports `unchanged` for
 every skill. `--target opencode` is deferred (Plan 004 Q4); see
 `skills/opencode/README.md`.
 
+### NOTIFY → agent-wake bridge (optional)
+
+`agent-notes-bridge` is a small daemon (Plan 004 §7, Phase 9c) that LISTENs
+on the Postgres `agent_notes_changes` channel and POSTs each change to an
+[agent-wake](https://github.com/) HTTP ingest endpoint with HMAC-signed
+requests (`X-AgentWake-Source` / `X-AgentWake-Signature`). It lets external
+agents wake on breadcrumb / memory changes without polling.
+
+Run it (one process per deployment):
+
+```bash
+export AGENT_NOTES_DSN=postgresql://...
+export AGENT_NOTES_BRIDGE_TARGET=http://127.0.0.1:8788/   # agent-wake ingest
+export AGENT_NOTES_BRIDGE_SECRET=...                       # shared HMAC secret
+agent-notes-bridge
+```
+
+Optional env vars: `AGENT_NOTES_BRIDGE_SOURCE` (default `agent-notes`),
+`AGENT_NOTES_BRIDGE_BATCH_MS` (default 100ms), `AGENT_NOTES_BRIDGE_BATCH_N`
+(default 50). Each buffered change becomes one POST to the target (agent-wake's
+v0 wire schema is one-event-per-POST). On 3 failed delivery attempts
+(100ms / 1s / 10s backoff), the bridge drops the event and continues — the
+`change_log` row remains the durable record.
+
+A sample systemd unit lives at `deploy/agent-notes-bridge.service`. The
+bridge does **not** publish to substrate (Plan 004 decision 56); subscribe
+to the wake target if a downstream substrate consumer needs the stream.
+
 ### Web viewer (read-only)
 
 ```bash
@@ -114,6 +142,7 @@ Browse breadcrumbs, memories, and run semantic search from a browser. No auth; l
 | `agent-notes-memory` | memory | **Deprecated** (Phase 9a+) |
 | `agent-notes-search` | search | **Deprecated** (Phase 9a+) |
 | `agent-notes-omnibus` | breadcrumbs + memory + search | **Deprecated** (Phase 9a+) |
+| `agent-notes-bridge` | — | NOTIFY → agent-wake forwarder (optional) |
 | `agent-notes-web` | — | Read-only browser viewer |
 | `agent-notes-setup` | — | Alias for `migrate --all` |
 | `agent-notes-migrate` | — | Schema migrations from `schema/*.sql` |

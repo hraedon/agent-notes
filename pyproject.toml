@@ -33,6 +33,7 @@ agent-notes-migrate     = "agent_notes.scripts.migrate:main"
 agent-notes-import-reflections = "agent_notes.scripts.import_reflections:main"
 agent-notes-doctor      = "agent_notes.scripts.doctor:main"
 agent-notes-omnibus    = "agent_notes.cli:main_omnibus"
+agent-notes-bridge     = "agent_notes.bridge:main"
 agent-notes-web        = "agent_notes.web.app:main"
 # agent-notes-reflections added only if Phase 3.6 spike (decision 25) concludes
 # memories don't suffice for the reflection use case.
