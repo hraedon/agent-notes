@@ -78,7 +78,7 @@ def test_breadcrumb_file(default_project):
         "sf2",
         "--title",
         "CLI test BC",
-        "--kind",
+        "--type",
         "bug",
         "--status",
         "new",

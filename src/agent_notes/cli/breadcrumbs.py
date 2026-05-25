@@ -32,7 +32,7 @@ def cmd_bc_file(args: argparse.Namespace) -> int:
             identifier=args.identifier,
             title=args.title,
             body=args.body or "",
-            kind=args.kind,
+            kind=args.type,
             status=args.status,
             severity=args.severity or "medium",
             external_refs=args.external_refs,
@@ -71,8 +71,8 @@ def cmd_bc_update(args: argparse.Namespace) -> int:
         fields["title"] = args.title
     if args.body is not None:
         fields["body"] = args.body
-    if args.kind is not None:
-        fields["kind"] = args.kind
+    if args.type is not None:
+        fields["kind"] = args.type
     if args.status is not None:
         fields["status"] = args.status
     if args.severity is not None:
@@ -203,7 +203,7 @@ def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
     bc_file.add_argument("--title", required=True)
     bc_file.add_argument("--body", default="")
     bc_file.add_argument("--identifier", default=None)
-    bc_file.add_argument("--kind", default="todo")
+    bc_file.add_argument("--type", default="todo", dest="type")
     bc_file.add_argument("--status", default="new")
     bc_file.add_argument("--severity", default="medium")
     bc_file.add_argument("--external-refs", default=None)
@@ -215,7 +215,7 @@ def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
     bc_update.add_argument("identifier")
     bc_update.add_argument("--title", default=None)
     bc_update.add_argument("--body", default=None)
-    bc_update.add_argument("--kind", default=None)
+    bc_update.add_argument("--type", default=None, dest="type")
     bc_update.add_argument("--status", default=None)
     bc_update.add_argument("--severity", default=None)
     _add_common(bc_update)
