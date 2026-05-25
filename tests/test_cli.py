@@ -196,6 +196,84 @@ def test_memory_get(default_project):
     assert data["memory"]["name"] == "cli-memory-get"
 
 
+def test_link_trace_all(default_project):
+    """`link trace --all` should walk across kinds (breadcrumb + memory)."""
+    from agent_notes.core import links as lnk
+    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
+    from agent_notes.core.memory_model import add_memory
+
+    ws = coredb.get_or_create_workspace("default", "Default Workspace")
+
+    BreadcrumbModel.file_breadcrumb(
+        default_project.id,
+        identifier="BC-TRACE-ALL-1",
+        title="Trace start",
+        kind="observation",
+        status="open",
+        embedding=[0.0] * 768,
+    )
+    BreadcrumbModel.file_breadcrumb(
+        default_project.id,
+        identifier="BC-TRACE-ALL-2",
+        title="Trace mid",
+        kind="observation",
+        status="open",
+        embedding=[0.0] * 768,
+    )
+    add_memory(
+        workspace_id=ws.id,
+        project_id=default_project.id,
+        name="mem-trace-all-1",
+        memory_type="note",
+        body="Linked memory.",
+        embedding=[0.0] * 768,
+    )
+
+    # breadcrumb -> breadcrumb -> memory (cross-kind)
+    lnk.add_link(
+        from_kind="breadcrumb",
+        from_workspace=ws.id,
+        from_project=default_project.id,
+        from_identifier="BC-TRACE-ALL-1",
+        to_kind="breadcrumb",
+        to_workspace=ws.id,
+        to_project=default_project.id,
+        to_identifier="BC-TRACE-ALL-2",
+        relationship="relates_to",
+    )
+    lnk.add_link(
+        from_kind="breadcrumb",
+        from_workspace=ws.id,
+        from_project=default_project.id,
+        from_identifier="BC-TRACE-ALL-2",
+        to_kind="memory",
+        to_workspace=ws.id,
+        to_project=default_project.id,
+        to_identifier="mem-trace-all-1",
+        relationship="relates_to",
+    )
+
+    result = _run(
+        "link",
+        "trace",
+        "breadcrumb:default/sf2/BC-TRACE-ALL-1",
+        "--all",
+        "--depth",
+        "5",
+        "--json",
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    identifiers = {n["identifier"] for n in data["nodes"]}
+    kinds = {n["kind"] for n in data["nodes"]}
+    assert "BC-TRACE-ALL-2" in identifiers
+    assert "mem-trace-all-1" in identifiers
+    # cross-kind traversal: both breadcrumb and memory should appear
+    assert "breadcrumb" in kinds
+    assert "memory" in kinds
+
+
 def test_changes_since(default_project):
     result = _run(
         "changes",
