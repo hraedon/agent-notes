@@ -52,6 +52,8 @@ Numbered to extend Plan 003 (which reserved 39–48). 49–60 reserved for Plan 
 
 58. **Argparse, not Click / Typer.** Stdlib, zero added deps. Reason: a 600-LOC CLI doesn't need a framework; this repo already has FastAPI + Jinja2 + psycopg + pgvector pulling weight.
 
+  *Revision (2026-05-25):* CLI is organized as a package `src/agent_notes/cli/` with one module per noun (`breadcrumbs.py`, `memory.py`, `links.py`, `search.py`, `vocabulary.py`, `changes.py`, `skills.py`, `serve.py`) plus `common.py` for shared exit codes / json helpers. `__init__.py` wires the top-level parser and re-exports MCP `serve*` entry points so `pyproject.toml` console scripts continue to resolve. The single-file form predicted in the 05-24 reflection to need splitting "once Phase 9c lands"; the split landed earlier because Phase 9a CLI ended at ~1,100 LOC (not 600) and per-noun navigation was already painful. No framework added; argparse only.
+
 59. **Tests: keep model-layer tests; rewrite server tests as CLI subprocess tests.** `subprocess.run([...], capture_output=True)` against an ephemeral testcontainers Postgres, parse `--json`, assert. Reason: testing the CLI is testing the actual user surface; testing the dispatch table is theater.
 
 60. **The agent-provenance reframing is recorded here, not in agent-provenance's plans.** The first observed wake source attested through provenance's harness adapter becomes the NOTIFY→wake bridge once both ship. Documenting in this plan so future-me doesn't lose the reframing; agent-provenance's docs need an addendum but not a co-authored plan.

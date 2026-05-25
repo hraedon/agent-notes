@@ -143,13 +143,11 @@ class SearchServer(Server):
         lines = [f"{len(rows)} note(s) matched across kinds:"]
         for r in rows:
             updated = r["updated_at"].strftime("%Y-%m-%d %H:%M") if r.get("updated_at") else "?"
-            kind = r['kind']
-            ident = r['identifier']
-            title = r['title']
-            score = r['score']
-            lines.append(
-                f"- [{kind}] **{ident}** — {title} (score={score:.3f}, updated={updated})"
-            )
+            kind = r["kind"]
+            ident = r["identifier"]
+            title = r["title"]
+            score = r["score"]
+            lines.append(f"- [{kind}] **{ident}** — {title} (score={score:.3f}, updated={updated})")
         return "\n".join(lines)
 
     def _tool_trace_graph_all(self, args: dict) -> str:

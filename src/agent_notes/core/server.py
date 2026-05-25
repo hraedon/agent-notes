@@ -357,10 +357,8 @@ class Server:
             return f"No changes since {since_str}."
         lines = [f"{len(rows)} change(s) since {since_str}:"]
         for r in rows:
-            ts = r['changed_at'].strftime('%Y-%m-%d %H:%M')
-            lines.append(
-                f"- [{r['kind']}] {r['identifier']} event={r['event']} at {ts}"
-            )
+            ts = r["changed_at"].strftime("%Y-%m-%d %H:%M")
+            lines.append(f"- [{r['kind']}] {r['identifier']} event={r['event']} at {ts}")
         return "\n".join(lines)
 
     def _tool_add_link(self, args: dict) -> str:
