@@ -20,7 +20,7 @@ def _parse_link_ref(ref: str) -> tuple[str, str, str, str]:
 
 def _resolve_link_ref(
     kind: str, workspace_slug: str, project_slug: str, identifier: str
-) -> tuple[int, int, int]:
+) -> tuple[int, int, str]:
     from agent_notes.core.db import list_projects, list_workspaces
 
     ws = next((w for w in list_workspaces() if w.slug == workspace_slug), None)
@@ -87,20 +87,21 @@ def cmd_link_trace(args: argparse.Namespace) -> int:
     kind, ws_slug, proj_slug, identifier = _parse_link_ref(args.start)
     ws, proj, _ = _resolve_link_ref(kind, ws_slug, proj_slug, identifier)
 
-    from agent_notes.core.links import trace_graph as core_local_trace_graph
-
-    nodes = core_local_trace_graph(
-        kind=kind,
-        workspace=ws,
-        project=proj,
-        identifier=identifier,
-        direction=args.direction,
-        max_depth=min(args.depth or 3, 10),
-    )
     if args.all:
         from agent_notes.core.search import trace_graph_all
 
         nodes = trace_graph_all(
+            kind=kind,
+            workspace=ws,
+            project=proj,
+            identifier=identifier,
+            direction=args.direction,
+            max_depth=min(args.depth or 3, 10),
+        )
+    else:
+        from agent_notes.core.links import trace_graph as core_local_trace_graph
+
+        nodes = core_local_trace_graph(
             kind=kind,
             workspace=ws,
             project=proj,

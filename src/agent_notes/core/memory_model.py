@@ -136,7 +136,7 @@ def _auto_create_wikilinks(
                 to_identifier=ref_name,
                 relationship="relates_to",
             )
-        except Exception:
+        except (psycopg.Error, ValueError):
             pass
 
 
@@ -281,7 +281,6 @@ def delete_memory(workspace_id: int, project_id: int, name: str) -> dict | None:
         )
         row = cur.fetchone()
         if row is None:
-            conn.rollback()
             return None
 
         write_change(
@@ -420,7 +419,6 @@ def mark_gaps_filed(
         )
         row = cur.fetchone()
         if row is None:
-            conn.rollback()
             return {"error": f"Reflection '{name}' not found"}
 
         attrs = dict(row.get("attributes") or {})

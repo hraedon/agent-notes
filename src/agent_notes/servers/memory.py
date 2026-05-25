@@ -102,7 +102,7 @@ class MemoryServer(Server):
                     "uri": build_uri("memory", workspace_slug, project_slug, r["name"]),
                     "name": r["name"],
                     "mimeType": "text/markdown",
-                    "description": f"{r['memory_type']} — {r['body_preview'][:60]}",
+                    "description": f"{r['memory_type']} — {(r.get('body_preview') or '')[:60]}",
                 }
                 for r in rows
             ]

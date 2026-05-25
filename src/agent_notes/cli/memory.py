@@ -24,6 +24,7 @@ def cmd_mem_add(args: argparse.Namespace) -> int:
     from agent_notes.core.memory_model import add_memory
 
     vec = embed(args.body, task="document").tolist()
+    attributes = json.loads(args.attributes) if args.attributes else {}
     try:
         mem = add_memory(
             workspace_id=ws_id,
@@ -31,7 +32,7 @@ def cmd_mem_add(args: argparse.Namespace) -> int:
             name=args.name,
             memory_type=args.type,
             body=args.body,
-            attributes=args.attributes or {},
+            attributes=attributes,
             embedding=vec,
         )
     except ValueError as exc:

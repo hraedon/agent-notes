@@ -34,13 +34,13 @@ def _render(template_name: str, status_code: int = 200, **context) -> HTMLRespon
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
+def index(request: Request):
     workspaces = list_workspaces()
     return _render("index.html", workspaces=workspaces)
 
 
 @app.get("/workspaces/{workspace_slug}", response_class=HTMLResponse)
-async def workspace_detail(request: Request, workspace_slug: str):
+def workspace_detail(request: Request, workspace_slug: str):
     ws = _find_workspace(workspace_slug)
     if ws is None:
         return _render("404.html", status_code=404, thing="workspace")
@@ -49,7 +49,7 @@ async def workspace_detail(request: Request, workspace_slug: str):
 
 
 @app.get("/workspaces/{workspace_slug}/{project_slug}", response_class=HTMLResponse)
-async def project_detail(request: Request, workspace_slug: str, project_slug: str):
+def project_detail(request: Request, workspace_slug: str, project_slug: str):
     ws = _find_workspace(workspace_slug)
     if ws is None:
         return _render("404.html", status_code=404, thing="project")
@@ -72,7 +72,7 @@ async def project_detail(request: Request, workspace_slug: str, project_slug: st
     "/workspaces/{workspace_slug}/{project_slug}/breadcrumbs/{identifier}",
     response_class=HTMLResponse,
 )
-async def breadcrumb_detail(
+def breadcrumb_detail(
     request: Request,
     workspace_slug: str,
     project_slug: str,
@@ -98,7 +98,7 @@ async def breadcrumb_detail(
     "/workspaces/{workspace_slug}/{project_slug}/memories/{name}",
     response_class=HTMLResponse,
 )
-async def memory_detail(
+def memory_detail(
     request: Request,
     workspace_slug: str,
     project_slug: str,
@@ -121,7 +121,7 @@ async def memory_detail(
 
 
 @app.get("/search", response_class=HTMLResponse)
-async def search(request: Request, q: str = ""):
+def search(request: Request, q: str = ""):
     results: list[dict] = []
     if q:
         from agent_notes.core.embed import embed
@@ -180,7 +180,9 @@ def _get_breadcrumb(project_id: int, identifier: str) -> dict | None:
 
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            "SELECT * FROM breadcrumbs WHERE project_id = %s AND identifier = %s",
+            "SELECT identifier, title, kind, status, severity, body, "
+            "external_refs, diagnostic_keys, created_at, updated_at "
+            "FROM breadcrumbs WHERE project_id = %s AND identifier = %s",
             (project_id, identifier),
         )
         row = cur.fetchone()

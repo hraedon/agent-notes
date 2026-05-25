@@ -69,7 +69,8 @@ def add_link(
     from agent_notes.core.change_log import write_change
 
     with _conn() as conn:
-        conn.cursor().execute(
+        cur = conn.cursor()
+        cur.execute(
             """
             INSERT INTO links
                 (from_kind, from_workspace, from_project, from_identifier,
@@ -89,19 +90,20 @@ def add_link(
                 relationship,
             ),
         )
-        write_change(
-            conn,
-            kind=from_kind,
-            workspace_id=from_workspace,
-            project_id=from_project,
-            identifier=from_identifier,
-            event="link_added",
-            payload={
-                "to_kind": to_kind,
-                "to_identifier": to_identifier,
-                "relationship": relationship,
-            },
-        )
+        if cur.rowcount > 0:
+            write_change(
+                conn,
+                kind=from_kind,
+                workspace_id=from_workspace,
+                project_id=from_project,
+                identifier=from_identifier,
+                event="link_added",
+                payload={
+                    "to_kind": to_kind,
+                    "to_identifier": to_identifier,
+                    "relationship": relationship,
+                },
+            )
         conn.commit()
 
 
@@ -155,7 +157,7 @@ def remove_link(
                     "relationship": relationship,
                 },
             )
-        conn.commit()
+            conn.commit()
         return deleted
 
 

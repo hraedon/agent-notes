@@ -355,6 +355,8 @@ class BreadcrumbServer(Server):
 
         if "body" in fields or "title" in fields:
             old = BreadcrumbModel.get_breadcrumb(proj.id, identifier)
+            if old is None:
+                return f"Error: breadcrumb '{identifier}' not found"
             text = (
                 fields.get("title", old.get("title", ""))
                 + " "

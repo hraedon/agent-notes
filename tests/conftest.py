@@ -46,7 +46,6 @@ def ephemeral_db():
         old = os.environ.get("AGENT_NOTES_DSN")
         os.environ["AGENT_NOTES_DSN"] = dsn
         coredb._pool = None
-        coredb._DSN = dsn
         yield dsn
         if old is None:
             del os.environ["AGENT_NOTES_DSN"]

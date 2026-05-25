@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from typing import Any
 
@@ -459,8 +460,8 @@ class Server:
             _send(_err(req_id, -32601, f"Unknown tool: {name}"))
         except KeyError as exc:
             _send(_err(req_id, -32601, f"Tool argument missing: {exc}"))
-        except Exception as exc:
-            _send(_ok(req_id, f"Error: {exc}"))
+        except Exception:
+            _send(_err(req_id, -32603, "Internal error"))
 
     def _handle_resources_list(self, req_id: Any) -> None:
         resources: list[dict] = []
@@ -505,8 +506,6 @@ class Server:
             if not raw_line:
                 continue
             try:
-                import json
-
                 req = json.loads(raw_line)
             except Exception:
                 continue

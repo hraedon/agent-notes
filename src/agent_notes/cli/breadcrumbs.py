@@ -26,6 +26,8 @@ def cmd_bc_file(args: argparse.Namespace) -> int:
     from agent_notes.core.embed import embed
 
     vec = embed(args.title + " " + (args.body or ""), task="document").tolist()
+    external_refs = json.loads(args.external_refs) if args.external_refs else None
+    diagnostic_keys = json.loads(args.diagnostic_keys) if args.diagnostic_keys else None
     try:
         bc = BreadcrumbModel.file_breadcrumb(
             project_id=proj_id,
@@ -35,8 +37,8 @@ def cmd_bc_file(args: argparse.Namespace) -> int:
             kind=args.type,
             status=args.status,
             severity=args.severity or "medium",
-            external_refs=args.external_refs,
-            diagnostic_keys=args.diagnostic_keys,
+            external_refs=external_refs,
+            diagnostic_keys=diagnostic_keys,
             embedding=vec,
         )
     except ValueError as exc:
@@ -97,6 +99,12 @@ def cmd_bc_update(args: argparse.Namespace) -> int:
 
     if "body" in fields or "title" in fields:
         old = BreadcrumbModel.get_breadcrumb(proj_id, args.identifier)
+        if old is None:
+            if use_json:
+                print(json.dumps({"error": "not found"}, indent=2))
+            else:
+                print(f"Breadcrumb '{args.identifier}' not found.")
+            return EXIT_NOT_FOUND
         text = (
             fields.get("title", old.get("title", ""))
             + " "

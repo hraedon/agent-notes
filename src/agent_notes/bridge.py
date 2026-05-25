@@ -150,8 +150,12 @@ def run(
     target = target or os.environ.get("AGENT_NOTES_BRIDGE_TARGET")
     secret = secret or os.environ.get("AGENT_NOTES_BRIDGE_SECRET")
     source = source or os.environ.get("AGENT_NOTES_BRIDGE_SOURCE", DEFAULT_SOURCE)
-    batch_ms = batch_ms or int(os.environ.get("AGENT_NOTES_BRIDGE_BATCH_MS", DEFAULT_BATCH_MS))
-    batch_n = batch_n or int(os.environ.get("AGENT_NOTES_BRIDGE_BATCH_N", DEFAULT_BATCH_N))
+    batch_ms = batch_ms if batch_ms is not None else int(
+        os.environ.get("AGENT_NOTES_BRIDGE_BATCH_MS", DEFAULT_BATCH_MS)
+    )
+    batch_n = batch_n if batch_n is not None else int(
+        os.environ.get("AGENT_NOTES_BRIDGE_BATCH_N", DEFAULT_BATCH_N)
+    )
 
     if not target or not secret:
         raise RuntimeError("AGENT_NOTES_BRIDGE_TARGET and AGENT_NOTES_BRIDGE_SECRET required")

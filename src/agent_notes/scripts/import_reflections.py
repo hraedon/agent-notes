@@ -73,7 +73,6 @@ def run_import(
     old_dsn = os.environ.get("AGENT_NOTES_DSN")
     os.environ["AGENT_NOTES_DSN"] = new_dsn
     coredb._pool = None
-    coredb._DSN = new_dsn
 
     try:
         print("Scanning reflection directories...")
@@ -118,50 +117,51 @@ def run_import(
 
             imported = 0
             imported_names = []
-            for filepath, fm, body, name in to_import:
-                imported_names.append(name)
-                vec = embed(body, task="document") if body.strip() else None
+            try:
+                for filepath, fm, body, name in to_import:
+                    imported_names.append(name)
+                    vec = embed(body, task="document") if body.strip() else None
 
-                attributes = {
-                    "model": fm.get("model", "unknown"),
-                    "source_file": str(filepath),
-                    "original_datetime": str(fm.get("datetime", "")),
-                }
+                    attributes = {
+                        "model": fm.get("model", "unknown"),
+                        "source_file": str(filepath),
+                        "original_datetime": str(fm.get("datetime", "")),
+                    }
 
-                cur.execute(
-                    """
-                    INSERT INTO memories
-                        (workspace_id, project_id, name, memory_type, body,
-                         embedding, active, attributes)
-                    VALUES (%s, %s, %s, 'reflection', %s, %s, true, %s)
-                    ON CONFLICT DO NOTHING
-                    """,
-                    (
-                        ws.id,
-                        proj.id,
-                        name,
-                        body,
-                        vec.tolist() if vec is not None else None,
-                        psycopg.types.json.Jsonb(attributes),
-                    ),
-                )
-                imported += 1
-                if imported % 10 == 0:
-                    print(f"  {imported}/{len(to_import)} processed...")
+                    cur.execute(
+                        """
+                        INSERT INTO memories
+                            (workspace_id, project_id, name, memory_type, body,
+                             embedding, active, attributes)
+                        VALUES (%s, %s, %s, 'reflection', %s, %s, true, %s)
+                        ON CONFLICT DO NOTHING
+                        """,
+                        (
+                            ws.id,
+                            proj.id,
+                            name,
+                            body,
+                            vec.tolist() if vec is not None else None,
+                            psycopg.types.json.Jsonb(attributes),
+                        ),
+                    )
+                    imported += 1
+                    if imported % 10 == 0:
+                        print(f"  {imported}/{len(to_import)} processed...")
 
-            cur.execute("ALTER TABLE change_log ENABLE TRIGGER change_log_notify")
-
-            if imported_names:
-                cur.execute(
-                    """
-                    INSERT INTO change_log
-                        (kind, workspace_id, project_id, identifier, event, payload)
-                    SELECT 'memory', %s, %s, name, 'filed',
-                           jsonb_build_object('source', 'reflection_import')
-                    FROM UNNEST(%s) AS t(name)
-                    """,
-                    (ws.id, proj.id, imported_names),
-                )
+                if imported_names:
+                    cur.execute(
+                        """
+                        INSERT INTO change_log
+                            (kind, workspace_id, project_id, identifier, event, payload)
+                        SELECT 'memory', %s, %s, name, 'filed',
+                               jsonb_build_object('source', 'reflection_import')
+                        FROM UNNEST(%s) AS t(name)
+                        """,
+                        (ws.id, proj.id, imported_names),
+                    )
+            finally:
+                cur.execute("ALTER TABLE change_log ENABLE TRIGGER change_log_notify")
 
             conn.commit()
 
@@ -174,7 +174,6 @@ def run_import(
         else:
             os.environ["AGENT_NOTES_DSN"] = old_dsn
         coredb._pool = None
-        coredb._DSN = old_dsn or ""
 
 
 def main() -> None:

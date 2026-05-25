@@ -41,7 +41,9 @@ def listen(
 
     conn = psycopg.connect(effective_dsn, autocommit=True)
     try:
-        conn.execute(f"LISTEN {channel}")
+        from psycopg import sql
+
+        conn.execute(sql.SQL("LISTEN {}").format(sql.Identifier(channel)))
 
         def _gen() -> Generator[dict, None, None]:
             for notify in conn.notifies(timeout=poll_timeout):

@@ -61,7 +61,6 @@ def run_import(legacy_dsn: str, new_dsn: str) -> None:
     old_dsn = os.environ.get("AGENT_NOTES_DSN")
     os.environ["AGENT_NOTES_DSN"] = new_dsn
     coredb._pool = None
-    coredb._DSN = new_dsn
 
     try:
         print("Reading legacy memories...")
@@ -98,52 +97,53 @@ def run_import(legacy_dsn: str, new_dsn: str) -> None:
 
             cur.execute("ALTER TABLE change_log DISABLE TRIGGER change_log_notify")
 
-            for row in legacy_rows:
-                proj_slug = row.get("project") or "global"
-                proj_id = project_map[proj_slug]
-                body = row.get("body", "")
-                name = row["name"]
-                memory_type = row.get("memory_type", "note")
-                supersedes = row.get("supersedes")
+            try:
+                for row in legacy_rows:
+                    proj_slug = row.get("project") or "global"
+                    proj_id = project_map[proj_slug]
+                    body = row.get("body", "")
+                    name = row["name"]
+                    memory_type = row.get("memory_type", "note")
+                    supersedes = row.get("supersedes")
 
-                vec = embed(body, task="document") if body.strip() else None
+                    vec = embed(body, task="document") if body.strip() else None
+
+                    cur.execute(
+                        """
+                        INSERT INTO memories
+                            (workspace_id, project_id, name, memory_type, body,
+                             embedding, active, supersedes, attributes,
+                             created_at, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, true, %s, %s, %s, %s)
+                        RETURNING id
+                        """,
+                        (
+                            ws.id,
+                            proj_id,
+                            name,
+                            memory_type,
+                            body,
+                            vec.tolist() if vec is not None else None,
+                            id_map.get(supersedes) if supersedes else None,
+                            psycopg.types.json.Jsonb({}),
+                            row.get("created_at"),
+                            row.get("updated_at"),
+                        ),
+                    )
+                    new_id = cur.fetchone()["id"]
+                    id_map[row["id"]] = new_id
 
                 cur.execute(
                     """
-                    INSERT INTO memories
-                        (workspace_id, project_id, name, memory_type, body,
-                         embedding, active, supersedes, attributes,
-                         created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, true, %s, %s, %s, %s)
-                    RETURNING id
+                    INSERT INTO change_log (kind, workspace_id, project_id, identifier, event, payload)
+                    SELECT 'memory', %s, project_id, name, 'filed',
+                           jsonb_build_object('id', id, 'source', 'legacy_import')
+                    FROM memories WHERE workspace_id = %s
                     """,
-                    (
-                        ws.id,
-                        proj_id,
-                        name,
-                        memory_type,
-                        body,
-                        vec.tolist() if vec is not None else None,
-                        id_map.get(supersedes) if supersedes else None,
-                        psycopg.types.json.Jsonb({}),
-                        row.get("created_at"),
-                        row.get("updated_at"),
-                    ),
+                    (ws.id, ws.id),
                 )
-                new_id = cur.fetchone()["id"]
-                id_map[row["id"]] = new_id
-
-            cur.execute("ALTER TABLE change_log ENABLE TRIGGER change_log_notify")
-
-            cur.execute(
-                """
-                INSERT INTO change_log (kind, workspace_id, project_id, identifier, event, payload)
-                SELECT 'memory', %s, project_id, name, 'filed',
-                       jsonb_build_object('id', id, 'source', 'legacy_import')
-                FROM memories WHERE workspace_id = %s
-                """,
-                (ws.id, ws.id),
-            )
+            finally:
+                cur.execute("ALTER TABLE change_log ENABLE TRIGGER change_log_notify")
 
             conn.commit()
 
@@ -156,7 +156,6 @@ def run_import(legacy_dsn: str, new_dsn: str) -> None:
         else:
             os.environ["AGENT_NOTES_DSN"] = old_dsn
         coredb._pool = None
-        coredb._DSN = old_dsn or ""
 
 
 def main() -> None:

@@ -20,7 +20,6 @@ import pytest
 from agent_notes import bridge
 from agent_notes.core import db as coredb
 from agent_notes.core.breadcrumbs_model import BreadcrumbModel
-
 from tests.conftest import ephemeral_db  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures("ephemeral_db")

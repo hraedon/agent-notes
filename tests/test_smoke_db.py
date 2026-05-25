@@ -33,9 +33,7 @@ def pg():
         _apply_schema(dsn)
         old = os.environ.get("AGENT_NOTES_DSN")
         os.environ["AGENT_NOTES_DSN"] = dsn
-        # Reset the module-level singleton so it picks up the new DSN.
         coredb._pool = None
-        coredb._DSN = dsn
         yield dsn
         # Teardown
         if old is None:

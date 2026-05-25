@@ -265,11 +265,13 @@ def main() -> None:
 
     with _get_new_conn() as conn:
         _disable_notify(conn)
-        _insert_breadcrumbs_copy(conn, rows, proj_id)
-        conn.commit()
-        _batch_change_log(rows, ws_id, proj_id)
-        _enable_notify(conn)
-        conn.commit()
+        try:
+            _insert_breadcrumbs_copy(conn, rows, proj_id)
+            conn.commit()
+            _batch_change_log(rows, ws_id, proj_id)
+        finally:
+            _enable_notify(conn)
+            conn.commit()
     print("Rows copied and change_log batch-inserted.")
 
     _reembed(proj_id)

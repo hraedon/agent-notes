@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -15,24 +16,28 @@ from psycopg_pool import ConnectionPool
 # Connection pool (decision 22: sync pool, min_size=2, max_size=5)
 # ---------------------------------------------------------------------------
 
-_DSN = os.environ.get("AGENT_NOTES_DSN", "")
 _pool: ConnectionPool | None = None
+_pool_lock = threading.Lock()
 
 
 def _get_pool() -> ConnectionPool:
     global _pool
     if _pool is None:
-        if not _DSN:
-            raise RuntimeError(
-                "AGENT_NOTES_DSN environment variable is not set. Example: postgresql://user:pass@localhost/agent_notes"
-            )
-        _pool = ConnectionPool(
-            _DSN,
-            min_size=2,
-            max_size=5,
-            open=True,
-            kwargs={"row_factory": dict_row},
-        )
+        with _pool_lock:
+            if _pool is None:
+                dsn = os.environ.get("AGENT_NOTES_DSN", "")
+                if not dsn:
+                    raise RuntimeError(
+                        "AGENT_NOTES_DSN environment variable is not set. "
+                        "Example: postgresql://user:pass@localhost/agent_notes"
+                    )
+                _pool = ConnectionPool(
+                    dsn,
+                    min_size=2,
+                    max_size=5,
+                    open=True,
+                    kwargs={"row_factory": dict_row},
+                )
     return _pool
 
 
@@ -168,8 +173,6 @@ def resolve_project(path: str) -> dict:
     Returns dict: {"workspace": <slug>, "project": <slug>, "repo_root": <str>}
     Raises ValueError with a structured PROJECT_NOT_REGISTERED error if no match.
     """
-    import os
-
     abs_path = os.path.abspath(path)
     with _conn() as conn:
         cur = conn.cursor()
@@ -184,7 +187,7 @@ def resolve_project(path: str) -> dict:
         )
         for row in cur.fetchall():
             rr = row["repo_root"]
-            if rr and abs_path.startswith(rr):
+            if rr and (abs_path == rr or abs_path.startswith(rr + os.sep)):
                 return {
                     "workspace": row["workspace"],
                     "project": row["project"],
@@ -294,7 +297,7 @@ def delete_vocabulary(workspace_id: int, kind_namespace: str, name: str) -> None
     Phase 2a: reference checks for bc_kind/bc_status/bc_severity are active.
     Any row found → raise ValueError("vocabulary entry still referenced in <table>").
     """
-    # Stub reference check — always passes in Phase 1a (no kind tables).
+    # Reference check — validates usage in breadcrumbs and memories before deletion.
     _check_vocab_references(workspace_id, kind_namespace, name)
     with _conn() as conn:
         cur = conn.cursor()
