@@ -1,5 +1,5 @@
 [project]
-name = "agent-notes-mcp"
+name = "agent-notes"
 version = "0.1.0"
 description = "Unified pgvector-backed MCP server for agent notes (breadcrumbs, memories, reflections) shared across the sf2 constellation"
 requires-python = ">=3.11"

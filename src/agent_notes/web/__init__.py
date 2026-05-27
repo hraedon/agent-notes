@@ -1,4 +1,4 @@
-"""Web frontend for agent-notes-mcp (Plan 003, Phase 8a).
+"""Web frontend for agent-notes (Plan 003, Phase 8a).
 
 Read-only viewer. FastAPI + Jinja2, localhost-only (decision 43).
 """

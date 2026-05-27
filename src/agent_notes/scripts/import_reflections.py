@@ -178,7 +178,7 @@ def run_import(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Import historical reflection markdown files into agent-notes-mcp"
+        description="Import historical reflection markdown files into agent-notes"
     )
     parser.add_argument(
         "directories",

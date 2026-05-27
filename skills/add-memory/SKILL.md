@@ -16,7 +16,7 @@ Examples of good memories:
   cause Phase-3.6 regressions."
 - "User works in a regulated environment; AI agent tools blocked
   upstream due to audit/provenance gaps."
-- "Project pivot: agent-notes-mcp moves from MCP to CLI+skills in
+- "Project pivot: agent-notes moves from MCP to CLI+skills in
   Plan 004; MCP servers stay until skill-only sessions are proven."
 
 Examples of bad memories (file these elsewhere):
@@ -105,4 +105,4 @@ naming and dedup rules in more detail.
 
 If `agent-notes` exits non-zero or its JSON shape doesn't match what
 this skill expects, the CLI contract has drifted — file a breadcrumb
-under project agent-notes-mcp.
+under project agent-notes.

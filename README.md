@@ -1,17 +1,17 @@
-# agent-notes-mcp
+# agent-notes
 
-Unified pgvector-backed MCP server for agent notes — breadcrumbs (issue tracker), memories (cross-session facts), and reflections (session retrospectives) — shared across Claude Code, OpenCode, and Gemini CLI for the sf2 agent constellation.
+Pgvector-backed memory layer for agent harnesses: breadcrumbs (issue tracker), memories (cross-session facts), and reflections (session retrospectives) — shared across Claude Code, opencode, and any harness that can shell to a CLI.
 
-Consolidates and supersedes the standalone `breadcrumb-mcp` and `memory-mcp` projects. See `plans/001-architecture-and-implementation.md` for the architecture, design decisions, peer-review history, and phased implementation roadmap.
+Consolidates and supersedes the standalone `breadcrumb-mcp` and `memory-mcp` projects. Originally built as an MCP omnibus server; Plan 004 stripped MCP in favor of a CLI + skills + NOTIFY-bridge shape. See `plans/004-flatten-cli-and-async-bridge.md` for the rationale and `plans/001-architecture-and-implementation.md` for the original architecture / peer-review history.
 
 ## Status
 
-Phases 0–7a complete. Phase 8a (web frontend, projection removal) complete. **Phase 9a (CLI flattening) in progress** — the CLI is the new primary surface; MCP servers are deprecated.
+CLI flattening (Plan 004 Phase 9a) complete and shipping. Skills (Phase 9b) installed across Claude Code and opencode. NOTIFY→agent-wake bridge (Phase 9c) implemented; live integration gated on agent-wake v0 tag. MCP servers removed (Phase 9d).
 
 ## Quickstart
 
 ```bash
-cd /projects/agent-notes-mcp
+cd /projects/agent-notes
 uv venv && uv pip install -e ".[test]"
 
 # Configure

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Conventions and quick reference for agents (and humans) working on agent-notes-mcp.
+Conventions and quick reference for agents (and humans) working on agent-notes.
 
 ## Orient
 

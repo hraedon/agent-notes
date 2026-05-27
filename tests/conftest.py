@@ -1,4 +1,4 @@
-"""Shared test fixtures for agent-notes-mcp integration tests.
+"""Shared test fixtures for agent-notes integration tests.
 
 Convention (from AGENTS.md / Phase 1b.6):
 - Triggers, recursive CTEs, and change_log semantics MUST run against real

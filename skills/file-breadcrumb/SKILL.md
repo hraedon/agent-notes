@@ -99,4 +99,4 @@ don't upgrade trivia to look thorough.
 
 If `agent-notes` exits non-zero or its JSON shape doesn't match what
 this skill expects, the CLI contract has drifted — file a breadcrumb
-under project agent-notes-mcp.
+under project agent-notes.

@@ -1,4 +1,4 @@
-"""Health-check script for agent-notes-mcp installations (Phase 6.3).
+"""Health-check script for agent-notes installations (Phase 6.3).
 
 Checks:
 1. DSN reachable

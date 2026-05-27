@@ -86,7 +86,7 @@ those are the explicit handoff points from the prior session.
 Aim for ~10 lines, not a full dossier. Sample:
 
 ```
-## Session start — agent-notes-mcp
+## Session start — agent-notes
 
 **Open breadcrumbs (3):**
 - BC-CLI-007 (bug / high) — workspace/project arg swap in get_memory
@@ -109,4 +109,4 @@ to do; you're just laying out the state.
 
 If `agent-notes` exits non-zero or its JSON shape doesn't match what
 this skill expects, the CLI contract has drifted — file a breadcrumb
-under project agent-notes-mcp.
+under project agent-notes.

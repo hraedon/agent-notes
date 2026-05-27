@@ -105,10 +105,10 @@ Note: if you previously used the MCP `add_memory` tool, that path is being retir
 
 ### 5. Report
 
-Reply with one line: the path of the file you wrote, followed by confirmation of DB ingest (e.g. "reflection-2026-05-25: ingested into project agent-notes-mcp" or "reflection-2026-05-25: written to disk only (agent-notes CLI not available)").
+Reply with one line: the path of the file you wrote, followed by confirmation of DB ingest (e.g. "reflection-2026-05-25: ingested into project agent-notes" or "reflection-2026-05-25: written to disk only (agent-notes CLI not available)").
 
 ---
 
 If `agent-notes` exits non-zero or its JSON shape doesn't match what
 this skill expects, the CLI contract has drifted — file a breadcrumb
-under project agent-notes-mcp.
+under project agent-notes.

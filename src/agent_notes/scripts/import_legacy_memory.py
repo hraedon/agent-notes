@@ -1,4 +1,4 @@
-"""Import legacy memory-mcp data into the new agent-notes-mcp schema (Phase 3.5).
+"""Import legacy memory-mcp data into the new agent-notes schema (Phase 3.5).
 
 Usage:
     AGENT_NOTES_DSN=postgresql://... python -m agent_notes.scripts.import_legacy_memory \
@@ -161,7 +161,7 @@ def run_import(legacy_dsn: str, new_dsn: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Import memories from legacy memory-mcp into agent-notes-mcp"
+        description="Import memories from legacy memory-mcp into agent-notes"
     )
     parser.add_argument(
         "--legacy-dsn",
