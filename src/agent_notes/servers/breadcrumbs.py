@@ -14,7 +14,6 @@ from __future__ import annotations
 from typing import Any
 
 from agent_notes.core.breadcrumbs_model import BreadcrumbModel
-from agent_notes.core.db import list_projects, list_workspaces
 from agent_notes.core.links import trace_graph as core_trace_graph
 from agent_notes.core.server import Server
 
@@ -31,18 +30,6 @@ class BreadcrumbServer(Server):
         super().__init__()
         self._register_breadcrumb_tools()
         self._register_resource_handlers()
-
-    def _resolve_workspace(self, slug: str):
-        ws = next((w for w in list_workspaces() if w.slug == slug), None)
-        if ws is None:
-            raise ValueError(f"workspace '{slug}' not found")
-        return ws
-
-    def _resolve_project(self, workspace_id: int, slug: str):
-        p = next((p for p in list_projects(workspace_id=workspace_id) if p.slug == slug), None)
-        if p is None:
-            raise ValueError(f"project '{slug}' not found")
-        return p
 
     # ------------------------------------------------------------------
     # Resource handlers (Phase 6.1)

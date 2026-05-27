@@ -191,9 +191,7 @@ def cmd_bc_find(args: argparse.Namespace) -> int:
                 return exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED  # type: ignore[arg-type]
     else:  # scope == "project" (default)
         try:
-            ws_id, proj_id, _ws_slug, _proj_slug = _resolve(
-                args.workspace, args.project, args.path
-            )
+            ws_id, proj_id, _ws_slug, _proj_slug = _resolve(args.workspace, args.project, args.path)
         except SystemExit as exc:
             return exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED  # type: ignore[arg-type]
 
@@ -248,6 +246,30 @@ def cmd_bc_query(args: argparse.Namespace) -> int:
         else:
             for r in rows:
                 print(f"- {r['identifier']} | {r['title']} | {r['kind']} | {r['status']}")
+    return EXIT_SUCCESS
+
+
+def cmd_bc_delete(args: argparse.Namespace) -> int:
+    use_json = getattr(args, "json", False)
+    try:
+        ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED  # type: ignore[arg-type]
+
+    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
+
+    deleted = BreadcrumbModel.delete_breadcrumb(proj_id, args.identifier)
+    if not deleted:
+        if use_json:
+            print(json.dumps({"error": "not found"}, indent=2))
+        else:
+            print(f"Breadcrumb '{args.identifier}' not found.")
+        return EXIT_NOT_FOUND
+
+    if use_json:
+        print(json.dumps({"deleted": args.identifier}, indent=2))
+    else:
+        print(f"Breadcrumb '{args.identifier}' deleted.")
     return EXIT_SUCCESS
 
 
@@ -310,6 +332,11 @@ def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
     bc_query.add_argument("--limit", type=int, default=50)
     _add_common(bc_query)
     bc_query.set_defaults(func=cmd_bc_query)
+
+    bc_delete = bc_sub.add_parser("delete", help="Delete a breadcrumb")
+    bc_delete.add_argument("identifier")
+    _add_common(bc_delete)
+    bc_delete.set_defaults(func=cmd_bc_delete)
 
     bc.set_defaults(func=lambda args: (_print_sub_help(bc), EXIT_SUCCESS)[1])
 

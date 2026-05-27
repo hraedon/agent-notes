@@ -20,6 +20,15 @@ _pool: ConnectionPool | None = None
 _pool_lock = threading.Lock()
 
 
+def _reset_pool() -> None:
+    """Reset the pool singleton. Called after fork to avoid sharing connections."""
+    global _pool
+    _pool = None
+
+
+os.register_at_fork(after_in_child=_reset_pool)
+
+
 def _get_pool() -> ConnectionPool:
     global _pool
     if _pool is None:

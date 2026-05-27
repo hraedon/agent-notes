@@ -1,31 +1,16 @@
-# opencode skill mirror — deferred
+# skills/opencode/ — placeholder directory
 
-Plan 004 §6 anticipates an opencode-specific tree mirroring `skills/`
-with opencode's frontmatter and invocation conventions. Per Plan 004
-**open question Q4**, opencode's skill loading format is not yet
-settled — building a parallel tree today risks codifying the wrong
-shape.
+This directory used to be reserved for an opencode-specific mirror of the
+skills tree. As of 2026-05-27 that approach was rejected in favor of a
+single source of truth: `agent-notes install-skills --target opencode`
+reads the same `skills/<name>/SKILL.md` files used by Claude Code, strips
+the `name:` line from YAML frontmatter (opencode derives name from
+filename), and writes to `~/.config/opencode/command/<name>.md`.
 
-**What we know:**
+See Plan 004 §9 Q4 and `src/agent_notes/cli/skills.py` for the
+implementation.
 
-- Claude Code skills live at `~/.claude/skills/<name>/SKILL.md` with
-  YAML frontmatter (`name`, `description`).
-- opencode has hooks (`session.prompt`) and tool-interception primitives,
-  but a per-skill convention analogous to Claude Code's `SKILL.md` is
-  not yet documented in the form this repo's `install-skills` command
-  could target programmatically.
-
-**What's deferred:**
-
-- Authoring opencode versions of `file-breadcrumb`, `update-breadcrumb`,
-  `find-breadcrumb`, `add-memory`, `start`, `reflect`, `end`.
-- Implementing `agent-notes install-skills --target opencode` (currently
-  exits with code 3 and a "not yet implemented" message).
-
-**Unblocker:** confirm opencode's skill format (directory layout,
-manifest, invocation surface). When that's known, mirror the
-`SKILL.md` prose into this tree with adapted frontmatter — the prose
-itself (the judgment) is intended to be ~identical across harnesses;
-only the wrapper changes.
-
-See `plans/004-flatten-cli-and-async-bridge.md` §9 question 4.
+This directory is intentionally retained (and skipped by skill discovery)
+so the rejection rationale lives next to where future readers will look.
+If a skill's prose must diverge across harnesses, add a sibling override
+file at `skills/<name>/SKILL.opencode.md` rather than a parallel tree.

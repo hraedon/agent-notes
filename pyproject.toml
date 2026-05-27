@@ -20,23 +20,14 @@ test = [
 ]
 
 [project.scripts]
-# One generic binary; per-kind names are thin shims that call serve(kinds=[...])
-# so harness configs (Claude/OpenCode/Gemini) stay ergonomic. Invoke
-# `agent-notes serve --kinds bc,memory` to mount multiple kinds in one process
-# (decision 12 — omnibus mode is the same code path).
 agent-notes             = "agent_notes.cli:main"
-agent-notes-breadcrumbs = "agent_notes.cli:main_breadcrumbs"
-agent-notes-memory      = "agent_notes.cli:main_memory"
-agent-notes-search      = "agent_notes.cli:main_search"
 agent-notes-setup       = "agent_notes.scripts.setup_db:main"
 agent-notes-migrate     = "agent_notes.scripts.migrate:main"
 agent-notes-import-reflections = "agent_notes.scripts.import_reflections:main"
 agent-notes-doctor      = "agent_notes.scripts.doctor:main"
-agent-notes-omnibus    = "agent_notes.cli:main_omnibus"
 agent-notes-bridge     = "agent_notes.bridge:main"
 agent-notes-web        = "agent_notes.web.app:main"
-# agent-notes-reflections added only if Phase 3.6 spike (decision 25) concludes
-# memories don't suffice for the reflection use case.
+
 
 [build-system]
 requires = ["hatchling"]

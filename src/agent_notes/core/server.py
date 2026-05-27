@@ -33,6 +33,28 @@ class Server:
         self._register_core_tools()
 
     # ------------------------------------------------------------------
+    # Shared helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_workspace(self, slug: str):
+        """Resolve a workspace slug to a Workspace object. Raises ValueError if not found."""
+        from agent_notes.core.db import list_workspaces
+
+        ws = next((w for w in list_workspaces() if w.slug == slug), None)
+        if ws is None:
+            raise ValueError(f"workspace '{slug}' not found")
+        return ws
+
+    def _resolve_project(self, workspace_id: int, slug: str):
+        """Resolve a project slug within a workspace. Raises ValueError if not found."""
+        from agent_notes.core.db import list_projects
+
+        p = next((p for p in list_projects(workspace_id=workspace_id) if p.slug == slug), None)
+        if p is None:
+            raise ValueError(f"project '{slug}' not found")
+        return p
+
+    # ------------------------------------------------------------------
     # Registration API
     # ------------------------------------------------------------------
 

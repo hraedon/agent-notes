@@ -160,6 +160,46 @@ def cmd_mem_delete(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
+def cmd_mem_update(args: argparse.Namespace) -> int:
+    use_json = getattr(args, "json", False)
+    try:
+        ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED  # type: ignore[arg-type]
+
+    from agent_notes.core.memory_model import update_memory
+
+    if args.body is None and args.attributes is None:
+        msg = "At least one of --body or --attributes is required"
+        if use_json:
+            print(json.dumps({"error": msg}, indent=2))
+        else:
+            print(f"Error: {msg}")
+        return EXIT_CONFLICT
+
+    attributes = json.loads(args.attributes) if args.attributes else None
+    try:
+        mem = update_memory(
+            workspace_id=ws_id,
+            project_id=proj_id,
+            name=args.name,
+            body=args.body,
+            attributes=attributes,
+        )
+    except ValueError as exc:
+        if use_json:
+            print(json.dumps({"error": str(exc)}, indent=2))
+        else:
+            print(f"Error: {exc}")
+        return EXIT_NOT_FOUND
+
+    if use_json:
+        print(json.dumps({"memory": mem}, indent=2, default=str))
+    else:
+        print(f"Memory '{mem['name']}' updated (id={mem['id']}).")
+    return EXIT_SUCCESS
+
+
 def register_memory_parsers(sub: argparse._SubParsersAction) -> None:
     mem = sub.add_parser("memory", help="Memory operations")
     mem_sub = mem.add_subparsers(dest="mem_cmd")
@@ -193,6 +233,13 @@ def register_memory_parsers(sub: argparse._SubParsersAction) -> None:
     mem_delete.add_argument("name")
     _add_common(mem_delete)
     mem_delete.set_defaults(func=cmd_mem_delete)
+
+    mem_update = mem_sub.add_parser("update", help="Update a memory in-place")
+    mem_update.add_argument("name")
+    mem_update.add_argument("--body", default=None, help="Replace body text")
+    mem_update.add_argument("--attributes", default=None, help="Merge attributes (JSON)")
+    _add_common(mem_update)
+    mem_update.set_defaults(func=cmd_mem_update)
 
     mem.set_defaults(func=lambda args: (_print_sub_help(mem), EXIT_SUCCESS)[1])
 

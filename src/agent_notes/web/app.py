@@ -212,39 +212,19 @@ def _search_all(query_vec: list[float], limit: int = 20) -> list[dict]:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             """
-            SELECT 'breadcrumb' AS kind, b.identifier, b.title,
-                   b.embedding <=> %s::vector AS distance,
+            SELECT kind, identifier, title,
+                   embedding <=> %s::vector AS distance,
                    p.slug AS project_slug, w.slug AS workspace_slug
-            FROM breadcrumbs b
-            JOIN projects p ON p.id = b.project_id
-            JOIN workspaces w ON w.id = p.workspace_id
-            WHERE b.embedding IS NOT NULL
-            ORDER BY b.embedding <=> %s::vector
+            FROM all_notes_search_v v
+            JOIN projects p ON p.id = v.project_id
+            JOIN workspaces w ON w.id = v.workspace_id
+            WHERE v.embedding IS NOT NULL
+            ORDER BY v.embedding <=> %s::vector
             LIMIT %s
             """,
             (query_vec, query_vec, limit),
         )
-        bc_rows = [dict(r) for r in cur.fetchall()]
-
-        cur.execute(
-            """
-            SELECT 'memory' AS kind, m.name AS identifier, m.name AS title,
-                   m.embedding <=> %s::vector AS distance,
-                   p.slug AS project_slug, w.slug AS workspace_slug
-            FROM memories m
-            JOIN projects p ON p.id = m.project_id
-            JOIN workspaces w ON w.id = p.workspace_id
-            WHERE m.embedding IS NOT NULL AND m.active = true
-            ORDER BY m.embedding <=> %s::vector
-            LIMIT %s
-            """,
-            (query_vec, query_vec, limit),
-        )
-        mem_rows = [dict(r) for r in cur.fetchall()]
-
-    combined = bc_rows + mem_rows
-    combined.sort(key=lambda r: r["distance"])
-    return combined[:limit]
+        return [dict(r) for r in cur.fetchall()]
 
 
 def create_app() -> FastAPI:

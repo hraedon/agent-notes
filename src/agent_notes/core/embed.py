@@ -23,6 +23,11 @@ if TYPE_CHECKING:
 
 _MODEL_NAME = os.environ.get("AGENT_NOTES_EMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5")
 _EMBED_DIM = int(os.environ.get("AGENT_NOTES_EMBED_DIM", "768"))
+_TRUST_REMOTE_CODE = os.environ.get("AGENT_NOTES_TRUST_REMOTE_CODE", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 _model: SentenceTransformer | None = None
 _lock = threading.Lock()
@@ -35,7 +40,7 @@ def _get_model() -> SentenceTransformer:
             if _model is None:
                 from sentence_transformers import SentenceTransformer
 
-                _model = SentenceTransformer(_MODEL_NAME, trust_remote_code=True)
+                _model = SentenceTransformer(_MODEL_NAME, trust_remote_code=_TRUST_REMOTE_CODE)
     return _model
 
 
@@ -45,9 +50,8 @@ def embed(text: str, task: str = "document") -> np.ndarray:
     task='document' prefixes with 'search_document:' (for stored notes).
     task='query'    prefixes with 'search_query:' (for search queries).
 
-    Validates the returned dimension against AGENT_NOTES_EMBED_DIM on first
-    encode and caches the result; mismatches raise RuntimeError to protect
-    the pgvector column from silent dimension drift.
+    Validates the returned dimension against AGENT_NOTES_EMBED_DIM on every
+    encode to protect the pgvector column from silent dimension drift.
     """
     prefix = "search_query" if task == "query" else "search_document"
     model = _get_model()

@@ -57,25 +57,6 @@ class MemoryServer(Server):
         self._register_memory_tools()
         self._register_resource_handlers()
 
-    def _resolve_workspace(self, slug: str):
-        from agent_notes.core.db import list_workspaces
-
-        ws = next((w for w in list_workspaces() if w.slug == slug), None)
-        if ws is None:
-            raise ValueError(f"workspace '{slug}' not found")
-        return ws
-
-    def _resolve_project(self, workspace_id: int, slug: str):
-        from agent_notes.core.db import list_projects
-
-        p = next(
-            (p for p in list_projects(workspace_id=workspace_id) if p.slug == slug),
-            None,
-        )
-        if p is None:
-            raise ValueError(f"project '{slug}' not found")
-        return p
-
     def _validate_memory_type(self, workspace_id: int, memory_type: str) -> None:
         from agent_notes.core.db import list_vocabulary
 

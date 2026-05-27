@@ -110,35 +110,63 @@ def add_memory(
             event="filed",
             payload={"memory_type": memory_type, "id": new_id},
         )
-        conn.commit()
 
-    # Auto-create [[name]] relates_to links (Phase 3.3). Best-effort.
-    _auto_create_wikilinks(workspace_id, project_id, name, body)
+        # Auto-create [[name]] relates_to links inside the same transaction
+        # so link + memory commit atomically (decision 20).
+        _auto_create_wikilinks(conn, workspace_id, project_id, name, body)
+
+        conn.commit()
 
     return dict(row)
 
 
 def _auto_create_wikilinks(
+    conn: psycopg.Connection,
     workspace_id: int,
     project_id: int,
     name: str,
     body: str,
 ) -> None:
-    from agent_notes.core.links import add_link
+    """Create relates_to links for [[wikilinks]] in body. Runs inside caller's transaction."""
+    from agent_notes.core.change_log import write_change
 
     for ref_name in set(parse_wikilinks(body)):
         try:
-            add_link(
-                from_kind=_KIND,
-                from_workspace=workspace_id,
-                from_project=project_id,
-                from_identifier=name,
-                to_kind=_KIND,
-                to_workspace=workspace_id,
-                to_project=project_id,
-                to_identifier=ref_name,
-                relationship="relates_to",
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO links
+                    (from_kind, from_workspace, from_project, from_identifier,
+                     to_kind,   to_workspace,   to_project,   to_identifier, relationship)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+                """,
+                (
+                    _KIND,
+                    workspace_id,
+                    project_id,
+                    name,
+                    _KIND,
+                    workspace_id,
+                    project_id,
+                    ref_name,
+                    "relates_to",
+                ),
             )
+            if cur.rowcount > 0:
+                write_change(
+                    conn,
+                    kind=_KIND,
+                    workspace_id=workspace_id,
+                    project_id=project_id,
+                    identifier=name,
+                    event="link_added",
+                    payload={
+                        "to_kind": _KIND,
+                        "to_identifier": ref_name,
+                        "relationship": "relates_to",
+                    },
+                )
         except (psycopg.Error, ValueError):
             _log.debug("wikilink auto-create skipped: %s -> %s", name, ref_name, exc_info=True)
 
@@ -294,6 +322,64 @@ def delete_memory(workspace_id: int, project_id: int, name: str) -> dict | None:
             identifier=name,
             event="deleted",
             payload={"id": row["id"]},
+        )
+        conn.commit()
+        return dict(row)
+
+
+def update_memory(
+    workspace_id: int,
+    project_id: int,
+    name: str,
+    body: str | None = None,
+    attributes: dict | None = None,
+) -> dict:
+    """Update an active memory in-place. Returns the updated row.
+
+    Raises ValueError if the memory is not found or not active.
+    """
+    with _conn() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            "SELECT id, body, attributes FROM memories "
+            "WHERE project_id = %s AND workspace_id = %s AND name = %s AND active = true",
+            (project_id, workspace_id, name),
+        )
+        existing = cur.fetchone()
+        if existing is None:
+            raise ValueError(f"Memory '{name}' not found (or deleted)")
+
+        sets = ["updated_at = now()"]
+        params: list[Any] = []
+        if body is not None:
+            sets.append("body = %s")
+            params.append(body)
+        if attributes is not None:
+            merged = dict(existing.get("attributes") or {})
+            merged.update(attributes)
+            sets.append("attributes = %s")
+            params.append(psycopg.types.json.Jsonb(merged))
+
+        params.extend([project_id, workspace_id, name])
+        cur.execute(
+            f"UPDATE memories SET {', '.join(sets)} "
+            "WHERE project_id = %s AND workspace_id = %s AND name = %s AND active = true "
+            "RETURNING id, workspace_id, project_id, name, memory_type, body, "
+            "active, supersedes, attributes, created_at, updated_at",
+            params,
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError(f"Memory '{name}' not found (or deleted)")
+
+        write_change(
+            conn,
+            kind=_KIND,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            identifier=name,
+            event="updated",
+            payload={"fields": [k for k in ("body", "attributes") if locals().get(k) is not None]},
         )
         conn.commit()
         return dict(row)

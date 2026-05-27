@@ -38,22 +38,29 @@ agent-notes resolve [--path PATH] [--json]
 agent-notes doctor [--json]
 
 agent-notes breadcrumb file --title T --body B [--type ...] [--status ...] [--path PATH] [--json]
-agent-notes breadcrumb update <id> [--status ...] [--body ...] [--json]
+agent-notes breadcrumb update <id> [--status ...] [--body ...] [--append-body ...] [--json]
 agent-notes breadcrumb get <id> [--json]
 agent-notes breadcrumb find [--status ...] [--type ...] [--text ...] [--path PATH] [--json]
 agent-notes breadcrumb query "<filter>" [--json]
+agent-notes breadcrumb delete <id> [--path PATH] [--json]
 
 agent-notes memory add --name N --body B [--type ...] [--path PATH] [--json]
 agent-notes memory get <name> [--json]
 agent-notes memory list [--path PATH] [--json]
 agent-notes memory search "<query>" [--path PATH] [--json]
+agent-notes memory update <name> [--body B] [--attributes JSON] [--path PATH] [--json]
 agent-notes memory delete <name>
+
+agent-notes export [--path PATH] [--workspace W] [--project P] > backup.json
+agent-notes import backup.json
 
 agent-notes link add --from <kind:id> --to <kind:id> --type <type>
 agent-notes link remove --from <kind:id> --to <kind:id> --type <type>
 agent-notes link trace <kind:id> [--all] [--depth N] [--json]
 
 agent-notes search all "<query>" [--path PATH] [--json]
+agent-notes search breadcrumb "<query>" [--path PATH] [--json]
+agent-notes search memory "<query>" [--path PATH] [--json]
 
 agent-notes vocabulary list [--kind ...] [--path PATH] [--json]
 agent-notes vocabulary archive <kind> <value>
@@ -81,19 +88,19 @@ CLI is dumb storage; the policy lives in the skill Markdown.
 | `reflect` | Write a session reflection (now via CLI, not MCP). |
 | `end` | Wrap-up: reconcile breadcrumbs, reflect, commit. |
 
-Install into Claude Code with:
+Install with:
 
 ```bash
-agent-notes install-skills --target claude
-# or to preview without writing:
-agent-notes install-skills --target claude --dry-run
+agent-notes install-skills --target claude       # → ~/.claude/skills/<name>/SKILL.md
+agent-notes install-skills --target opencode     # → ~/.config/opencode/command/<name>.md
+# Add --dry-run to preview without writing.
 ```
 
-This copies each `skills/<name>/SKILL.md` to
-`~/.claude/skills/<name>/SKILL.md`. Re-running is idempotent — a
-second invocation with no source changes reports `unchanged` for
-every skill. `--target opencode` is deferred (Plan 004 Q4); see
-`skills/opencode/README.md`.
+Both targets read the same `skills/<name>/SKILL.md` source. The
+opencode target strips the `name:` line from YAML frontmatter
+(opencode derives the name from the filename). Re-running is
+idempotent — a second invocation with no source changes reports
+`unchanged` for every skill.
 
 ### NOTIFY → agent-wake bridge (optional)
 
@@ -137,18 +144,12 @@ Browse breadcrumbs, memories, and run semantic search from a browser. No auth; l
 
 | Console script | Kind(s) | Status |
 |---|---|---|
-| `agent-notes` | Generic | CLI (new primary surface) |
-| `agent-notes-breadcrumbs` | breadcrumbs | **Deprecated** (Phase 9a+) |
-| `agent-notes-memory` | memory | **Deprecated** (Phase 9a+) |
-| `agent-notes-search` | search | **Deprecated** (Phase 9a+) |
-| `agent-notes-omnibus` | breadcrumbs + memory + search | **Deprecated** (Phase 9a+) |
+| `agent-notes` | All | CLI — primary sync surface |
 | `agent-notes-bridge` | — | NOTIFY → agent-wake forwarder (optional) |
 | `agent-notes-web` | — | Read-only browser viewer |
 | `agent-notes-setup` | — | Alias for `migrate --all` |
 | `agent-notes-migrate` | — | Schema migrations from `schema/*.sql` |
 | `agent-notes-doctor` | — | Health check: DSN, schema, model, links audit |
 | `agent-notes-import-reflections` | — | One-time reflection import |
-
-MCP entry points remain operational during Phase 9a–9c but are scheduled for removal in Phase 9d.
 
 See `AGENTS.md` for build/test/lint commands and contributor conventions.

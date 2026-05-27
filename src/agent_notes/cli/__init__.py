@@ -14,6 +14,7 @@ import os
 from agent_notes.cli.breadcrumbs import register_breadcrumb_parsers
 from agent_notes.cli.changes import register_changes_parsers
 from agent_notes.cli.common import EXIT_GENERIC, EXIT_NOT_CONFIGURED, EXIT_SUCCESS
+from agent_notes.cli.export import register_export_parsers
 from agent_notes.cli.links import register_link_parsers
 from agent_notes.cli.memory import register_memory_parsers
 from agent_notes.cli.search import register_search_parsers
@@ -107,6 +108,7 @@ def main() -> int:
     register_workspace_parsers(sub)
     register_changes_parsers(sub)
     register_skills_parser(sub)
+    register_export_parsers(sub)
 
     args = parser.parse_args()
 
@@ -125,19 +127,4 @@ def main() -> int:
     return EXIT_GENERIC
 
 
-from agent_notes.cli.serve import (  # noqa: E402
-    main_breadcrumbs,
-    main_memory,
-    main_omnibus,
-    main_search,
-    serve,
-)
-
-__all__ = [
-    "main",
-    "main_breadcrumbs",
-    "main_memory",
-    "main_omnibus",
-    "main_search",
-    "serve",
-]
+__all__ = ["main"]

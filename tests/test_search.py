@@ -422,11 +422,3 @@ class TestCLIWiring:
         assert "trace_graph_all" in tool_names
         assert "list_workspaces" in tool_names
         assert "add_link" in tool_names
-
-    def test_serve_function_imports_search(self) -> None:
-        from agent_notes.cli import serve
-
-        try:
-            serve(["search"])
-        except Exception:
-            pass

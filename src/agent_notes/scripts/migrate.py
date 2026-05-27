@@ -40,15 +40,55 @@ def _run_file(dsn: str, sql_path: Path) -> None:
     print("ok")
 
 
+def _is_applied(dsn: str, filename: str) -> bool:
+    """Check if a migration file was already applied."""
+    import psycopg
+
+    try:
+        with psycopg.connect(dsn) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT 1 FROM schema_migrations WHERE filename = %s",
+                (filename,),
+            )
+            return cur.fetchone() is not None
+    except psycopg.Error:
+        # Table doesn't exist yet (first run) — not applied.
+        return False
+
+
+def _record_applied(dsn: str, filename: str) -> None:
+    """Record that a migration file was applied."""
+    import psycopg
+
+    try:
+        with psycopg.connect(dsn) as conn:
+            conn.execute(
+                "INSERT INTO schema_migrations (filename) VALUES (%s) ON CONFLICT DO NOTHING",
+                (filename,),
+            )
+            conn.commit()
+    except psycopg.Error:
+        pass  # Best-effort; if the table doesn't exist yet, skip.
+
+
 def run_all(dsn: str, schema_dir: Path) -> None:
     sql_files = sorted(schema_dir.glob("*.sql"))
     if not sql_files:
         print(f"No .sql files found in {schema_dir}")
         return
     print(f"Applying {len(sql_files)} migration file(s) from {schema_dir}")
+    applied = 0
+    skipped = 0
     for f in sql_files:
+        if _is_applied(dsn, f.name):
+            print(f"  {f.name} ... already applied, skipping")
+            skipped += 1
+            continue
         _run_file(dsn, f)
-    print("Done.")
+        _record_applied(dsn, f.name)
+        applied += 1
+    print(f"Done. Applied {applied}, skipped {skipped}.")
 
 
 def main() -> None:

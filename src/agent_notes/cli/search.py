@@ -24,6 +24,7 @@ def cmd_search_all(args: argparse.Namespace) -> int:
     vec = embed(args.query, task="query").tolist()
     rows = search_all_notes(
         query_vec=vec,
+        kinds=getattr(args, "kinds", None),
         workspace_ids=[ws_id] if ws_id else None,
         project_ids=[proj_id] if proj_id else None,
         limit=min(args.limit or 20, 100),
@@ -51,6 +52,18 @@ def register_search_parsers(sub: argparse._SubParsersAction) -> None:
     srch_all.add_argument("--limit", type=int, default=20)
     _add_common(srch_all)
     srch_all.set_defaults(func=cmd_search_all)
+
+    srch_bc = srch_sub.add_parser("breadcrumb", help="Search breadcrumbs only")
+    srch_bc.add_argument("query")
+    srch_bc.add_argument("--limit", type=int, default=20)
+    _add_common(srch_bc)
+    srch_bc.set_defaults(func=cmd_search_all, kinds=["breadcrumb"])
+
+    srch_mem = srch_sub.add_parser("memory", help="Search memories only")
+    srch_mem.add_argument("query")
+    srch_mem.add_argument("--limit", type=int, default=20)
+    _add_common(srch_mem)
+    srch_mem.set_defaults(func=cmd_search_all, kinds=["memory"])
 
     srch.set_defaults(func=lambda args: (_print_sub_help(srch), EXIT_SUCCESS)[1])
 

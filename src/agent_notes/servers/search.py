@@ -22,25 +22,6 @@ class SearchServer(Server):
         self._register_search_tools()
 
     # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    def _resolve_workspace(self, slug: str):
-        ws = next((w for w in list_workspaces() if w.slug == slug), None)
-        if ws is None:
-            raise ValueError(f"workspace '{slug}' not found")
-        return ws
-
-    def _resolve_project(self, workspace_id: int, slug: str):
-        p = next(
-            (p for p in list_projects(workspace_id=workspace_id) if p.slug == slug),
-            None,
-        )
-        if p is None:
-            raise ValueError(f"project '{slug}' not found")
-        return p
-
-    # ------------------------------------------------------------------
     # Tool registration
     # ------------------------------------------------------------------
 

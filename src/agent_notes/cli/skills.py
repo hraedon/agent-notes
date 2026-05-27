@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -27,8 +28,9 @@ def _repo_skills_root(override: Path | None = None) -> Path:
 def _discover_skills(src_root: Path) -> list[Path]:
     """Return the SKILL.md path for each direct child directory of src_root.
 
-    Skips the `opencode/` subtree (per Plan 004 Q4 — not yet authored
-    in this repo) and any directory that lacks a SKILL.md.
+    Skips the `opencode/` subtree (legacy placeholder — opencode skills
+    are now produced from the same SKILL.md files, see _to_opencode_body)
+    and any directory that lacks a SKILL.md.
     """
     skills: list[Path] = []
     if not src_root.exists():
@@ -44,9 +46,30 @@ def _discover_skills(src_root: Path) -> list[Path]:
     return skills
 
 
-def _install_one(src: Path, dest: Path, dry_run: bool) -> str:
-    """Install a single skill; return one of: 'created', 'updated', 'unchanged'."""
-    src_content = src.read_text(encoding="utf-8")
+def _to_opencode_body(src_content: str) -> str:
+    """Strip the `name:` line from YAML frontmatter; opencode's command
+    format derives the name from the filename and rejects unknown keys.
+
+    Only touches the frontmatter block at the top of the file. If no
+    frontmatter is present, returns the content unchanged.
+    """
+    if not src_content.startswith("---\n"):
+        return src_content
+    end = src_content.find("\n---\n", 4)
+    if end == -1:
+        return src_content
+    front = src_content[4:end]
+    rest = src_content[end + 5 :]
+    new_front_lines = [
+        line for line in front.splitlines() if not re.match(r"^name:\s", line)
+    ]
+    if not new_front_lines:
+        return rest
+    return "---\n" + "\n".join(new_front_lines) + "\n---\n" + rest
+
+
+def _install_one(src_content: str, dest: Path, dry_run: bool) -> str:
+    """Install a single skill payload; return 'created', 'updated', or 'unchanged'."""
     if dest.exists():
         existing = dest.read_text(encoding="utf-8")
         if existing == src_content:
@@ -58,7 +81,7 @@ def _install_one(src: Path, dest: Path, dry_run: bool) -> str:
     if dry_run:
         return "created"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dest)
+    dest.write_text(src_content, encoding="utf-8")
     return "created"
 
 
@@ -67,19 +90,7 @@ def cmd_install_skills(args: argparse.Namespace) -> int:
     dry_run = bool(args.dry_run)
     use_json = bool(getattr(args, "json", False))
 
-    if target == "opencode":
-        msg = (
-            "install-skills --target opencode is not yet implemented. "
-            "opencode's skill format is open question Q4 in Plan 004; "
-            "see skills/opencode/README.md."
-        )
-        if use_json:
-            print(json.dumps({"error": msg, "code": EXIT_NOT_CONFIGURED}))
-        else:
-            print(msg, file=sys.stderr)
-        return EXIT_NOT_CONFIGURED
-
-    if target != "claude":
+    if target not in ("claude", "opencode"):
         print(f"Unknown target: {target!r}", file=sys.stderr)
         return EXIT_GENERIC
 
@@ -88,8 +99,10 @@ def cmd_install_skills(args: argparse.Namespace) -> int:
     )
     if getattr(args, "dest", None):
         dest_root = Path(args.dest)
-    else:
+    elif target == "claude":
         dest_root = Path.home() / ".claude" / "skills"
+    else:
+        dest_root = Path.home() / ".config" / "opencode" / "command"
 
     skills = _discover_skills(src_root)
     if not skills:
@@ -103,8 +116,14 @@ def cmd_install_skills(args: argparse.Namespace) -> int:
     results: list[dict] = []
     for src in skills:
         name = src.parent.name
-        dest = dest_root / name / "SKILL.md"
-        status = _install_one(src, dest, dry_run)
+        src_content = src.read_text(encoding="utf-8")
+        if target == "claude":
+            dest = dest_root / name / "SKILL.md"
+            payload = src_content
+        else:
+            dest = dest_root / f"{name}.md"
+            payload = _to_opencode_body(src_content)
+        status = _install_one(payload, dest, dry_run)
         results.append({"name": name, "src": str(src), "dest": str(dest), "status": status})
 
     if use_json:

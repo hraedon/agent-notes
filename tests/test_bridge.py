@@ -44,9 +44,7 @@ class _Receiver(BaseHTTPRequestHandler):
             payload = json.loads(body)
         except Exception:
             payload = None
-        type(self).received.append(
-            {"body": payload, "source": source, "signature_valid": valid}
-        )
+        _Receiver.received.append({"body": payload, "source": source, "signature_valid": valid})
         self.send_response(202)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -97,8 +95,15 @@ def test_post_with_retry_succeeds():
             url,
             SECRET,
             "agent-notes",
-            {"v": 0, "event_id": "x", "source": "agent-notes", "kind": "note-change",
-             "content": "x", "meta": {}, "wake": False},
+            {
+                "v": 0,
+                "event_id": "x",
+                "source": "agent-notes",
+                "kind": "note-change",
+                "content": "x",
+                "meta": {},
+                "wake": False,
+            },
             delays=(),
         )
         assert ok is True
@@ -115,8 +120,15 @@ def test_post_with_retry_eventually_drops():
         "http://127.0.0.1:1/",
         SECRET,
         "agent-notes",
-        {"v": 0, "event_id": "x", "source": "agent-notes", "kind": "note-change",
-         "content": "x", "meta": {}, "wake": False},
+        {
+            "v": 0,
+            "event_id": "x",
+            "source": "agent-notes",
+            "kind": "note-change",
+            "content": "x",
+            "meta": {},
+            "wake": False,
+        },
         delays=(0.0, 0.0),
         timeout=0.5,
     )
@@ -175,8 +187,10 @@ def test_bridge_end_to_end_delivers_post():
     assert rx["body"]["kind"] == "note-change"
     # The change_log NOTIFY payload carries the kind/identifier of the row.
     meta = rx["body"]["meta"]
-    assert meta.get("agent_notes_identifier") == "BC-BRIDGE-1" or \
-        "BC-BRIDGE-1" in rx["body"]["content"]
+    assert (
+        meta.get("agent_notes_identifier") == "BC-BRIDGE-1"
+        or "BC-BRIDGE-1" in rx["body"]["content"]
+    )
 
 
 def test_doctor_bridge_target_unset_passes():

@@ -370,11 +370,78 @@ def test_install_skills_claude_updates_changed_content():
         assert installed == "v2\n"
 
 
-def test_install_skills_opencode_deferred():
-    result = _run("install-skills", "--target", "opencode", "--json", check=False)
-    assert result.returncode == 3
-    data = json.loads(result.stdout)
-    assert "not yet implemented" in data["error"]
+def test_install_skills_opencode_strips_name_and_writes_flat():
+    """install-skills --target opencode writes <name>.md without the name: frontmatter line."""
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / "skills"
+        dest = Path(td) / "opencode-command"
+        skill_dir = src / "demo-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: demo-skill\ndescription: do a thing\n---\n# Body\n\ncontent\n"
+        )
+
+        result = _run(
+            "install-skills",
+            "--target",
+            "opencode",
+            "--source",
+            str(src),
+            "--dest",
+            str(dest),
+            "--json",
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        data = json.loads(result.stdout)
+        assert data["target"] == "opencode"
+        assert data["skills"][0]["name"] == "demo-skill"
+        assert data["skills"][0]["status"] == "created"
+        installed = (dest / "demo-skill.md").read_text()
+        assert installed == "---\ndescription: do a thing\n---\n# Body\n\ncontent\n"
+
+
+def test_install_skills_opencode_idempotent():
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / "skills"
+        dest = Path(td) / "opencode-command"
+        skill_dir = src / "demo-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: demo-skill\ndescription: x\n---\nbody\n"
+        )
+        common = [
+            "install-skills", "--target", "opencode",
+            "--source", str(src), "--dest", str(dest), "--json",
+        ]
+        first = _run(*common, check=False)
+        assert first.returncode == 0
+        second = _run(*common, check=False)
+        data2 = json.loads(second.stdout)
+        assert data2["skills"][0]["status"] == "unchanged"
+
+
+def test_install_skills_opencode_skips_opencode_subdir():
+    """The legacy skills/opencode/ placeholder must not be installed as a skill."""
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / "skills"
+        dest = Path(td) / "opencode-command"
+        skill_dir = src / "demo-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("---\nname: demo-skill\n---\nbody\n")
+        oc = src / "opencode"
+        oc.mkdir(parents=True)
+        (oc / "SKILL.md").write_text("---\nname: opencode\n---\nshould-be-skipped\n")
+
+        result = _run(
+            "install-skills", "--target", "opencode",
+            "--source", str(src), "--dest", str(dest), "--json",
+            check=False,
+        )
+        assert result.returncode == 0
+        data = json.loads(result.stdout)
+        names = {s["name"] for s in data["skills"]}
+        assert names == {"demo-skill"}
 
 
 def test_breadcrumb_update_append_body(default_project):
@@ -471,9 +538,17 @@ def test_breadcrumb_find_scopes(default_project):
 
     # project scope: only sees sf2's BC
     r = _run(
-        "breadcrumb", "find",
-        "--workspace", "default", "--project", "sf2",
-        "--scope", "project", "--status", "open", "--json",
+        "breadcrumb",
+        "find",
+        "--workspace",
+        "default",
+        "--project",
+        "sf2",
+        "--scope",
+        "project",
+        "--status",
+        "open",
+        "--json",
         check=False,
     )
     assert r.returncode == 0
@@ -483,9 +558,15 @@ def test_breadcrumb_find_scopes(default_project):
 
     # workspace scope: sees both
     r = _run(
-        "breadcrumb", "find",
-        "--workspace", "default",
-        "--scope", "workspace", "--status", "open", "--json",
+        "breadcrumb",
+        "find",
+        "--workspace",
+        "default",
+        "--scope",
+        "workspace",
+        "--status",
+        "open",
+        "--json",
         check=False,
     )
     assert r.returncode == 0, r.stderr
@@ -495,8 +576,13 @@ def test_breadcrumb_find_scopes(default_project):
 
     # global scope: sees both (no --workspace required)
     r = _run(
-        "breadcrumb", "find",
-        "--scope", "global", "--status", "open", "--json",
+        "breadcrumb",
+        "find",
+        "--scope",
+        "global",
+        "--status",
+        "open",
+        "--json",
         check=False,
     )
     assert r.returncode == 0, r.stderr

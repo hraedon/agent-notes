@@ -23,7 +23,7 @@ Tests for triggers, recursive CTEs, and `change_log` semantics must run against 
 
 ## Architecture in one paragraph
 
-One Postgres database (`agent_notes`), one Python package (`agent_notes`), one `Server` base class with composable kind registries. The **CLI (`agent-notes`) is the primary sync surface** (Plan 004 Phase 9a+); legacy per-kind MCP servers (`agent-notes-breadcrumbs`, `agent-notes-memory`, `agent-notes-search` / `agent-notes-omnibus`) are deprecated but operational during the transition. The shared `core/` library handles DB connection pooling, embedding, links, change_log, NOTIFY, and search. A read-only web frontend (`agent-notes-web`) provides browser-based browsing of breadcrumbs, memories, and semantic search.
+One Postgres database (`agent_notes`), one Python package (`agent_notes`), one `Server` base class with composable kind registries. The **CLI (`agent-notes`) is the primary sync surface** (Plan 004 Phase 9a+). The shared `core/` library handles DB connection pooling, embedding, links, change_log, NOTIFY, and search. A read-only web frontend (`agent-notes-web`) provides browser-based browsing of breadcrumbs, memories, and semantic search.
 
 ## Schema conventions
 
@@ -56,8 +56,9 @@ Agent-facing workflows ship as skills under `skills/`:
 `start`, `reflect`, `end`. Each is a Markdown SKILL.md that shells to
 `agent-notes <noun> <verb> --json` and carries the per-workflow
 judgment in prose. Install with `agent-notes install-skills --target
-claude` (idempotent). opencode target is deferred — see Plan 004
-question Q4 and `skills/opencode/README.md`.
+{claude,opencode}` (idempotent). Both targets share the same
+SKILL.md source; the opencode target rewrites frontmatter at install
+time. See Plan 004 §9 Q4 (resolved 2026-05-27).
 
 ## End of session
 
