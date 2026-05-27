@@ -1,6 +1,6 @@
 ---
 name: reflect
-description: Write a session reflection covering the agent's subjective view of the project, the work done, what work remains, and gaps that need attention. Saves to the project's reflections directory. Invoke when the user asks for a reflection, retrospective, or end-of-session writeup.
+description: Write a session reflection and record it as a reflection-type memory so the next session can find it. Invoke when the user asks for a reflection, retrospective, or end-of-session writeup; also invoked by /end as step 3.
 ---
 
 # /reflect — Write a Session Reflection

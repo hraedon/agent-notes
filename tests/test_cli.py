@@ -370,6 +370,31 @@ def test_install_skills_claude_updates_changed_content():
         assert installed == "v2\n"
 
 
+def test_vocabulary_add_creates_and_is_idempotent(default_project):
+    """vocabulary add inserts a new entry; running again upserts without error."""
+    result = _run(
+        "vocabulary", "add", "--workspace", "default", "memory_type", "reflection",
+        "--json", check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    assert data["vocabulary"]["kind_namespace"] == "memory_type"
+    assert data["vocabulary"]["name"] == "reflection"
+
+    # Idempotent: re-running upserts.
+    result2 = _run(
+        "vocabulary", "add", "--workspace", "default", "memory_type", "reflection",
+        "--json", check=False,
+    )
+    assert result2.returncode == 0
+
+    # And appears in list.
+    listed = _run("vocabulary", "list", "--workspace", "default", "--kind", "memory_type", "--json", check=False)
+    assert listed.returncode == 0
+    names = {v["name"] for v in json.loads(listed.stdout)["vocabulary"]}
+    assert "reflection" in names
+
+
 def test_install_skills_opencode_strips_name_and_writes_flat():
     """install-skills --target opencode writes <name>.md without the name: frontmatter line."""
     with tempfile.TemporaryDirectory() as td:

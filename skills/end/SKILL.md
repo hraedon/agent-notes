@@ -1,18 +1,17 @@
 ---
 name: end
-description: Wrap up a working session — update/close breadcrumbs the agent worked on, open new ones noticed during the session, run the reflect skill, then commit. Invoke when the user signals end of session ("/end", "wrap up", "we're done", "close this out").
+description: Wrap up a working session and leave a clean handoff before context resets. Invoke when the user says "/end", "wrap up", "we're done", "close this out", or when you yourself recognize the session is ending and want loose ends reconciled.
 ---
 
 # /end — Session Wrap-Up
 
-Close out a session cleanly in this order:
+A session ends well when the next agent (or future-you) can pick up without re-deriving what just happened. That means three things end up on disk before you stop:
 
-1. Reconcile breadcrumbs (close worked-on, open newly-noticed)
-2. Sync AGENTS.md known-issues section from breadcrumbs state
-3. Run the `reflect` skill
-4. Commit the changes
+- breadcrumbs that match the actual state of the world (closed if fixed, opened if newly noticed),
+- a reflection that captures the subjective read (what was hard, what you'd want a second pair of eyes on),
+- a commit that bundles all of the above.
 
-Do not skip steps. Do not reorder — the reflection should see the breadcrumb updates so it can reference them, and the commit should pick up everything including the reflection file.
+Steps 1–4 below are the discipline. The pressure to skip them comes from the same place every time: the user said "wrap this up so I can go," reflection feels like ceremony, and the diff is already green. Do them anyway. The reflection is what makes this skill worth running; if you cut it, you've reduced /end to `git commit`.
 
 ---
 
@@ -20,66 +19,41 @@ Do not skip steps. Do not reorder — the reflection should see the breadcrumb u
 
 ### 1a. Locate the breadcrumbs convention
 
-Look for a breadcrumbs directory at the repo root, in this order:
+Look for a breadcrumbs directory at the repo root, in this order: `breadcrumbs/`, `.breadcrumbs/`, `docs/breadcrumbs/`. Read its `README.md` if present — honor the schema (frontmatter fields, statuses, resolved-folder convention). Do not impose your own.
 
-1. `breadcrumbs/`
-2. `.breadcrumbs/`
-3. `docs/breadcrumbs/`
-
-Read the directory's `README.md` if present — it usually defines the schema (frontmatter fields, statuses, severity levels, resolved-folder convention). Honor whatever convention the project uses; do not impose your own.
-
-If no breadcrumbs directory exists, **skip this step entirely** — do not create one unprompted. Mention in the final summary that the project has no breadcrumbs convention.
+If no breadcrumbs directory exists *and* this repo isn't wired to the agent-notes CLI, skip step 1 entirely — do not create one unprompted. Note it in the final report.
 
 ### 1b. Close breadcrumbs worked on this session
 
-For each breadcrumb addressed during the session, use the
-`update-breadcrumb` skill (or call the CLI directly):
-
-```
-agent-notes breadcrumb update <identifier> \
-  --path <repo-path> \
-  --status <project-done-value> \
-  --body "<existing body + resolution note>" \
-  --json
-```
-
-Match the project's "done" value — `resolved`, `implemented`, or `closed` as the README/existing resolved entries show. If the project moves resolved items to a sub-folder on disk, leave that to the projection layer (Plan 003); the CLI/DB transition is the source of truth.
-
-Only close breadcrumbs you actually addressed. If you partially addressed one, leave it open and append a note describing what's still outstanding.
+For each breadcrumb you actually addressed during the session, use the `update-breadcrumb` skill (or invoke `agent-notes breadcrumb update` directly). Match the project's "done" value (`resolved`, `implemented`, `closed` — whatever existing resolved entries use). If you partially addressed one, leave it open and append a note describing what's outstanding.
 
 ### 1c. Open breadcrumbs for issues noticed
 
-For each defect, design question, or gap noticed during the session that wasn't fixed, use the `file-breadcrumb` skill. Be honest about severity — don't downgrade real issues to look tidier; don't upgrade trivia to look thorough.
+For each defect, design question, or gap noticed during the session that wasn't fixed, use the `file-breadcrumb` skill — which itself requires a dedup search first. Be honest about severity. The "I noticed it but it's not worth filing" instinct is wrong by default; if you noticed it enough to consider filing, file it.
 
 ---
 
 ## Step 2 — Sync AGENTS.md known-issues section
 
-If the project has an `AGENTS.md` with a "Known issues" line that summarizes open breadcrumb counts and key items, update it to match the reconciled state:
+If — *and only if* — the project's `AGENTS.md` already contains a "Known issues" section that summarizes open breadcrumbs, update it to match the reconciled state:
 
-1. List open breadcrumbs:
+1. List open breadcrumbs (and any other "open-ish" statuses the project uses: `new`, `proposed`, `in-progress`) via `agent-notes breadcrumb find --status <s> --json`.
+2. Recompute the severity breakdown and rewrite the summary line.
+3. Replace stale bullets.
 
-   ```
-   agent-notes breadcrumb find \
-     --path <repo-path> \
-     --status open --limit 50 --json
-   ```
-
-   (Repeat for any other "open-ish" statuses the project uses: `new`, `proposed`, `in-progress`.)
-
-2. Compute severity breakdown (critical/high/medium/low) from the returned JSON.
-3. Update the summary line: `**Known issues:** N open breadcrumbs (C critical, H high, M medium, L low) + R RFCs + D defect classes.`
-4. Replace the bullet list under it with the current open breadcrumbs plus any recently-resolved items worth flagging. Do not keep stale entries.
-
-If `AGENTS.md` has no known-issues section, skip this step.
+If `AGENTS.md` has no such section, skip this step. **Do not invent one** — fabricating a "Known issues" section is worse than not having one.
 
 ---
 
-## Step 3 — Run the reflect skill
+## Step 3 — Run the `reflect` skill
 
-Invoke the `reflect` skill. It will write a reflection file under the project's reflections directory covering: opinion of the project, the work done, what remains, and gaps.
+**Invoke the skill. Do not replicate it inline.**
 
-Do this *after* the breadcrumb reconciliation so the reflection can accurately describe breadcrumb state.
+The `reflect` skill writes the markdown file *and* ingests it into the agent-notes memory store as a `reflection`-type memory. If you write the file directly with Write or `cat > … <<EOF`, you skip the DB ingest — which means the reflection is invisible to `/start` next session, invisible to cross-kind search, and stops half of what reflections are for. The file-on-disk is the *artifact*; the memory-store row is the *index*. You need both.
+
+Invoke the skill via your harness's skill mechanism (Claude Code: the Skill tool with `skill: "reflect"`; opencode: `/reflect`). Do this *after* step 1 so the reflection can reference the breadcrumbs it just saw move.
+
+If the reflect skill is genuinely unavailable in your harness, fall back: write the file using the template in `~/.claude/skills/reflect/SKILL.md`, then run `agent-notes memory add --type reflection --name reflection-<date>-<model-slug> --body "$(cat <file>)"` explicitly. Note the fallback in the final report — don't hide it.
 
 ---
 
@@ -93,38 +67,48 @@ git diff --stat
 git log --oneline -5
 ```
 
-Review what's staged/unstaged. Watch for:
+Review what's staged/unstaged. Watch for: secrets, `.env`, generated artifacts, files unrelated to this session's work. Stage deliberately — prefer named paths over `git add -A` when there's any doubt. `git add -A` is acceptable only when the diff has been reviewed and nothing surprising is present (an untracked reflection or breadcrumb you just authored is *not* a surprise).
 
-- Secrets, credentials, `.env` files — never commit.
-- Generated artifacts, caches, build output — usually should not be committed.
-- Files unrelated to this session's work — investigate before including.
+Subject ≤ 72 chars, imperative mood, summarizing the session's outcome. Body: bullet the main changes; reference breadcrumb identifiers resolved or opened. Use a HEREDOC for the message. Never `--no-verify`. Do not push unless the user asked.
 
-Stage deliberately — prefer named paths over `git add -A` if there's any doubt. For routine sessions where the diff has been reviewed and nothing suspicious is present, `git add -A` is acceptable.
-
-Write a commit message:
-
-- Subject line ≤ 72 chars, imperative mood, summarizing the session's outcome (not a file list).
-- Body: bullet the main changes; reference breadcrumb numbers resolved or opened.
-- Never use `--no-verify`. If a hook fails, fix the underlying cause and create a *new* commit (do not amend).
-
-Use a HEREDOC for the message to preserve formatting. Do not push unless the user explicitly asked.
+If you intend to push, this skill is the wrong gate — `/push` runs documentation checks and the test suite. `/end` is local wrap-up only; it does not run tests.
 
 ---
 
 ## Final report
-
-After committing, output a compact summary:
 
 ```
 ## Session End — <date>
 
 **Breadcrumbs closed:** <list or "none">
 **Breadcrumbs opened:** <list or "none">
-**Reflection:** <path written by /reflect>
+**Reflection:** <path written by /reflect> (ingested: yes / fallback)
 **Commit:** <short hash> <subject>
 ```
 
-Do not propose further work. Do not ask questions. If a step couldn't be completed (e.g. no breadcrumbs convention, nothing to commit, pre-commit hook failure), state that fact in the summary instead of the missing line.
+State explicitly any step that couldn't be completed (no breadcrumbs convention, AGENTS.md had no Known-issues section, reflect skill unavailable, nothing to commit). Do not propose further work. Do not ask follow-up questions.
+
+---
+
+## Rationalizations to refuse
+
+| Excuse | Reality |
+|--------|---------|
+| "I'll write the reflection file inline — saves a tool call." | You skip the DB ingest. The reflection becomes invisible to `/start` next session. Half the point is gone. |
+| "I'll commit now and add the reflection in a follow-up." | The follow-up doesn't happen. The reflection rides in this commit or not at all. |
+| "Tests passed earlier in the session, so I don't need to run them." | /end doesn't gate on tests; that's `/push`. But don't claim a green tree as evidence — the diff has moved. |
+| "The breadcrumb dir is empty, so I don't need to dedup-search." | Search includes resolved/ and other workspaces. Empty active/ ≠ empty store. |
+| "The user just said 'wrap it up so I can go,' so I'll trim." | The user asked for a wrap-up, not a half-wrap-up. If genuine time pressure is on, surface it explicitly and ask which step to cut — don't silently cut the reflection. |
+| "Two minor issues aren't worth filing." | If they were salient enough to consider, file them. The cost of an unneeded breadcrumb is one row; the cost of a missed one is rediscovery next session. |
+| "I'll just `git add -A` and trust it." | Untracked files you didn't author get swept up. Look at `git status` first; stage named paths if anything surprising is there. |
+
+## Red flags — stop
+
+- About to use Write to create a reflection file directly, bypassing the reflect skill.
+- About to skip step 3 because "the user is in a hurry."
+- About to run `git add -A` without having read `git status` since the last edit.
+- About to invent an AGENTS.md "Known issues" section that wasn't there.
+- Wording like "I'll add it after" or "follow-up commit" — those don't happen.
 
 ---
 

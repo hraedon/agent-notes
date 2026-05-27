@@ -1,6 +1,6 @@
 ---
 name: start
-description: Orient at the beginning of a working session — surface open breadcrumbs, active memories, and the last reflection so the agent picks up with context. Invoke at the start of a session, when the user says "/start", "where were we", or after a long gap.
+description: Orient at the start of a working session so the agent picks up with project context instead of re-deriving it from scratch. Invoke at the start of a session, when the user says "/start", "where were we", or after a long gap.
 ---
 
 # /start — Session-Start Orientation

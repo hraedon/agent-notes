@@ -32,11 +32,24 @@ Do **not** file one when:
 
 ## Workflow
 
-1. **Search first.** Always. Use the `find-breadcrumb` skill (or
-   `agent-notes breadcrumb find --text "<keywords>" --json` and
-   `agent-notes search all "<keywords>" --json`) to look for existing
-   coverage. If a close match exists, update that one instead — use the
-   `update-breadcrumb` skill.
+1. **Search first. No exceptions.** Even when the active/ directory
+   looks empty, even when you're sure it's new, even when the user is
+   in a hurry. Duplicates are the single failure mode this store has,
+   and they're cheap to prevent and expensive to clean up. Run both
+   of these before going further:
+
+   ```
+   agent-notes breadcrumb find --path <repo-path> --scope workspace --text "<keywords>" --json
+   agent-notes search all "<query>" --path <repo-path> --json
+   ```
+
+   The first hits breadcrumbs across the whole workspace (not just
+   active/, not just this project's current view). The second catches
+   cases where the problem was recorded as a memory or reflection
+   rather than a breadcrumb. If a close match exists in either, use
+   the `update-breadcrumb` skill on the existing record instead. For
+   a richer search workflow (scopes, result interpretation), see the
+   `find-breadcrumb` skill.
 
 2. **Pick a type from the project's existing vocabulary.** Run
    `agent-notes vocabulary list --workspace <ws> --kind breadcrumb_type

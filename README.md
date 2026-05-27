@@ -63,6 +63,7 @@ agent-notes search breadcrumb "<query>" [--path PATH] [--json]
 agent-notes search memory "<query>" [--path PATH] [--json]
 
 agent-notes vocabulary list [--kind ...] [--path PATH] [--json]
+agent-notes vocabulary add --workspace <slug> <kind> <name> [--sort-order N] [--terminal] [--closed] [--json]
 agent-notes vocabulary archive <kind> <value>
 
 agent-notes changes since <timestamp-or-id> [--json]
