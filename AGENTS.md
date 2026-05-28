@@ -2,6 +2,8 @@
 
 Conventions and quick reference for agents (and humans) working on agent-notes.
 
+> **Upstream renamed 2026-05-27:** the coordination spine was previously `substrate`; it is now `regista` (Plan 005 consumer migration here, regista Plan 018 upstream). Older skill text, plans, and reflections that still say "substrate" are intentional historical record.
+
 ## Orient
 
 1. **Read first:** `plans/001-architecture-and-implementation.md` — authoritative architecture, design decisions (numbered, peer-reviewed), and phased task tables.
