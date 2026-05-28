@@ -17,7 +17,7 @@ make "search before file" cheap enough that you always do it.
   beats a 5-minute reconciliation later.
 - When the user asks "have I noted anything about X?"
 - At session start (the `/start` skill calls this implicitly).
-- Before opening a related work item or substrate spec — knowing the
+- Before opening a related work item or regista spec — knowing the
   existing context shapes the proposal.
 
 ## Two-pronged search

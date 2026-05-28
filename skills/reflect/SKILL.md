@@ -15,7 +15,7 @@ The point of a reflection is to leave a useful signal for the next agent (or the
 
 In order of preference, write to the first that exists:
 
-1. `.substrate/reflections/` (substrate convention)
+1. `.regista/reflections/` (regista convention)
 2. `.claude/reflections/`
 3. `reflections/` at repo root
 4. `docs/reflections/`
@@ -28,7 +28,7 @@ Ground the reflection in specifics, not vibes. Before writing, skim:
 
 - `git status` and `git diff --stat` to see what actually changed this session
 - `git log` for recent commits if work was committed
-- Any project worklog (e.g. `.substrate/worklog.md`, `WORKLOG.md`, `CHANGELOG.md`)
+- Any project worklog (e.g. `.regista/worklog.md`, `WORKLOG.md`, `CHANGELOG.md`)
 - Any breadcrumbs / TODO / issues directories that show known gaps
 
 If you can't ground a section in something concrete, say so in the section rather than padding it.

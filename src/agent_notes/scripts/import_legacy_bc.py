@@ -251,7 +251,7 @@ def _reembed(project_id: int) -> None:
 
 
 def main() -> None:
-    # Hard-coded defaults for the substrate migration.
+    # Hard-coded defaults for the regista migration.
     ws_slug = os.environ.get("IMPORT_WS", "default")
     proj_slug = os.environ.get("IMPORT_PROJECT", "sf2")
     ws_id = _resolve_workspace(ws_slug)

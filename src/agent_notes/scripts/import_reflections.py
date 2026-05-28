@@ -5,7 +5,7 @@ Usage:
         --workspace default \
         --project sf2 \
         /projects/software-factory-2/reflections/ \
-        /projects/substrate/reflections/ \
+        /projects/regista/reflections/ \
         /projects/software-factory/reflections/ \
         /projects/breadcrumb-mcp/reflections/ \
         /projects/memory-mcp/reflections/

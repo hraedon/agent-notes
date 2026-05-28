@@ -128,8 +128,8 @@ v0 wire schema is one-event-per-POST). On 3 failed delivery attempts
 `change_log` row remains the durable record.
 
 A sample systemd unit lives at `deploy/agent-notes-bridge.service`. The
-bridge does **not** publish to substrate (Plan 004 decision 56); subscribe
-to the wake target if a downstream substrate consumer needs the stream.
+bridge does **not** publish to regista (Plan 004 decision 56); subscribe
+to the wake target if a downstream regista consumer needs the stream.
 
 ### Web viewer (read-only)
 

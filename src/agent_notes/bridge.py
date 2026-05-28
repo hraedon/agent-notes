@@ -4,7 +4,7 @@ A separate, optional process: LISTEN on `agent_notes_changes`, buffer briefly,
 POST each event to the agent-wake HTTP ingest endpoint with HMAC signing.
 
 One DB connection (LISTEN-only), one HTTP client. The bridge does *not*
-publish to substrate (decision 56) and does *not* persist a high-water mark
+publish to regista (decision 56) and does *not* persist a high-water mark
 (open Q3 — change_log row is the durable record; replay is deferred).
 
 Wire format note: agent-wake's HTTP ingest accepts one event per POST
