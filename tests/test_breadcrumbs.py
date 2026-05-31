@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from agent_notes.core import db as coredb
+from agent_notes.core.bc_files import parse_breadcrumb_file, sync_breadcrumbs_from_dir
 from agent_notes.core.breadcrumbs_model import BreadcrumbModel
 
 # Import the fixture so pytest discovers it
@@ -263,3 +264,75 @@ def _setup_two_bcs(default_project):
         # Different vector to ensure a deterministic ordering.
         embedding=[float(i + 100) for i in range(768)],
     )
+
+
+# ---------------------------------------------------------------------------
+# files -> DB importer (Plan 007: retire md-as-source-of-truth)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_breadcrumb_file_skips_non_breadcrumb(tmp_path):
+    (tmp_path / "README.md").write_text("# Breadcrumbs\n\nIndex, not a breadcrumb.\n")
+    assert parse_breadcrumb_file(tmp_path / "README.md") is None
+    (tmp_path / "001-x.md").write_text(
+        '---\nnumber: "001"\ntitle: Foo\nkind: bug\n---\n\nBody.\n'
+    )
+    parsed = parse_breadcrumb_file(tmp_path / "001-x.md")
+    assert parsed["identifier"] == "001" and parsed["title"] == "Foo"
+
+
+def test_sync_imports_skips_and_is_idempotent(default_project, tmp_path):
+    (tmp_path / "001-foo.md").write_text(
+        '---\nnumber: "001"\ntitle: First\nkind: bug\nstatus: new\nseverity: high\n---\n\nBody one.\n'
+    )
+    (tmp_path / "README.md").write_text("# Breadcrumbs\n\nNot a breadcrumb.\n")
+    s = sync_breadcrumbs_from_dir(default_project.id, tmp_path, lambda t: _vec768())
+    assert s["imported"] == ["001"]
+    assert any("README.md" in x["file"] for x in s["skipped"])
+    assert not s["errors"] and not s["missing_vocab"]
+    assert BreadcrumbModel.get_breadcrumb(default_project.id, "001")["title"] == "First"
+
+    # Re-running upserts (no duplicate, title updated).
+    (tmp_path / "001-foo.md").write_text(
+        '---\nnumber: "001"\ntitle: First (edited)\nkind: bug\nstatus: new\nseverity: high\n---\n\nB.\n'
+    )
+    s2 = sync_breadcrumbs_from_dir(default_project.id, tmp_path, lambda t: _vec768())
+    assert s2["imported"] == ["001"]
+    assert BreadcrumbModel.get_breadcrumb(default_project.id, "001")["title"] == "First (edited)"
+
+
+def test_sync_missing_vocab_reported_then_created(default_project, tmp_path):
+    (tmp_path / "010-x.md").write_text(
+        '---\nnumber: "010"\ntitle: Design item\nkind: design\nstatus: proposed\nseverity: high\n---\n\nB.\n'
+    )
+    # 'design'/'proposed' are not seeded -> reported, not imported.
+    s = sync_breadcrumbs_from_dir(default_project.id, tmp_path, lambda t: _vec768())
+    assert "010" not in s["imported"]
+    assert "design" in s["missing_vocab"].get("bc_kind", [])
+    assert "proposed" in s["missing_vocab"].get("bc_status", [])
+    # With --create-missing-vocab the vocab is added and the file imports.
+    s2 = sync_breadcrumbs_from_dir(
+        default_project.id, tmp_path, lambda t: _vec768(), create_missing_vocab=True
+    )
+    assert s2["imported"] == ["010"]
+    assert not s2["missing_vocab"]
+    assert BreadcrumbModel.get_breadcrumb(default_project.id, "010")["kind"] == "design"
+
+
+def test_sync_prune_removes_absent(tmp_path):
+    # Isolated project so prune can't touch other tests' breadcrumbs.
+    ws = coredb.get_or_create_workspace("default", "Default Workspace")
+    proj = coredb.get_or_create_project(
+        ws.id, slug="prune-proj", name="prune-proj", repo_root="/projects/prune"
+    )
+    BreadcrumbModel.file_breadcrumb(
+        project_id=proj.id, identifier="OLD-1", title="stale", kind="bug",
+        status="new", severity="high", embedding=_vec768(),
+    )
+    (tmp_path / "002-keep.md").write_text(
+        '---\nnumber: "002"\ntitle: Keep\nkind: bug\nstatus: new\nseverity: high\n---\n\nB.\n'
+    )
+    s = sync_breadcrumbs_from_dir(proj.id, tmp_path, lambda t: _vec768(), prune=True)
+    assert "002" in s["imported"]
+    assert "OLD-1" in s["pruned"]
+    assert BreadcrumbModel.get_breadcrumb(proj.id, "OLD-1") is None

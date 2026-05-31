@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
+from pathlib import Path
 from typing import Any
 
 from agent_notes.cli.common import (
     EXIT_CONFLICT,
+    EXIT_GENERIC,
     EXIT_NOT_CONFIGURED,
     EXIT_NOT_FOUND,
     EXIT_SUCCESS,
@@ -288,6 +291,49 @@ def cmd_bc_delete(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
+def cmd_bc_sync(args: argparse.Namespace) -> int:
+    use_json = getattr(args, "json", False)
+    try:
+        ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
+
+    from agent_notes.core.bc_files import sync_breadcrumbs_from_dir
+    from agent_notes.core.embed import embed
+
+    directory = args.from_files or (Path(args.path) / "breadcrumbs" if args.path else None)
+    if not directory or not Path(directory).is_dir():
+        msg = f"breadcrumb directory not found: {directory!r} (pass --from-files)"
+        if use_json:
+            print(json.dumps({"error": msg}, indent=2))
+        else:
+            print(f"Error: {msg}", file=sys.stderr)
+        return EXIT_GENERIC
+
+    summary = sync_breadcrumbs_from_dir(
+        proj_id,
+        directory,
+        lambda text: embed(text, task="document").tolist(),
+        create_missing_vocab=args.create_missing_vocab,
+        prune=args.prune,
+    )
+    if use_json:
+        print(json.dumps(summary, indent=2, default=str))
+    else:
+        print(
+            f"Synced into {proj_slug}: {len(summary['imported'])} imported, "
+            f"{len(summary['skipped'])} skipped, {len(summary['errors'])} errors, "
+            f"{len(summary['pruned'])} pruned."
+        )
+        for ns, vals in summary["missing_vocab"].items():
+            print(f"  missing {ns}: {', '.join(vals)} (re-run with --create-missing-vocab)")
+        for err in summary["errors"]:
+            print(f"  error {err['identifier']}: {err['error']}")
+    return EXIT_CONFLICT if (summary["errors"] or summary["missing_vocab"]) else EXIT_SUCCESS
+
+
 def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
     bc = sub.add_parser("breadcrumb", help="Breadcrumb operations")
     bc_sub = bc.add_subparsers(dest="bc_cmd")
@@ -352,6 +398,29 @@ def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
     bc_delete.add_argument("identifier")
     _add_common(bc_delete)
     bc_delete.set_defaults(func=cmd_bc_delete)
+
+    bc_sync = bc_sub.add_parser(
+        "sync", help="Import breadcrumbs from on-disk markdown files into the DB"
+    )
+    bc_sync.add_argument(
+        "--from-files",
+        dest="from_files",
+        default=None,
+        help="Directory of breadcrumb .md files (defaults to <path>/breadcrumbs)",
+    )
+    bc_sync.add_argument(
+        "--create-missing-vocab",
+        dest="create_missing_vocab",
+        action="store_true",
+        help="Add kind/status/severity values found in files but absent from vocab",
+    )
+    bc_sync.add_argument(
+        "--prune",
+        action="store_true",
+        help="Delete DB breadcrumbs not present in files (hard delete, destructive)",
+    )
+    _add_common(bc_sync)
+    bc_sync.set_defaults(func=cmd_bc_sync)
 
     bc.set_defaults(func=lambda args: (_print_sub_help(bc), EXIT_SUCCESS)[1])
 
