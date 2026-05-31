@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import argparse
+import json
+
 import pytest
 
 from agent_notes.core import db as coredb
@@ -336,3 +339,30 @@ def test_sync_prune_removes_absent(tmp_path):
     assert "002" in s["imported"]
     assert "OLD-1" in s["pruned"]
     assert BreadcrumbModel.get_breadcrumb(proj.id, "OLD-1") is None
+
+
+# ---------------------------------------------------------------------------
+# orient — one-call session digest (Plan 007)
+# ---------------------------------------------------------------------------
+
+
+def test_orient_digest(default_project, capsys):
+    from agent_notes.cli.orient import cmd_orient
+
+    BreadcrumbModel.file_breadcrumb(
+        project_id=default_project.id, identifier="OR-1", title="Open item",
+        kind="bug", status="open", severity="high", embedding=_vec768(),
+    )
+    BreadcrumbModel.file_breadcrumb(
+        project_id=default_project.id, identifier="OR-2", title="Done item",
+        kind="bug", status="resolved", severity="low", embedding=_vec768(),
+    )
+    ns = argparse.Namespace(
+        path="/projects/sf2", workspace=None, project=None, json=True, days=30, limit=15
+    )
+    assert cmd_orient(ns) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["project"] == "sf2"
+    ids = {b["identifier"] for b in data["open_breadcrumbs"]}
+    assert "OR-1" in ids          # open surfaced
+    assert "OR-2" not in ids      # resolved (terminal) excluded
