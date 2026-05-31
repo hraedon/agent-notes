@@ -12,6 +12,7 @@ from agent_notes.cli.common import (
     _add_common,
     _bc_format,
     _resolve,
+    report_resolution_failure,
 )
 
 
@@ -188,12 +189,16 @@ def cmd_bc_find(args: argparse.Namespace) -> int:
                     args.workspace, args.project, args.path
                 )
             except SystemExit as exc:
-                return exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED  # type: ignore[arg-type]
+                code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+                report_resolution_failure(args, code)
+                return code
     else:  # scope == "project" (default)
         try:
             ws_id, proj_id, _ws_slug, _proj_slug = _resolve(args.workspace, args.project, args.path)
         except SystemExit as exc:
-            return exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED  # type: ignore[arg-type]
+            code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+            report_resolution_failure(args, code)
+            return code
 
     if args.text:
         vec = embed(args.text, task="query").tolist()
@@ -229,7 +234,9 @@ def cmd_bc_query(args: argparse.Namespace) -> int:
     try:
         ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
     except SystemExit as exc:
-        return exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED  # type: ignore[arg-type]
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
 
     from agent_notes.core.breadcrumbs_model import BreadcrumbModel
 

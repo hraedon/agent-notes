@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import shutil
 import sys
 from pathlib import Path
 
@@ -60,9 +59,7 @@ def _to_opencode_body(src_content: str) -> str:
         return src_content
     front = src_content[4:end]
     rest = src_content[end + 5 :]
-    new_front_lines = [
-        line for line in front.splitlines() if not re.match(r"^name:\s", line)
-    ]
+    new_front_lines = [line for line in front.splitlines() if not re.match(r"^name:\s", line)]
     if not new_front_lines:
         return rest
     return "---\n" + "\n".join(new_front_lines) + "\n---\n" + rest

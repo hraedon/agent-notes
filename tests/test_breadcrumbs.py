@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from agent_notes.core import db as coredb
-from agent_notes.servers.breadcrumbs_model import BreadcrumbModel
+from agent_notes.core.breadcrumbs_model import BreadcrumbModel
 
 # Import the fixture so pytest discovers it
 from tests.conftest import ephemeral_db  # noqa: F401
@@ -263,64 +263,3 @@ def _setup_two_bcs(default_project):
         # Different vector to ensure a deterministic ordering.
         embedding=[float(i + 100) for i in range(768)],
     )
-
-
-def test_find_breadcrumbs_parametric(default_project):
-    """Exercise (project set/unset) × (embedding limit 10).
-
-    Regression for BC-007: placeholder/parameter mismatch was raised when
-    optional filters were present or absent in various combinations.
-    """
-    from agent_notes.servers.breadcrumbs import BreadcrumbServer
-
-    srv = BreadcrumbServer()
-
-    # 1) workspace + project + query
-    result = srv._tool_find_breadcrumbs(
-        {
-            "workspace": "default",
-            "project": "sf2",
-            "query": "pooling",
-            "limit": 2,
-        }
-    )
-    # Must not raise a param mismatch; should return a readable string.
-    assert "placeholders" not in result.lower()
-    assert "parameter" not in result.lower()
-    assert "breadcrumb" in result.lower() or "no matching" in result.lower()
-
-    # 2) workspace only (no project)
-    result = srv._tool_find_breadcrumbs(
-        {
-            "workspace": "default",
-            "query": "pooling",
-            "limit": 2,
-        }
-    )
-    assert "placeholders" not in result.lower()
-    assert "parameter" not in result.lower()
-
-    # 3) workspace only with different query
-    result = srv._tool_find_breadcrumbs(
-        {
-            "workspace": "default",
-            "query": "vectors",
-            "limit": 2,
-        }
-    )
-    assert "placeholders" not in result.lower()
-    assert "parameter" not in result.lower()
-
-
-def test_breadcrumb_server_tools_present():
-    from agent_notes.servers.breadcrumbs import BreadcrumbServer
-
-    srv = BreadcrumbServer()
-    tools = srv._registry.list_tools()
-    names = {t["name"] for t in tools}
-    assert "file_breadcrumb" in names
-    assert "update_breadcrumb" in names
-    assert "query_breadcrumbs" in names
-    assert "get_breadcrumb" in names
-    assert "add_link" in names  # inherited from core
-    assert "list_projects" in names

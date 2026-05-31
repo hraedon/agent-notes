@@ -68,6 +68,19 @@ def test_resolve_not_configured():
         assert data["code"] == 3
 
 
+@pytest.mark.parametrize("subcmd", [["breadcrumb", "find"], ["breadcrumb", "query"], ["search", "all", "q"]])
+def test_read_command_unregistered_path_is_not_silent(subcmd):
+    """Regression: read commands must emit a structured error (not empty stdout)
+    when project resolution fails. Empty-stdout-as-success in --json mode is how
+    a caller misreads 'not configured' as 'no results' and files a duplicate."""
+    with tempfile.TemporaryDirectory() as td:
+        result = _run(*subcmd, "--path", td, "--json", check=False)
+        assert result.returncode == 3, result.stderr
+        data = json.loads(result.stdout)  # must be parseable JSON, not empty
+        assert data["code"] == 3
+        assert "PROJECT_NOT_REGISTERED" in data["error"]
+
+
 def test_breadcrumb_file(default_project):
     result = _run(
         "breadcrumb",
@@ -373,8 +386,14 @@ def test_install_skills_claude_updates_changed_content():
 def test_vocabulary_add_creates_and_is_idempotent(default_project):
     """vocabulary add inserts a new entry; running again upserts without error."""
     result = _run(
-        "vocabulary", "add", "--workspace", "default", "memory_type", "reflection",
-        "--json", check=False,
+        "vocabulary",
+        "add",
+        "--workspace",
+        "default",
+        "memory_type",
+        "reflection",
+        "--json",
+        check=False,
     )
     assert result.returncode == 0, result.stderr
     data = json.loads(result.stdout)
@@ -383,13 +402,28 @@ def test_vocabulary_add_creates_and_is_idempotent(default_project):
 
     # Idempotent: re-running upserts.
     result2 = _run(
-        "vocabulary", "add", "--workspace", "default", "memory_type", "reflection",
-        "--json", check=False,
+        "vocabulary",
+        "add",
+        "--workspace",
+        "default",
+        "memory_type",
+        "reflection",
+        "--json",
+        check=False,
     )
     assert result2.returncode == 0
 
     # And appears in list.
-    listed = _run("vocabulary", "list", "--workspace", "default", "--kind", "memory_type", "--json", check=False)
+    listed = _run(
+        "vocabulary",
+        "list",
+        "--workspace",
+        "default",
+        "--kind",
+        "memory_type",
+        "--json",
+        check=False,
+    )
     assert listed.returncode == 0
     names = {v["name"] for v in json.loads(listed.stdout)["vocabulary"]}
     assert "reflection" in names
@@ -432,12 +466,16 @@ def test_install_skills_opencode_idempotent():
         dest = Path(td) / "opencode-command"
         skill_dir = src / "demo-skill"
         skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text(
-            "---\nname: demo-skill\ndescription: x\n---\nbody\n"
-        )
+        (skill_dir / "SKILL.md").write_text("---\nname: demo-skill\ndescription: x\n---\nbody\n")
         common = [
-            "install-skills", "--target", "opencode",
-            "--source", str(src), "--dest", str(dest), "--json",
+            "install-skills",
+            "--target",
+            "opencode",
+            "--source",
+            str(src),
+            "--dest",
+            str(dest),
+            "--json",
         ]
         first = _run(*common, check=False)
         assert first.returncode == 0
@@ -459,8 +497,14 @@ def test_install_skills_opencode_skips_opencode_subdir():
         (oc / "SKILL.md").write_text("---\nname: opencode\n---\nshould-be-skipped\n")
 
         result = _run(
-            "install-skills", "--target", "opencode",
-            "--source", str(src), "--dest", str(dest), "--json",
+            "install-skills",
+            "--target",
+            "opencode",
+            "--source",
+            str(src),
+            "--dest",
+            str(dest),
+            "--json",
             check=False,
         )
         assert result.returncode == 0
@@ -639,3 +683,282 @@ def test_changes_since(default_project):
     assert result.returncode == 0, result.stderr
     data = json.loads(result.stdout)
     assert "changes" in data
+
+
+# ---------------------------------------------------------------------------
+# search all / breadcrumb / memory
+# ---------------------------------------------------------------------------
+
+
+def test_search_all(default_project):
+    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
+    from agent_notes.core.memory_model import add_memory
+
+    ws = coredb.get_or_create_workspace("default", "Default Workspace")
+
+    BreadcrumbModel.file_breadcrumb(
+        default_project.id,
+        identifier="BC-SEARCH-CLI-1",
+        title="PostgreSQL connection pooling",
+        kind="observation",
+        status="open",
+        embedding=[0.0] * 768,
+    )
+    add_memory(
+        workspace_id=ws.id,
+        project_id=default_project.id,
+        name="search-cli-mem-1",
+        memory_type="note",
+        body="A searchable memory.",
+        embedding=[0.0] * 768,
+    )
+
+    result = _run(
+        "search",
+        "all",
+        "connection pooling",
+        "--workspace",
+        "default",
+        "--project",
+        "sf2",
+        "--json",
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    assert "results" in data
+    identifiers = {r["identifier"] for r in data["results"]}
+    assert "BC-SEARCH-CLI-1" in identifiers
+
+
+def test_search_breadcrumb_only(default_project):
+    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
+    from agent_notes.core.memory_model import add_memory
+
+    ws = coredb.get_or_create_workspace("default", "Default Workspace")
+
+    BreadcrumbModel.file_breadcrumb(
+        default_project.id,
+        identifier="BC-SEARCH-ONLY",
+        title="Unique search term alpha",
+        kind="observation",
+        status="open",
+        embedding=[0.0] * 768,
+    )
+    add_memory(
+        workspace_id=ws.id,
+        project_id=default_project.id,
+        name="mem-search-only",
+        memory_type="note",
+        body="Unique search term alpha memory.",
+        embedding=[0.0] * 768,
+    )
+
+    result = _run(
+        "search",
+        "breadcrumb",
+        "unique search term alpha",
+        "--workspace",
+        "default",
+        "--project",
+        "sf2",
+        "--json",
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    for r in data["results"]:
+        assert r["kind"] == "breadcrumb"
+
+
+def test_search_memory_only(default_project):
+    from agent_notes.core.memory_model import add_memory
+
+    ws = coredb.get_or_create_workspace("default", "Default Workspace")
+    add_memory(
+        workspace_id=ws.id,
+        project_id=default_project.id,
+        name="mem-search-term",
+        memory_type="note",
+        body="Unique memory search term beta.",
+        embedding=[0.0] * 768,
+    )
+
+    result = _run(
+        "search",
+        "memory",
+        "unique memory search term beta",
+        "--workspace",
+        "default",
+        "--project",
+        "sf2",
+        "--json",
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    for r in data["results"]:
+        assert r["kind"] == "memory"
+
+
+# ---------------------------------------------------------------------------
+# export / import round-trip
+# ---------------------------------------------------------------------------
+
+
+def test_export_produces_valid_json(default_project):
+    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
+    from agent_notes.core.memory_model import add_memory
+
+    ws = coredb.get_or_create_workspace("default", "Default Workspace")
+
+    BreadcrumbModel.file_breadcrumb(
+        default_project.id,
+        identifier="BC-EXPORT-1",
+        title="Exportable BC",
+        body="Body text",
+        kind="observation",
+        status="open",
+        embedding=[0.0] * 768,
+    )
+    add_memory(
+        workspace_id=ws.id,
+        project_id=default_project.id,
+        name="export-mem-1",
+        memory_type="note",
+        body="Exportable memory.",
+        embedding=[0.0] * 768,
+    )
+
+    result = _run("export", "--path", "/projects/sf2", check=False)
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    assert "exported_at" in data
+    assert len(data["projects"]) >= 1
+
+    proj = data["projects"][0]
+    bc_ids = {b["identifier"] for b in proj["breadcrumbs"]}
+    mem_names = {m["name"] for m in proj["memories"]}
+    assert "BC-EXPORT-1" in bc_ids
+    assert "export-mem-1" in mem_names
+
+
+def test_import_round_trip(default_project):
+    """Export, delete the original, re-import, verify data survives."""
+    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
+    from agent_notes.core.memory_model import add_memory, delete_memory
+
+    ws = coredb.get_or_create_workspace("default", "Default Workspace")
+
+    BreadcrumbModel.file_breadcrumb(
+        default_project.id,
+        identifier="BC-RT-1",
+        title="Round trip BC",
+        body="Round trip body",
+        kind="observation",
+        status="open",
+        embedding=[0.0] * 768,
+    )
+    add_memory(
+        workspace_id=ws.id,
+        project_id=default_project.id,
+        name="rt-mem-1",
+        memory_type="note",
+        body="Round trip memory.",
+        embedding=[0.0] * 768,
+    )
+
+    # Export
+    export_result = _run("export", "--path", "/projects/sf2", check=False)
+    assert export_result.returncode == 0, export_result.stderr
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        f.write(export_result.stdout)
+        export_path = f.name
+
+    try:
+        # Soft-delete the originals so re-import creates new rows
+        BreadcrumbModel.update_breadcrumb(
+            project_id=default_project.id,
+            identifier="BC-RT-1",
+            status="resolved",
+        )
+        delete_memory(ws.id, default_project.id, "rt-mem-1")
+
+        # Re-import (same workspace/project slugs in the export file)
+        import_result = _run("import", export_path, check=False)
+        assert import_result.returncode == 0, import_result.stderr
+        assert "Imported" in import_result.stdout
+
+        # Verify the data landed (a new active row for the memory)
+        from agent_notes.core.memory_model import get_memory
+
+        mem = get_memory(ws.id, default_project.id, "rt-mem-1")
+        assert mem is not None
+        assert mem["body"] == "Round trip memory."
+    finally:
+        os.unlink(export_path)
+
+
+# ---------------------------------------------------------------------------
+# memory list / memory search
+# ---------------------------------------------------------------------------
+
+
+def test_memory_list(default_project):
+    from agent_notes.core.memory_model import add_memory
+
+    ws = coredb.get_or_create_workspace("default", "Default Workspace")
+    add_memory(
+        workspace_id=ws.id,
+        project_id=default_project.id,
+        name="list-test-mem",
+        memory_type="note",
+        body="Listable.",
+        embedding=[0.0] * 768,
+    )
+
+    result = _run(
+        "memory",
+        "list",
+        "--workspace",
+        "default",
+        "--project",
+        "sf2",
+        "--json",
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    names = {m["name"] for m in data["memories"]}
+    assert "list-test-mem" in names
+
+
+def test_memory_search(default_project):
+    from agent_notes.core.memory_model import add_memory
+
+    ws = coredb.get_or_create_workspace("default", "Default Workspace")
+    add_memory(
+        workspace_id=ws.id,
+        project_id=default_project.id,
+        name="search-cli-mem",
+        memory_type="note",
+        body="Searchable via CLI subprocess.",
+        embedding=[0.0] * 768,
+    )
+
+    result = _run(
+        "memory",
+        "search",
+        "searchable CLI subprocess",
+        "--workspace",
+        "default",
+        "--project",
+        "sf2",
+        "--json",
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    names = {m["name"] for m in data["memories"]}
+    assert "search-cli-mem" in names

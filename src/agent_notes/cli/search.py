@@ -8,6 +8,7 @@ from agent_notes.cli.common import (
     EXIT_SUCCESS,
     _add_common,
     _resolve,
+    report_resolution_failure,
 )
 
 
@@ -16,7 +17,9 @@ def cmd_search_all(args: argparse.Namespace) -> int:
     try:
         ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
     except SystemExit as exc:
-        return exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED  # type: ignore[arg-type]
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
 
     from agent_notes.core.embed import embed
     from agent_notes.core.search import search_all_notes

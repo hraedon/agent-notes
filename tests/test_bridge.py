@@ -237,3 +237,107 @@ def test_doctor_bridge_target_unreachable():
             del os.environ["AGENT_NOTES_BRIDGE_TARGET"]
         else:
             os.environ["AGENT_NOTES_BRIDGE_TARGET"] = old
+
+
+# ---------------------------------------------------------------------------
+# Integration test against real agent-wake ingest
+# ---------------------------------------------------------------------------
+
+
+def test_bridge_to_agent_wake_ingest():
+    """Bridge POSTs to a real agent-wake ingest app; event is delivered to mock router."""
+    from agent_waked.ingest import create_ingest_app
+
+    class _MockRouter:
+        def __init__(self):
+            self.delivered: list[dict] = []
+
+        async def deliver(self, event: dict) -> str:
+            self.delivered.append(event)
+            return "queued"
+
+    secret_bytes = SECRET.encode("utf-8")
+    config = {
+        "sources": {
+            "agent-notes": {"secret": secret_bytes, "callback_url": None},
+        },
+        "routing": {},
+    }
+    router = _MockRouter()
+    app = create_ingest_app(config, router)
+
+    # Run the aiohttp app in a background thread with its own event loop.
+    import asyncio
+    import threading
+
+    loop = asyncio.new_event_loop()
+    runner = None
+    site = None
+
+    async def _start_server():
+        nonlocal runner, site
+        from aiohttp import web_runner, web
+
+        runner = web_runner.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        return port
+
+    port_holder: list[int] = []
+
+    def _run_loop():
+        asyncio.set_event_loop(loop)
+        port = loop.run_until_complete(_start_server())
+        port_holder.append(port)
+        loop.run_forever()
+
+    thread = threading.Thread(target=_run_loop, daemon=True)
+    thread.start()
+
+    # Wait for server to be ready.
+    for _ in range(50):
+        if port_holder:
+            break
+        time.sleep(0.1)
+    assert port_holder, "aiohttp server did not start"
+
+    port = port_holder[0]
+    url = f"http://127.0.0.1:{port}/"
+
+    try:
+        ok = bridge._post_with_retry(
+            url,
+            SECRET,
+            "agent-notes",
+            {
+                "v": 0,
+                "event_id": "integration-test-001",
+                "source": "agent-notes",
+                "kind": "note-change",
+                "content": "breadcrumb BC-INT-1 filed",
+                "meta": {
+                    "agent_notes_kind": "breadcrumb",
+                    "agent_notes_event": "filed",
+                    "agent_notes_identifier": "BC-INT-1",
+                },
+                "wake": False,
+            },
+            delays=(),
+        )
+        assert ok is True
+        assert len(router.delivered) == 1
+        evt = router.delivered[0]
+        assert evt["v"] == 0
+        assert evt["source"] == "agent-notes"
+        assert evt["kind"] == "note-change"
+        assert evt["event_id"] == "integration-test-001"
+        assert evt["meta"]["agent_notes_identifier"] == "BC-INT-1"
+        assert evt["wake"] is False
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=5.0)
+        if runner:
+            loop.run_until_complete(runner.cleanup())
+        loop.close()

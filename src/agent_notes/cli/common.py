@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from typing import Any
 
 EXIT_SUCCESS = 0
@@ -36,13 +37,51 @@ def _resolve(
     if ws_slug and proj_slug:
         ws = next((w for w in list_workspaces() if w.slug == ws_slug), None)
         if ws is None:
+            available = [w.slug for w in list_workspaces()]
+            hint = f" Available: {', '.join(available)}" if available else ""
+            print(f"Workspace '{ws_slug}' not found.{hint}", file=sys.stderr)
             raise SystemExit(EXIT_NOT_FOUND)
         proj = next((p for p in list_projects(workspace_id=ws.id) if p.slug == proj_slug), None)
         if proj is None:
+            available = [p.slug for p in list_projects(workspace_id=ws.id)]
+            hint = f" Available in '{ws_slug}': {', '.join(available)}" if available else ""
+            print(f"Project '{proj_slug}' not found.{hint}", file=sys.stderr)
             raise SystemExit(EXIT_NOT_FOUND)
         return ws.id, proj.id, ws.slug, proj.slug
 
     raise SystemExit(EXIT_NOT_CONFIGURED)
+
+
+def report_resolution_failure(args: argparse.Namespace, code: int) -> None:
+    """Emit a structured, non-silent error when project/workspace resolution fails.
+
+    Read commands (find, query, search) catch the resolution ``SystemExit`` and
+    return a bare exit code. Without this reporter they print nothing — and in
+    ``--json`` mode a caller parsing stdout reads the empty output as "no
+    results found" rather than "lookup failed". That silent failure is exactly
+    how a duplicate breadcrumb gets filed against an unregistered project.
+    """
+    use_json = getattr(args, "json", False)
+    detail: str | None = None
+    path = getattr(args, "path", None)
+    if path:
+        from agent_notes.core.db import resolve_project
+
+        try:
+            resolve_project(path)
+        except ValueError as exc:
+            detail = str(exc)
+        except Exception:  # pragma: no cover - defensive: DB/transport issue
+            detail = None
+    if detail is None:
+        detail = (
+            "could not resolve a project/workspace. Pass --path to a registered "
+            "repo, or --workspace/--project, or use --scope global."
+        )
+    if use_json:
+        print(json.dumps({"error": detail, "code": code}, indent=2))
+    else:
+        print(f"Error: {detail}", file=sys.stderr)
 
 
 def _output(data: Any, use_json: bool) -> None:

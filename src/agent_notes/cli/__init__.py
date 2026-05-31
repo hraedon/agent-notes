@@ -72,10 +72,10 @@ def cmd_resolve(path: str | None, use_json: bool) -> int:
     return EXIT_SUCCESS
 
 
-def cmd_doctor(use_json: bool) -> int:
+def cmd_doctor(use_json: bool, skip_embed: bool = False) -> int:
     from agent_notes.scripts.doctor import run as doctor_run
 
-    code = doctor_run()
+    code = doctor_run(skip_embed=skip_embed)
     if code != 0 and use_json:
         print(json.dumps({"status": "unhealthy", "doctor_exit": code}))
     elif use_json:
@@ -99,6 +99,11 @@ def main() -> int:
 
     doctor_p = sub.add_parser("doctor", help="Health check")
     doctor_p.add_argument("--json", action="store_true")
+    doctor_p.add_argument(
+        "--skip-embed",
+        action="store_true",
+        help="Skip embedding model check (saves ~30s on first load)",
+    )
 
     register_breadcrumb_parsers(sub)
     register_memory_parsers(sub)
@@ -117,7 +122,7 @@ def main() -> int:
     if args.command == "resolve":
         return cmd_resolve(args.path, args.json)
     if args.command == "doctor":
-        return cmd_doctor(args.json)
+        return cmd_doctor(args.json, skip_embed=getattr(args, "skip_embed", False))
 
     func = getattr(args, "func", None)
     if func is not None:

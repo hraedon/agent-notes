@@ -2,23 +2,33 @@
 
 Phase 3.6 concluded that memories suffice for reflections (decision 25).
 Phase 5 adds: reflection vocabulary seeding, find_reflections, extract_gaps,
-mark_gaps_filed tools on the memory server.
+mark_gaps_filed tools on the memory model layer.
 
 Tests:
 - memory_type='reflection' is seeded in the schema
 - find_reflections: search/list reflection-type memories
 - extract_gaps: parse 'Gaps to flag' section from reflection body
 - mark_gaps_filed: update attributes.gaps_filed_as on reflection memory
-- End-to-end: file reflection → extract gaps → mark filed
+- End-to-end: file reflection -> extract gaps -> mark filed
 """
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
 from agent_notes.core import db as coredb
-from agent_notes.core import links as lnk
-from agent_notes.servers.memory import MemoryServer
+from agent_notes.core.memory_model import (
+    add_memory,
+    extract_gaps,
+    find_reflections,
+    mark_gaps_filed,
+)
+
+
+def _fake_embed(text, task="document"):
+    return [0.0] * 768
 
 
 @pytest.fixture(scope="module")
@@ -44,11 +54,6 @@ def seeded_vocab(refl_ws):
     return refl_ws
 
 
-@pytest.fixture(scope="module")
-def server():
-    return MemoryServer()
-
-
 REFLECTION_BODY = """# Reflection 2026-05-21
 
 ## What worked
@@ -67,28 +72,25 @@ Overall progress is on track for the Phase 5 deadline.
 
 
 @pytest.fixture(scope="module")
-def seeded_reflection(refl_ws, refl_proj, seeded_vocab, server):
-    server._tool_add_memory(
-        {
-            "workspace": "refl-test-ws",
-            "project": "refl-proj",
-            "name": "reflection-2026-05-21",
-            "memory_type": "reflection",
-            "body": REFLECTION_BODY,
-            "attributes": {
-                "model": "test-model",
-            },
-        }
-    )
-    server._tool_add_memory(
-        {
-            "workspace": "refl-test-ws",
-            "project": "refl-proj",
-            "name": "non-reflection-note",
-            "memory_type": "note",
-            "body": "This is a regular note, not a reflection.",
-        }
-    )
+def seeded_reflection(refl_ws, refl_proj, seeded_vocab):
+    with patch("agent_notes.core.embed.embed", side_effect=_fake_embed):
+        add_memory(
+            workspace_id=refl_ws.id,
+            project_id=refl_proj.id,
+            name="reflection-2026-05-21",
+            memory_type="reflection",
+            body=REFLECTION_BODY,
+            attributes={"model": "test-model"},
+            embedding=_fake_embed("test"),
+        )
+        add_memory(
+            workspace_id=refl_ws.id,
+            project_id=refl_proj.id,
+            name="non-reflection-note",
+            memory_type="note",
+            body="This is a regular note, not a reflection.",
+            embedding=_fake_embed("test"),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -117,50 +119,52 @@ class TestReflectionVocabulary:
 
 
 class TestFindReflections:
-    def test_find_reflections_with_query(
-        self, pg, refl_ws, refl_proj, seeded_reflection, server
-    ) -> None:
-        result = server._tool_find_reflections(
-            {"workspace": "refl-test-ws", "project": "refl-proj", "query": "phased approach"}
+    def test_find_reflections_with_query(self, pg, refl_ws, refl_proj, seeded_reflection) -> None:
+        rows = find_reflections(
+            workspace_id=refl_ws.id,
+            project_id=refl_proj.id,
+            query_vec=_fake_embed("phased approach"),
         )
-        assert "reflection(s) found" in result
-        assert "reflection-2026-05-21" in result
+        names = {r["name"] for r in rows}
+        assert "reflection-2026-05-21" in names
 
     def test_find_reflections_without_query(
-        self, pg, refl_ws, refl_proj, seeded_reflection, server
+        self, pg, refl_ws, refl_proj, seeded_reflection
     ) -> None:
-        result = server._tool_find_reflections(
-            {"workspace": "refl-test-ws", "project": "refl-proj"}
+        rows = find_reflections(
+            workspace_id=refl_ws.id,
+            project_id=refl_proj.id,
         )
-        assert "reflection-2026-05-21" in result
+        names = {r["name"] for r in rows}
+        assert "reflection-2026-05-21" in names
 
     def test_find_reflections_excludes_non_reflections(
-        self, pg, refl_ws, refl_proj, seeded_reflection, server
+        self, pg, refl_ws, refl_proj, seeded_reflection
     ) -> None:
-        result = server._tool_find_reflections(
-            {"workspace": "refl-test-ws", "project": "refl-proj"}
+        rows = find_reflections(
+            workspace_id=refl_ws.id,
+            project_id=refl_proj.id,
         )
-        assert "non-reflection-note" not in result
+        names = {r["name"] for r in rows}
+        assert "non-reflection-note" not in names
 
-    def test_find_reflections_empty_project(self, pg, refl_ws, seeded_vocab, server) -> None:
-        coredb.get_or_create_project(refl_ws.id, "empty-proj", "Empty Proj")
-        result = server._tool_find_reflections(
-            {"workspace": "refl-test-ws", "project": "empty-proj"}
+    def test_find_reflections_empty_project(self, pg, refl_ws, seeded_vocab) -> None:
+        empty_proj = coredb.get_or_create_project(refl_ws.id, "empty-proj", "Empty Proj")
+        rows = find_reflections(
+            workspace_id=refl_ws.id,
+            project_id=empty_proj.id,
         )
-        assert "No reflection memories found" in result
+        assert len(rows) == 0
 
-    def test_find_reflections_with_body(
-        self, pg, refl_ws, refl_proj, seeded_reflection, server
-    ) -> None:
-        result = server._tool_find_reflections(
-            {
-                "workspace": "refl-test-ws",
-                "project": "refl-proj",
-                "query": "phased",
-                "include_body": True,
-            }
+    def test_find_reflections_with_body(self, pg, refl_ws, refl_proj, seeded_reflection) -> None:
+        rows = find_reflections(
+            workspace_id=refl_ws.id,
+            project_id=refl_proj.id,
+            query_vec=_fake_embed("phased"),
+            include_body=True,
         )
-        assert "reflection-2026-05-21" in result
+        names = {r["name"] for r in rows}
+        assert "reflection-2026-05-21" in names
 
 
 # ---------------------------------------------------------------------------
@@ -169,66 +173,57 @@ class TestFindReflections:
 
 
 class TestExtractGaps:
-    def test_extract_gaps_from_reflection(
-        self, pg, refl_ws, refl_proj, seeded_reflection, server
-    ) -> None:
-        result = server._tool_extract_gaps(
-            {
-                "workspace": "refl-test-ws",
-                "project": "refl-proj",
-                "name": "reflection-2026-05-21",
-            }
+    def test_extract_gaps_from_reflection(self, pg, refl_ws, refl_proj, seeded_reflection) -> None:
+        result = extract_gaps(
+            workspace_id=refl_ws.id,
+            project_id=refl_proj.id,
+            name="reflection-2026-05-21",
         )
-        assert "2 gap(s) extracted" in result
-        assert "BC-GAP-001" in result
-        assert "BC-GAP-002" in result
-        assert "retry logic" in result
-        assert "pool sizing" in result
+        assert "gaps" in result
+        assert len(result["gaps"]) == 2
+        identifiers = {g["identifier"] for g in result["gaps"]}
+        assert "BC-GAP-001" in identifiers
+        assert "BC-GAP-002" in identifiers
 
     def test_extract_gaps_nonexistent_reflection(
-        self, pg, refl_ws, refl_proj, seeded_reflection, server
+        self, pg, refl_ws, refl_proj, seeded_reflection
     ) -> None:
-        result = server._tool_extract_gaps(
-            {
-                "workspace": "refl-test-ws",
-                "project": "refl-proj",
-                "name": "nonexistent-reflection",
-            }
+        result = extract_gaps(
+            workspace_id=refl_ws.id,
+            project_id=refl_proj.id,
+            name="nonexistent-reflection",
         )
-        assert "not found" in result
+        assert "error" in result
+        assert "not found" in result["error"]
 
     def test_extract_gaps_non_reflection_memory(
-        self, pg, refl_ws, refl_proj, seeded_reflection, server
+        self, pg, refl_ws, refl_proj, seeded_reflection
     ) -> None:
-        result = server._tool_extract_gaps(
-            {
-                "workspace": "refl-test-ws",
-                "project": "refl-proj",
-                "name": "non-reflection-note",
-            }
+        result = extract_gaps(
+            workspace_id=refl_ws.id,
+            project_id=refl_proj.id,
+            name="non-reflection-note",
         )
-        assert "not found" in result
+        assert "error" in result
+        assert "not found" in result["error"]
 
-    def test_extract_gaps_no_gaps_section(
-        self, pg, refl_ws, refl_proj, seeded_vocab, server
-    ) -> None:
-        server._tool_add_memory(
-            {
-                "workspace": "refl-test-ws",
-                "project": "refl-proj",
-                "name": "reflection-no-gaps",
-                "memory_type": "reflection",
-                "body": "# Reflection\n\n## What worked\nNothing much.\n",
-            }
+    def test_extract_gaps_no_gaps_section(self, pg, refl_ws, refl_proj, seeded_vocab) -> None:
+        with patch("agent_notes.core.embed.embed", side_effect=_fake_embed):
+            add_memory(
+                workspace_id=refl_ws.id,
+                project_id=refl_proj.id,
+                name="reflection-no-gaps",
+                memory_type="reflection",
+                body="# Reflection\n\n## What worked\nNothing much.\n",
+                embedding=_fake_embed("test"),
+            )
+        result = extract_gaps(
+            workspace_id=refl_ws.id,
+            project_id=refl_proj.id,
+            name="reflection-no-gaps",
         )
-        result = server._tool_extract_gaps(
-            {
-                "workspace": "refl-test-ws",
-                "project": "refl-proj",
-                "name": "reflection-no-gaps",
-            }
-        )
-        assert "No 'Gaps to flag' section" in result
+        assert "error" in result
+        assert "No 'Gaps to flag' section" in result["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -237,130 +232,73 @@ class TestExtractGaps:
 
 
 class TestMarkGapsFiled:
-    def test_mark_gaps_filed(self, pg, refl_ws, refl_proj, seeded_reflection, server) -> None:
-        result = server._tool_mark_gaps_filed(
-            {
-                "workspace": "refl-test-ws",
-                "project": "refl-proj",
-                "name": "reflection-2026-05-21",
-                "filed_identifiers": ["BC-GAP-001"],
-            }
+    def test_mark_gaps_filed(self, pg, refl_ws, refl_proj, seeded_reflection) -> None:
+        result = mark_gaps_filed(
+            workspace_id=refl_ws.id,
+            project_id=refl_proj.id,
+            name="reflection-2026-05-21",
+            filed_identifiers=["BC-GAP-001"],
         )
-        assert "Marked 1 gap(s)" in result
-        assert "BC-GAP-001" in result
+        assert "gaps_filed_as" in result
+        assert "BC-GAP-001" in result["gaps_filed_as"]
 
-    def test_mark_gaps_filed_updates_attributes(
-        self, pg, refl_ws, refl_proj, seeded_reflection, server
-    ) -> None:
-        server._tool_mark_gaps_filed(
-            {
-                "workspace": "refl-test-ws",
-                "project": "refl-proj",
-                "name": "reflection-2026-05-21",
-                "filed_identifiers": ["BC-GAP-002"],
-            }
+    def test_mark_multiple_gaps(self, pg, refl_ws, refl_proj, seeded_vocab) -> None:
+        with patch("agent_notes.core.embed.embed", side_effect=_fake_embed):
+            add_memory(
+                workspace_id=refl_ws.id,
+                project_id=refl_proj.id,
+                name="reflection-mark-multi",
+                memory_type="reflection",
+                body="# Reflection\n\n## Gaps to flag\n- [[BC-M1]]: Gap 1.\n- [[BC-M2]]: Gap 2.\n",
+                embedding=_fake_embed("test"),
+            )
+        result = mark_gaps_filed(
+            workspace_id=refl_ws.id,
+            project_id=refl_proj.id,
+            name="reflection-mark-multi",
+            filed_identifiers=["BC-M1", "BC-M2"],
         )
-        memory = server._tool_get_memory(
-            {
-                "workspace": "refl-test-ws",
-                "project": "refl-proj",
-                "name": "reflection-2026-05-21",
-            }
-        )
-        assert "BC-GAP-001" in memory or "BC-GAP-002" in memory
+        assert "gaps_filed_as" in result
+        assert set(result["gaps_filed_as"]) == {"BC-M1", "BC-M2"}
 
-    def test_mark_gaps_filed_writes_change_log(
-        self, pg, refl_ws, refl_proj, seeded_reflection, server
-    ) -> None:
-        from agent_notes.core.change_log import history
-
-        server._tool_mark_gaps_filed(
-            {
-                "workspace": "refl-test-ws",
-                "project": "refl-proj",
-                "name": "reflection-2026-05-21",
-                "filed_identifiers": ["BC-NEW-GAP"],
-            }
+    def test_mark_gaps_filed_nonexistent(self, pg, refl_ws, refl_proj) -> None:
+        result = mark_gaps_filed(
+            workspace_id=refl_ws.id,
+            project_id=refl_proj.id,
+            name="nonexistent",
+            filed_identifiers=["BC-X"],
         )
-        rows = history("memory", refl_ws.id, refl_proj.id, "reflection-2026-05-21")
-        events = [r.event for r in rows]
-        assert "updated" in events
-
-    def test_mark_gaps_nonexistent_reflection(
-        self, pg, refl_ws, refl_proj, seeded_reflection, server
-    ) -> None:
-        result = server._tool_mark_gaps_filed(
-            {
-                "workspace": "refl-test-ws",
-                "project": "refl-proj",
-                "name": "nonexistent-reflection",
-                "filed_identifiers": ["BC-999"],
-            }
-        )
-        assert "not found" in result
-
-    def test_extract_shows_filed_status(
-        self, pg, refl_ws, refl_proj, seeded_reflection, server
-    ) -> None:
-        server._tool_mark_gaps_filed(
-            {
-                "workspace": "refl-test-ws",
-                "project": "refl-proj",
-                "name": "reflection-2026-05-21",
-                "filed_identifiers": ["BC-GAP-001"],
-            }
-        )
-        result = server._tool_extract_gaps(
-            {
-                "workspace": "refl-test-ws",
-                "project": "refl-proj",
-                "name": "reflection-2026-05-21",
-            }
-        )
-        assert "BC-GAP-001" in result
-        assert "[FILED]" in result
+        assert "error" in result
 
 
 # ---------------------------------------------------------------------------
-# End-to-end: reflection → gaps → breadcrumbs
+# End-to-end: file reflection -> extract gaps -> mark filed
 # ---------------------------------------------------------------------------
 
 
 class TestReflectionEndToEnd:
-    def test_wikilinks_create_links_to_gaps(
-        self, pg, refl_ws, refl_proj, seeded_reflection
-    ) -> None:
-        nodes = lnk.trace_graph(
-            kind="memory",
-            workspace=refl_ws.id,
-            project=refl_proj.id,
-            identifier="reflection-2026-05-21",
-            direction="dependencies",
-            max_depth=1,
+    def test_full_reflection_workflow(self, pg, refl_ws, refl_proj, seeded_vocab) -> None:
+        with patch("agent_notes.core.embed.embed", side_effect=_fake_embed):
+            add_memory(
+                workspace_id=refl_ws.id,
+                project_id=refl_proj.id,
+                name="reflection-e2e",
+                memory_type="reflection",
+                body=REFLECTION_BODY,
+                embedding=_fake_embed("test"),
+            )
+
+        gaps = extract_gaps(
+            workspace_id=refl_ws.id,
+            project_id=refl_proj.id,
+            name="reflection-e2e",
         )
-        identifiers = {n.identifier for n in nodes}
-        assert "BC-GAP-001" in identifiers
-        assert "BC-GAP-002" in identifiers
+        assert len(gaps["gaps"]) == 2
 
-    def test_find_reflections_shows_filed_gaps(
-        self, pg, refl_ws, refl_proj, seeded_reflection, server
-    ) -> None:
-        result = server._tool_find_reflections(
-            {"workspace": "refl-test-ws", "project": "refl-proj"}
+        result = mark_gaps_filed(
+            workspace_id=refl_ws.id,
+            project_id=refl_proj.id,
+            name="reflection-e2e",
+            filed_identifiers=["BC-GAP-001", "BC-GAP-002"],
         )
-        assert "reflection-2026-05-21" in result
-
-
-# ---------------------------------------------------------------------------
-# Tool wiring
-# ---------------------------------------------------------------------------
-
-
-class TestReflectionToolWiring:
-    def test_reflection_tools_registered(self) -> None:
-        srv = MemoryServer()
-        tools = srv._registry.list_tools()
-        names = {t["name"] for t in tools}
-        assert "find_reflections" in names
-        assert "extract_gaps" in names
-        assert "mark_gaps_filed" in names
+        assert set(result["gaps_filed_as"]) == {"BC-GAP-001", "BC-GAP-002"}

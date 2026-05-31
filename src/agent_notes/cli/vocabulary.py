@@ -47,7 +47,9 @@ def cmd_vocab_add(args: argparse.Namespace) -> int:
     if use_json:
         print(json.dumps({"vocabulary": vocab.__dict__}, indent=2, default=str))
     else:
-        print(f"Added vocabulary entry: {vocab.kind_namespace}/{vocab.name} (sort={vocab.sort_order})")
+        print(
+            f"Added vocabulary entry: {vocab.kind_namespace}/{vocab.name} (sort={vocab.sort_order})"
+        )
     return EXIT_SUCCESS
 
 
@@ -78,7 +80,9 @@ def register_vocabulary_parsers(sub: argparse._SubParsersAction) -> None:
     vocab_add.add_argument("--workspace", required=True)
     vocab_add.add_argument("kind")
     vocab_add.add_argument("name")
-    vocab_add.add_argument("--terminal", action="store_true", help="Mark as terminal status (e.g. resolved)")
+    vocab_add.add_argument(
+        "--terminal", action="store_true", help="Mark as terminal status (e.g. resolved)"
+    )
     vocab_add.add_argument("--closed", action="store_true", help="Mark as closed (non-open) status")
     vocab_add.add_argument("--sort-order", type=int, default=100)
     vocab_add.add_argument("--json", action="store_true")

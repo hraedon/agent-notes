@@ -87,7 +87,7 @@ class TestBreadcrumbRoutes:
         projects = coredb.list_projects(workspace_id=ws.id)
         proj = next(p for p in projects if p.slug == "web-proj")
 
-        from agent_notes.servers.breadcrumbs_model import BreadcrumbModel
+        from agent_notes.core.breadcrumbs_model import BreadcrumbModel
 
         BreadcrumbModel.file_breadcrumb(
             project_id=proj.id,
@@ -114,7 +114,7 @@ class TestBreadcrumbRoutes:
         projects = coredb.list_projects(workspace_id=ws.id)
         proj = next(p for p in projects if p.slug == "web-proj")
 
-        from agent_notes.servers.breadcrumbs_model import BreadcrumbModel
+        from agent_notes.core.breadcrumbs_model import BreadcrumbModel
 
         BreadcrumbModel.file_breadcrumb(
             project_id=proj.id,
@@ -131,20 +131,20 @@ class TestBreadcrumbRoutes:
 
 class TestMemoryRoutes:
     def test_memory_detail_200(self, client):
-        coredb.get_or_create_workspace("web-ws", "Web WS")
+        ws = coredb.get_or_create_workspace("web-ws", "Web WS")
+        projects = coredb.list_projects(workspace_id=ws.id)
+        proj = next(p for p in projects if p.slug == "web-proj")
 
         with patch("agent_notes.core.embed.embed", side_effect=_fake_embed):
-            from agent_notes.servers.memory import MemoryServer
+            from agent_notes.core.memory_model import add_memory
 
-            srv = MemoryServer()
-            srv._tool_add_memory(
-                {
-                    "workspace": "web-ws",
-                    "project": "web-proj",
-                    "name": "test-memory",
-                    "memory_type": "note",
-                    "body": "A test memory for the web view",
-                }
+            add_memory(
+                workspace_id=ws.id,
+                project_id=proj.id,
+                name="test-memory",
+                memory_type="note",
+                body="A test memory for the web view",
+                embedding=[0.0] * 768,
             )
 
         resp = client.get("/workspaces/web-ws/web-proj/memories/test-memory")

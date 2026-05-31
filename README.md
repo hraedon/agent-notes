@@ -107,25 +107,48 @@ idempotent — a second invocation with no source changes reports
 
 `agent-notes-bridge` is a small daemon (Plan 004 §7, Phase 9c) that LISTENs
 on the Postgres `agent_notes_changes` channel and POSTs each change to an
-[agent-wake](https://github.com/) HTTP ingest endpoint with HMAC-signed
+[agent-wake](/projects/agent-wake) HTTP ingest endpoint with HMAC-signed
 requests (`X-AgentWake-Source` / `X-AgentWake-Signature`). It lets external
 agents wake on breadcrumb / memory changes without polling.
 
-Run it (one process per deployment):
+**Setup (two sides):**
+
+1. **agent-notes side** — set env vars and run the bridge:
 
 ```bash
 export AGENT_NOTES_DSN=postgresql://...
-export AGENT_NOTES_BRIDGE_TARGET=http://127.0.0.1:8788/   # agent-wake ingest
-export AGENT_NOTES_BRIDGE_SECRET=...                       # shared HMAC secret
+export AGENT_NOTES_BRIDGE_TARGET=http://127.0.0.1:8788/
+export AGENT_NOTES_BRIDGE_SECRET=$(python3 /projects/agent-wake/tools/generate-secret.py)
 agent-notes-bridge
 ```
 
+2. **agent-wake side** — add `agent-notes` as a source in
+   `~/.config/agent-wake/config.json`:
+
+```json
+{
+  "version": 1,
+  "listen": {"host": "127.0.0.1", "port": 8788},
+  "sources": {
+    "agent-notes": {
+      "secret_env": "AGENT_NOTES_BRIDGE_SECRET"
+    }
+  },
+  "routing": {
+    "agent-notes": {"adapter": "claude"}
+  }
+}
+```
+
+Then restart `agent-waked`. The bridge sends `wake: false` (silent inject),
+but Claude Code's channel plugin always wakes the agent in v0 — this is a
+known agent-wake limitation, not a bridge bug.
+
 Optional env vars: `AGENT_NOTES_BRIDGE_SOURCE` (default `agent-notes`),
 `AGENT_NOTES_BRIDGE_BATCH_MS` (default 100ms), `AGENT_NOTES_BRIDGE_BATCH_N`
-(default 50). Each buffered change becomes one POST to the target (agent-wake's
-v0 wire schema is one-event-per-POST). On 3 failed delivery attempts
-(100ms / 1s / 10s backoff), the bridge drops the event and continues — the
-`change_log` row remains the durable record.
+(default 50). Each buffered change becomes one POST to the target. On 3
+failed delivery attempts (100ms / 1s / 10s backoff), the bridge drops the
+event and continues — the `change_log` row remains the durable record.
 
 A sample systemd unit lives at `deploy/agent-notes-bridge.service`. The
 bridge does **not** publish to regista (Plan 004 decision 56); subscribe

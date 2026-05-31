@@ -243,7 +243,7 @@ def _check_bridge_target() -> tuple[bool, str]:
         return False, str(exc)
 
 
-def run() -> int:
+def run(skip_embed: bool = False) -> int:
     """Run all checks and print a summary. Returns exit code."""
     print("agent-notes-doctor — health check\n")
 
@@ -273,10 +273,14 @@ def run() -> int:
         print("One or more prerequisite checks failed.")
         return 1
 
-    ok, msg = _check_embedding()
-    _print_section("3. Embedding Model")
-    _print_result(ok, msg)
-    all_ok = all_ok and ok
+    if skip_embed:
+        _print_section("3. Embedding Model")
+        print("  SKIPPED: --skip-embed")
+    else:
+        ok, msg = _check_embedding()
+        _print_section("3. Embedding Model")
+        _print_result(ok, msg)
+        all_ok = all_ok and ok
 
     ok, msg = _check_links_audit()
     _print_section("4. Links Audit")
@@ -303,7 +307,16 @@ def run() -> int:
 
 
 def main() -> None:
-    sys.exit(run())
+    import argparse
+
+    parser = argparse.ArgumentParser(description="agent-notes health check")
+    parser.add_argument(
+        "--skip-embed",
+        action="store_true",
+        help="Skip embedding model check (saves ~30s on first load)",
+    )
+    args = parser.parse_args()
+    sys.exit(run(skip_embed=args.skip_embed))
 
 
 if __name__ == "__main__":
