@@ -60,6 +60,40 @@ def test_init_creates_project():
         assert "registered" in result.stdout.lower()
 
 
+def _session_orient_cmds(settings: dict) -> list[str]:
+    return [
+        h["command"]
+        for entry in settings.get("hooks", {}).get("SessionStart", [])
+        for h in entry.get("hooks", [])
+    ]
+
+
+def test_init_wires_session_hook_and_preserves_settings():
+    with tempfile.TemporaryDirectory() as td:
+        repo = Path(td) / "repo"
+        (repo / ".claude").mkdir(parents=True)
+        (repo / ".git").mkdir()
+        # Pre-existing unrelated setting must survive the merge.
+        (repo / ".claude" / "settings.json").write_text(json.dumps({"model": "x"}))
+        assert _run("init", str(repo), check=False).returncode == 0
+        settings = json.loads((repo / ".claude" / "settings.json").read_text())
+        assert settings["model"] == "x"
+        assert any(c.startswith("agent-notes orient") for c in _session_orient_cmds(settings))
+        # Idempotent: re-running does not duplicate the hook.
+        _run("init", str(repo), check=False)
+        settings2 = json.loads((repo / ".claude" / "settings.json").read_text())
+        assert sum(c.startswith("agent-notes orient") for c in _session_orient_cmds(settings2)) == 1
+
+
+def test_init_no_hooks_skips_settings():
+    with tempfile.TemporaryDirectory() as td:
+        repo = Path(td) / "repo2"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        assert _run("init", str(repo), "--no-hooks", check=False).returncode == 0
+        assert not (repo / ".claude" / "settings.json").exists()
+
+
 def test_resolve_not_configured():
     with tempfile.TemporaryDirectory() as td:
         result = _run("resolve", "--path", td, "--json", check=False)

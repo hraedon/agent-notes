@@ -24,11 +24,42 @@ from agent_notes.cli.vocabulary import register_vocabulary_parsers
 from agent_notes.cli.workspace import register_workspace_parsers
 
 
-def cmd_init(path: str | None) -> int:
-    import os
+def _install_claude_session_hook(repo_root: str) -> tuple[str, bool]:
+    """Wire a SessionStart hook into <repo>/.claude/settings.json that runs
+    `agent-notes orient`, so orientation is injected every session without the
+    agent having to remember. Merges into existing settings; idempotent.
 
-    target = path or "."
-    target = os.path.abspath(target)
+    Returns (settings_path, changed).
+    """
+    settings_path = os.path.join(repo_root, ".claude", "settings.json")
+    os.makedirs(os.path.dirname(settings_path), exist_ok=True)
+    settings: dict = {}
+    if os.path.exists(settings_path):
+        try:
+            settings = json.loads(open(settings_path, encoding="utf-8").read()) or {}
+        except (json.JSONDecodeError, OSError):
+            settings = {}
+    hooks = settings.setdefault("hooks", {})
+    session_start = hooks.setdefault("SessionStart", [])
+    command = f"agent-notes orient --path {repo_root} 2>/dev/null || true"
+    already = any(
+        isinstance(entry, dict)
+        and any(
+            h.get("command", "").startswith("agent-notes orient")
+            for h in entry.get("hooks", [])
+            if isinstance(h, dict)
+        )
+        for entry in session_start
+    )
+    if not already:
+        session_start.append({"hooks": [{"type": "command", "command": command}]})
+    with open(settings_path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(settings, indent=2) + "\n")
+    return settings_path, not already
+
+
+def cmd_init(path: str | None, install_hooks: bool = True) -> int:
+    target = os.path.abspath(path or ".")
 
     git_root = target
     while git_root != "/":
@@ -51,6 +82,16 @@ def cmd_init(path: str | None) -> int:
     ws = get_or_create_workspace("default", "Default Workspace")
     get_or_create_project(ws.id, slug=name, name=name, repo_root=repo_root)
     print(f"Project '{name}' registered (workspace=default, repo_root={repo_root}).")
+
+    if install_hooks:
+        settings_path, changed = _install_claude_session_hook(repo_root)
+        verb = "wired" if changed else "already present"
+        print(f"Claude Code SessionStart -> `agent-notes orient` {verb} in {settings_path}.")
+
+    print(
+        "Next: `agent-notes install-skills --target claude` and `--target opencode` "
+        "(global, once); opencode SessionStart wiring is pending (see plans/007)."
+    )
     return EXIT_SUCCESS
 
 
@@ -91,8 +132,13 @@ def main() -> int:
     )
     sub = parser.add_subparsers(dest="command")
 
-    init_p = sub.add_parser("init", help="Idempotently register a project from a path")
+    init_p = sub.add_parser(
+        "init", help="Idempotently register a project from a path and wire lifecycle hooks"
+    )
     init_p.add_argument("path", nargs="?", default=".")
+    init_p.add_argument(
+        "--no-hooks", action="store_true", help="Register only; do not wire the SessionStart hook"
+    )
 
     resolve_p = sub.add_parser("resolve", help="Resolve a filesystem path to a registered project")
     resolve_p.add_argument("--path", default=".")
@@ -120,7 +166,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.command == "init":
-        return cmd_init(args.path)
+        return cmd_init(args.path, install_hooks=not args.no_hooks)
     if args.command == "resolve":
         return cmd_resolve(args.path, args.json)
     if args.command == "doctor":
