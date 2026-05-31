@@ -201,6 +201,11 @@ def resolve_project(path: str) -> dict:
                     "workspace": row["workspace"],
                     "project": row["project"],
                     "repo_root": row["repo_root"],
+                    # "exact" = path is the project root; "ancestor" = path is
+                    # *inside* a registered project (incl. resolving to a broad
+                    # librarian root). Callers surface this so an unregistered
+                    # project can't masquerade as an exact match / global view.
+                    "resolved_via": "exact" if abs_path == rr else "ancestor",
                 }
     raise ValueError(
         f"PROJECT_NOT_REGISTERED: no project found for path {abs_path!r}. "

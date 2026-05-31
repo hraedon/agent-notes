@@ -68,6 +68,24 @@ def test_resolve_not_configured():
         assert data["code"] == 3
 
 
+def test_resolve_reports_resolved_via():
+    """resolve_via distinguishes an exact project-root match from an 'ancestor'
+    match (path inside a registered project / broad librarian root) so an
+    unregistered project can't masquerade as an exact match."""
+    with tempfile.TemporaryDirectory() as td:
+        repo = Path(td) / "myrepo"
+        (repo / "sub" / "deep").mkdir(parents=True)
+        (repo / ".git").mkdir()
+        assert _run("init", str(repo), check=False).returncode == 0
+        exact = json.loads(_run("resolve", "--path", str(repo), "--json", check=False).stdout)
+        assert exact["resolved_via"] == "exact"
+        anc = json.loads(
+            _run("resolve", "--path", str(repo / "sub" / "deep"), "--json", check=False).stdout
+        )
+        assert anc["resolved_via"] == "ancestor"
+        assert anc["project"] == exact["project"]
+
+
 @pytest.mark.parametrize(
     "subcmd",
     [
