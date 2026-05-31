@@ -36,15 +36,18 @@ harnesses**, and `init` stops at registration.
 
 ## Pieces
 
-### 0. Error-contract hardening — GATING PREREQUISITE
+### 0. Error-contract hardening — GATING PREREQUISITE — ✅ DONE (`70a947d`, 2026-05-31)
 
 Every command, in `--json`, returns a structured result *or* a structured
-`{"error","code"}` on stdout — never empty-as-failure. (Partially done: the
-find/query/search silent-failure fix shipped on `main`; finish the audit across
-all commands and the `_resolve` message-preservation path.) This is a
-prerequisite, not polish: the enforcement hooks shell out to the CLI and parse
-JSON, and a hook **cannot** distinguish "no results" from "the call failed" if
-failure is empty. Build this first.
+`{"error","code"}` on stdout — never empty-as-failure, never a traceback on user
+input. Audit completed across all commands: resolve-failure reporting in
+memory/breadcrumb/export, the link-ref no-traceback guarantee, and the
+`--json` error paths in vocabulary/changes/memory-delete. The helpful
+`PROJECT_NOT_REGISTERED` message is surfaced (resolution message preserved via
+`report_resolution_failure`). 13 regression tests guard it; full suite 166 green.
+This was a prerequisite, not polish: the enforcement hooks shell out to the CLI
+and parse JSON, and a hook **cannot** distinguish "no results" from "the call
+failed" if failure is empty.
 
 ### 1. `init` as full instantiation
 
