@@ -166,9 +166,9 @@ def run(
 
     import psycopg
 
-    effective_dsn = dsn or os.environ.get("AGENT_NOTES_DSN", "")
-    if not effective_dsn:
-        raise RuntimeError("AGENT_NOTES_DSN not set")
+    from agent_notes.core.config import resolve_dsn
+
+    effective_dsn = resolve_dsn(dsn)
 
     poll = max(batch_ms / 1000.0, 0.05)
     sent = 0

@@ -11,7 +11,6 @@ with real uptime requirements is built.
 from __future__ import annotations
 
 import json
-import os
 from contextlib import contextmanager
 from typing import Generator
 
@@ -35,9 +34,9 @@ def listen(
     """
     import psycopg
 
-    effective_dsn = dsn or os.environ.get("AGENT_NOTES_DSN", "")
-    if not effective_dsn:
-        raise RuntimeError("AGENT_NOTES_DSN not set")
+    from agent_notes.core.config import resolve_dsn
+
+    effective_dsn = resolve_dsn(dsn)
 
     conn = psycopg.connect(effective_dsn, autocommit=True)
     try:

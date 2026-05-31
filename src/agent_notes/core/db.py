@@ -34,12 +34,9 @@ def _get_pool() -> ConnectionPool:
     if _pool is None:
         with _pool_lock:
             if _pool is None:
-                dsn = os.environ.get("AGENT_NOTES_DSN", "")
-                if not dsn:
-                    raise RuntimeError(
-                        "AGENT_NOTES_DSN environment variable is not set. "
-                        "Example: postgresql://user:pass@localhost/agent_notes"
-                    )
+                from agent_notes.core.config import resolve_dsn
+
+                dsn = resolve_dsn()
                 _pool = ConnectionPool(
                     dsn,
                     min_size=2,
