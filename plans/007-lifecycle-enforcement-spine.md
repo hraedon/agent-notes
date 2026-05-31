@@ -9,6 +9,28 @@ was optional. The fix is not a better sync — it's making read/write
 **non-optional**, instantiable per project in one command, and tier-one on **both**
 Claude Code and opencode.
 
+## Implementation status (2026-05-31)
+
+- ✅ **Piece 0 — error contract** (`70a947d`). Done, 13 tests.
+- ✅ **files→DB importer** (`13b9229`) — `breadcrumb sync --from-files`; the
+  dependency BC-228 (sf2 migration) needs. Done, 4 tests.
+- ✅ **Piece 3 — librarian guard** (`7ea5a86`) — `resolved_via` (exact vs
+  ancestor) surfaced so an unregistered project can't masquerade as the global
+  view. Done, 1 test. *Registering the `/projects` librarian row itself is an
+  operational opt-in* (it changes resolution for every unregistered subpath), so
+  it is intentionally NOT auto-created.
+- ✅ **read side of enforcement** — `agent-notes orient` (`d668b95`), the cheap
+  embedding-free session digest. Done, 1 test.
+- ◑ **Piece 1 — `init` instantiation** (`9cec986`) — registers + wires the Claude
+  Code `SessionStart -> orient` hook into `<repo>/.claude/settings.json` (safe
+  merge, idempotent, `--no-hooks`). Done + tested. *Remaining:* fold in
+  `install-skills` (currently a printed reminder).
+- ☐ **Piece 2 — write-side + opencode**: the `Stop`/`PreCompact` reconciliation
+  hook and the opencode plugin equivalent. **Deferred — needs a live Claude
+  Code / opencode session to verify firing**; not safe to land unverified.
+- ☐ **Piece 4 — cross-project reference sugar** (`project:identifier`). Not
+  started; the links graph + `--project` already cover the capability.
+
 ## Thesis
 
 - **DB is the single source of truth.** md-as-source is retired (see sf2 BC-228).
