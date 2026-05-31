@@ -14,7 +14,10 @@ def cmd_changes_since(args: argparse.Namespace) -> int:
     try:
         since = datetime.fromisoformat(args.since)
     except ValueError as exc:
-        print(f"Invalid timestamp: {exc}")
+        if use_json:
+            print(json.dumps({"error": f"invalid timestamp: {exc}"}, indent=2))
+        else:
+            print(f"Invalid timestamp: {exc}")
         return EXIT_GENERIC
 
     rows = cl_changes_since(since, limit=min(args.limit or 50, 200))

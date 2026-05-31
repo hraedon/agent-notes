@@ -52,16 +52,22 @@ def _resolve(
     raise SystemExit(EXIT_NOT_CONFIGURED)
 
 
-def report_resolution_failure(args: argparse.Namespace, code: int) -> None:
+def report_resolution_failure(
+    args: argparse.Namespace, code: int, use_json: bool | None = None
+) -> None:
     """Emit a structured, non-silent error when project/workspace resolution fails.
 
-    Read commands (find, query, search) catch the resolution ``SystemExit`` and
+    Commands that resolve a project catch the resolution ``SystemExit`` and
     return a bare exit code. Without this reporter they print nothing — and in
     ``--json`` mode a caller parsing stdout reads the empty output as "no
     results found" rather than "lookup failed". That silent failure is exactly
     how a duplicate breadcrumb gets filed against an unregistered project.
+
+    ``use_json`` defaults to ``args.json``; pass it explicitly for JSON-native
+    commands (e.g. ``export``) that have no ``--json`` flag.
     """
-    use_json = getattr(args, "json", False)
+    if use_json is None:
+        use_json = getattr(args, "json", False)
     detail: str | None = None
     path = getattr(args, "path", None)
     if path:

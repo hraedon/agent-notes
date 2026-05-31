@@ -68,17 +68,63 @@ def test_resolve_not_configured():
         assert data["code"] == 3
 
 
-@pytest.mark.parametrize("subcmd", [["breadcrumb", "find"], ["breadcrumb", "query"], ["search", "all", "q"]])
-def test_read_command_unregistered_path_is_not_silent(subcmd):
-    """Regression: read commands must emit a structured error (not empty stdout)
-    when project resolution fails. Empty-stdout-as-success in --json mode is how
-    a caller misreads 'not configured' as 'no results' and files a duplicate."""
+@pytest.mark.parametrize(
+    "subcmd",
+    [
+        ["breadcrumb", "find"],
+        ["breadcrumb", "query"],
+        ["breadcrumb", "get", "X"],
+        ["memory", "list"],
+        ["memory", "get", "X"],
+        ["memory", "search", "q"],
+        ["search", "all", "q"],
+    ],
+)
+def test_resolve_failure_is_structured_not_silent(subcmd):
+    """Contract: a command whose project resolution fails must emit a structured
+    error (parseable JSON, exit 3) — never empty stdout. Empty-stdout-as-success
+    in --json mode is how a caller misreads 'not configured' as 'no results' and
+    files a duplicate."""
     with tempfile.TemporaryDirectory() as td:
         result = _run(*subcmd, "--path", td, "--json", check=False)
         assert result.returncode == 3, result.stderr
         data = json.loads(result.stdout)  # must be parseable JSON, not empty
         assert data["code"] == 3
         assert "PROJECT_NOT_REGISTERED" in data["error"]
+
+
+def test_export_unregistered_path_emits_json_error():
+    """export is JSON-native (no --json flag); a resolution failure must still be
+    parseable JSON on stdout, not empty."""
+    with tempfile.TemporaryDirectory() as td:
+        result = _run("export", "--path", td, check=False)
+        assert result.returncode == 3, result.stderr
+        assert "PROJECT_NOT_REGISTERED" in json.loads(result.stdout)["error"]
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["vocabulary", "list", "--workspace", "no-such-ws", "--json"],
+        ["changes", "since", "not-a-timestamp", "--json"],
+        ["link", "trace", "bogus-ref-no-colon", "--json"],
+    ],
+)
+def test_bad_input_emits_parseable_json_error(argv):
+    """Contract: in --json mode every failure path returns parseable JSON with an
+    'error' key — never plain text and never a traceback."""
+    result = _run(*argv, check=False)
+    assert result.returncode != 0, result.stdout
+    assert "error" in json.loads(result.stdout)
+
+
+def test_link_add_bad_ref_does_not_traceback():
+    """link add has no --json; a malformed ref must be a clean error on stderr
+    (exit !=0, empty stdout), never an uncaught traceback."""
+    result = _run("link", "add", "--from", "bad", "--to", "k:w/p/i", "--type", "relates_to", check=False)
+    assert result.returncode != 0
+    assert result.stdout.strip() == ""
+    assert "Error" in result.stderr and "Traceback" not in result.stderr
 
 
 def test_breadcrumb_file(default_project):

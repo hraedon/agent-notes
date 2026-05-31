@@ -2,8 +2,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 
-from agent_notes.cli.common import EXIT_NOT_FOUND, EXIT_SUCCESS
+from agent_notes.cli.common import EXIT_GENERIC, EXIT_NOT_FOUND, EXIT_SUCCESS
+
+
+def _emit_ref_error(exc: Exception, use_json: bool) -> int:
+    """Report a malformed/unresolvable link ref as a clean structured error
+    instead of letting the ValueError surface as an uncaught traceback."""
+    if use_json:
+        print(json.dumps({"error": str(exc), "code": EXIT_GENERIC}, indent=2))
+    else:
+        print(f"Error: {exc}", file=sys.stderr)
+    return EXIT_GENERIC
 
 
 def _parse_link_ref(ref: str) -> tuple[str, str, str, str]:
@@ -33,10 +44,14 @@ def _resolve_link_ref(
 
 
 def cmd_link_add(args: argparse.Namespace) -> int:
-    fk, fwslug, fproj, fid = _parse_link_ref(args.from_)
-    tk, twslug, tproj, tid = _parse_link_ref(args.to)
-    from_ws, from_proj, from_id = _resolve_link_ref(fk, fwslug, fproj, fid)
-    to_ws, to_proj, to_id = _resolve_link_ref(tk, twslug, tproj, tid)
+    use_json = getattr(args, "json", False)
+    try:
+        fk, fwslug, fproj, fid = _parse_link_ref(args.from_)
+        tk, twslug, tproj, tid = _parse_link_ref(args.to)
+        from_ws, from_proj, from_id = _resolve_link_ref(fk, fwslug, fproj, fid)
+        to_ws, to_proj, to_id = _resolve_link_ref(tk, twslug, tproj, tid)
+    except ValueError as exc:
+        return _emit_ref_error(exc, use_json)
 
     from agent_notes.core.links import add_link
 
@@ -56,10 +71,14 @@ def cmd_link_add(args: argparse.Namespace) -> int:
 
 
 def cmd_link_remove(args: argparse.Namespace) -> int:
-    fk, fwslug, fproj, fid = _parse_link_ref(args.from_)
-    tk, twslug, tproj, tid = _parse_link_ref(args.to)
-    from_ws, from_proj, from_id = _resolve_link_ref(fk, fwslug, fproj, fid)
-    to_ws, to_proj, to_id = _resolve_link_ref(tk, twslug, tproj, tid)
+    use_json = getattr(args, "json", False)
+    try:
+        fk, fwslug, fproj, fid = _parse_link_ref(args.from_)
+        tk, twslug, tproj, tid = _parse_link_ref(args.to)
+        from_ws, from_proj, from_id = _resolve_link_ref(fk, fwslug, fproj, fid)
+        to_ws, to_proj, to_id = _resolve_link_ref(tk, twslug, tproj, tid)
+    except ValueError as exc:
+        return _emit_ref_error(exc, use_json)
 
     from agent_notes.core.links import remove_link
 
@@ -84,8 +103,11 @@ def cmd_link_remove(args: argparse.Namespace) -> int:
 
 def cmd_link_trace(args: argparse.Namespace) -> int:
     use_json = getattr(args, "json", False)
-    kind, ws_slug, proj_slug, identifier = _parse_link_ref(args.start)
-    ws, proj, _ = _resolve_link_ref(kind, ws_slug, proj_slug, identifier)
+    try:
+        kind, ws_slug, proj_slug, identifier = _parse_link_ref(args.start)
+        ws, proj, _ = _resolve_link_ref(kind, ws_slug, proj_slug, identifier)
+    except ValueError as exc:
+        return _emit_ref_error(exc, use_json)
 
     if args.all:
         from agent_notes.core.search import trace_graph_all

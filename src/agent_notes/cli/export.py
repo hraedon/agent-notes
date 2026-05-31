@@ -7,7 +7,13 @@ import json
 import sys
 from datetime import datetime
 
-from agent_notes.cli.common import EXIT_GENERIC, EXIT_NOT_CONFIGURED, EXIT_SUCCESS, _resolve
+from agent_notes.cli.common import (
+    EXIT_GENERIC,
+    EXIT_NOT_CONFIGURED,
+    EXIT_SUCCESS,
+    _resolve,
+    report_resolution_failure,
+)
 
 
 def cmd_export(args: argparse.Namespace) -> int:
@@ -20,7 +26,9 @@ def cmd_export(args: argparse.Namespace) -> int:
         try:
             ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
         except SystemExit as exc:
-            return exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+            code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+            report_resolution_failure(args, code, use_json=True)
+            return code
 
         workspaces = [
             {

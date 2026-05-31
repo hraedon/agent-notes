@@ -12,7 +12,10 @@ def cmd_vocab_list(args: argparse.Namespace) -> int:
 
     ws = next((w for w in list_workspaces() if w.slug == args.workspace), None)
     if ws is None:
-        print(f"Workspace '{args.workspace}' not found.")
+        if use_json:
+            print(json.dumps({"error": f"workspace '{args.workspace}' not found"}, indent=2))
+        else:
+            print(f"Workspace '{args.workspace}' not found.")
         return EXIT_NOT_FOUND
 
     vocabs = list_vocabulary(
@@ -33,7 +36,10 @@ def cmd_vocab_add(args: argparse.Namespace) -> int:
 
     ws = next((w for w in list_workspaces() if w.slug == args.workspace), None)
     if ws is None:
-        print(f"Workspace '{args.workspace}' not found.")
+        if use_json:
+            print(json.dumps({"error": f"workspace '{args.workspace}' not found"}, indent=2))
+        else:
+            print(f"Workspace '{args.workspace}' not found.")
         return EXIT_NOT_FOUND
 
     vocab = add_vocabulary(
@@ -54,11 +60,15 @@ def cmd_vocab_add(args: argparse.Namespace) -> int:
 
 
 def cmd_vocab_archive(args: argparse.Namespace) -> int:
+    use_json = getattr(args, "json", False)
     from agent_notes.core.db import archive_vocabulary, list_workspaces
 
     ws = next((w for w in list_workspaces() if w.slug == args.workspace), None)
     if ws is None:
-        print(f"Workspace '{args.workspace}' not found.")
+        if use_json:
+            print(json.dumps({"error": f"workspace '{args.workspace}' not found"}, indent=2))
+        else:
+            print(f"Workspace '{args.workspace}' not found.")
         return EXIT_NOT_FOUND
     archive_vocabulary(ws.id, args.kind, args.name)
     print(f"Archived vocabulary entry: {args.kind}/{args.name}")

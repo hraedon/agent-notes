@@ -10,6 +10,7 @@ from agent_notes.cli.common import (
     EXIT_SUCCESS,
     _add_common,
     _resolve,
+    report_resolution_failure,
 )
 
 
@@ -18,7 +19,9 @@ def cmd_mem_add(args: argparse.Namespace) -> int:
     try:
         ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
     except SystemExit as exc:
-        return exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED  # type: ignore[arg-type]
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
 
     from agent_notes.core.embed import embed
     from agent_notes.core.memory_model import add_memory
@@ -59,7 +62,9 @@ def cmd_mem_get(args: argparse.Namespace) -> int:
     try:
         ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
     except SystemExit as exc:
-        return exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED  # type: ignore[arg-type]
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
 
     from agent_notes.core.memory_model import get_memory
 
@@ -90,7 +95,9 @@ def cmd_mem_list(args: argparse.Namespace) -> int:
     try:
         ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
     except SystemExit as exc:
-        return exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED  # type: ignore[arg-type]
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
 
     from agent_notes.core.memory_model import list_memories
 
@@ -118,7 +125,9 @@ def cmd_mem_search(args: argparse.Namespace) -> int:
     try:
         ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
     except SystemExit as exc:
-        return exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED  # type: ignore[arg-type]
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
 
     from agent_notes.core.embed import embed
     from agent_notes.core.memory_model import search_memory_with_body
@@ -145,18 +154,27 @@ def cmd_mem_search(args: argparse.Namespace) -> int:
 
 
 def cmd_mem_delete(args: argparse.Namespace) -> int:
+    use_json = getattr(args, "json", False)
     try:
         ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
     except SystemExit as exc:
-        return exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED  # type: ignore[arg-type]
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
 
     from agent_notes.core.memory_model import delete_memory
 
     row = delete_memory(ws_id, proj_id, args.name)
     if row is None:
-        print(f"Memory '{args.name}' not found (or already deleted).")
+        if use_json:
+            print(json.dumps({"error": "not found"}, indent=2))
+        else:
+            print(f"Memory '{args.name}' not found (or already deleted).")
         return EXIT_NOT_FOUND
-    print(f"Memory '{args.name}' soft-deleted (id={row['id']}).")
+    if use_json:
+        print(json.dumps({"deleted": args.name, "id": row["id"]}, indent=2, default=str))
+    else:
+        print(f"Memory '{args.name}' soft-deleted (id={row['id']}).")
     return EXIT_SUCCESS
 
 
@@ -165,7 +183,9 @@ def cmd_mem_update(args: argparse.Namespace) -> int:
     try:
         ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
     except SystemExit as exc:
-        return exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED  # type: ignore[arg-type]
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
 
     from agent_notes.core.memory_model import update_memory
 

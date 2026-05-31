@@ -21,7 +21,9 @@ def cmd_bc_file(args: argparse.Namespace) -> int:
     try:
         ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
     except SystemExit as exc:
-        return exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED  # type: ignore[arg-type]
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
 
     from agent_notes.core.breadcrumbs_model import BreadcrumbModel
     from agent_notes.core.embed import embed
@@ -64,7 +66,9 @@ def cmd_bc_update(args: argparse.Namespace) -> int:
     try:
         ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
     except SystemExit as exc:
-        return exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED  # type: ignore[arg-type]
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
 
     from agent_notes.core.breadcrumbs_model import BreadcrumbModel
     from agent_notes.core.embed import embed
@@ -139,7 +143,9 @@ def cmd_bc_get(args: argparse.Namespace) -> int:
     try:
         ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
     except SystemExit as exc:
-        return exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED  # type: ignore[arg-type]
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
 
     from agent_notes.core.breadcrumbs_model import BreadcrumbModel
 
@@ -261,7 +267,9 @@ def cmd_bc_delete(args: argparse.Namespace) -> int:
     try:
         ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
     except SystemExit as exc:
-        return exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED  # type: ignore[arg-type]
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
 
     from agent_notes.core.breadcrumbs_model import BreadcrumbModel
 
