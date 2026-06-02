@@ -11,6 +11,7 @@ sentence-transformers model on the hot path.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any, Callable
 
@@ -53,8 +54,8 @@ def parse_breadcrumb_file(path: Path) -> dict | None:
         return None
     try:
         fm = yaml.safe_load(parts[1])
-    except yaml.YAMLError:
-        return None
+    except yaml.YAMLError as exc:
+        raise ValueError(f"invalid YAML frontmatter: {exc}") from exc
     if not isinstance(fm, dict):
         return None
 
@@ -116,7 +117,12 @@ def sync_breadcrumbs_from_dir(
     parsed: list[tuple[Path, dict]] = []
     skipped: list[dict] = []
     for f in discover_breadcrumb_files(directory, include_resolved=include_resolved):
-        bc = parse_breadcrumb_file(f)
+        try:
+            bc = parse_breadcrumb_file(f)
+        except ValueError as exc:
+            skipped.append({"file": str(f), "reason": str(exc)})
+            print(f"WARNING: skipping {f}: {exc}", file=sys.stderr)
+            continue
         if bc is None:
             skipped.append({"file": str(f), "reason": "not a breadcrumb (no frontmatter/id/title)"})
         else:

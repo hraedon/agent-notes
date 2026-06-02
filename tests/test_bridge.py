@@ -276,7 +276,7 @@ def test_bridge_to_agent_wake_ingest():
 
     async def _start_server():
         nonlocal runner, site
-        from aiohttp import web_runner, web
+        from aiohttp import web, web_runner
 
         runner = web_runner.AppRunner(app)
         await runner.setup()

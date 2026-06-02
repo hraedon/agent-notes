@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from agent_notes.cli.common import EXIT_NOT_FOUND, EXIT_SUCCESS
+from agent_notes.cli.common import EXIT_NOT_FOUND, EXIT_SUCCESS, _print_sub_help
 
 
 def cmd_vocab_list(args: argparse.Namespace) -> int:
@@ -12,10 +12,15 @@ def cmd_vocab_list(args: argparse.Namespace) -> int:
 
     ws = next((w for w in list_workspaces() if w.slug == args.workspace), None)
     if ws is None:
+        available = [w.slug for w in list_workspaces()]
+        hint = f" Available: {', '.join(available)}" if available else ""
         if use_json:
-            print(json.dumps({"error": f"workspace '{args.workspace}' not found"}, indent=2))
+            print(json.dumps({
+                "error": f"workspace '{args.workspace}' not found",
+                "available": available,
+            }, indent=2))
         else:
-            print(f"Workspace '{args.workspace}' not found.")
+            print(f"Workspace '{args.workspace}' not found.{hint}")
         return EXIT_NOT_FOUND
 
     vocabs = list_vocabulary(
@@ -36,10 +41,15 @@ def cmd_vocab_add(args: argparse.Namespace) -> int:
 
     ws = next((w for w in list_workspaces() if w.slug == args.workspace), None)
     if ws is None:
+        available = [w.slug for w in list_workspaces()]
+        hint = f" Available: {', '.join(available)}" if available else ""
         if use_json:
-            print(json.dumps({"error": f"workspace '{args.workspace}' not found"}, indent=2))
+            print(json.dumps({
+                "error": f"workspace '{args.workspace}' not found",
+                "available": available,
+            }, indent=2))
         else:
-            print(f"Workspace '{args.workspace}' not found.")
+            print(f"Workspace '{args.workspace}' not found.{hint}")
         return EXIT_NOT_FOUND
 
     vocab = add_vocabulary(
@@ -65,10 +75,15 @@ def cmd_vocab_archive(args: argparse.Namespace) -> int:
 
     ws = next((w for w in list_workspaces() if w.slug == args.workspace), None)
     if ws is None:
+        available = [w.slug for w in list_workspaces()]
+        hint = f" Available: {', '.join(available)}" if available else ""
         if use_json:
-            print(json.dumps({"error": f"workspace '{args.workspace}' not found"}, indent=2))
+            print(json.dumps({
+                "error": f"workspace '{args.workspace}' not found",
+                "available": available,
+            }, indent=2))
         else:
-            print(f"Workspace '{args.workspace}' not found.")
+            print(f"Workspace '{args.workspace}' not found.{hint}")
         return EXIT_NOT_FOUND
     archive_vocabulary(ws.id, args.kind, args.name)
     print(f"Archived vocabulary entry: {args.kind}/{args.name}")
@@ -105,7 +120,3 @@ def register_vocabulary_parsers(sub: argparse._SubParsersAction) -> None:
     vocab_archive.set_defaults(func=cmd_vocab_archive)
 
     vocab.set_defaults(func=lambda args: (_print_sub_help(vocab), EXIT_SUCCESS)[1])
-
-
-def _print_sub_help(parser: argparse.ArgumentParser) -> None:
-    parser.print_help()

@@ -40,7 +40,7 @@ class TestDoctorClean:
         from agent_notes.scripts.doctor import run
 
         with patch("agent_notes.scripts.doctor._check_embedding", return_value=(True, "mocked")):
-            code = run()
+            code = run(check_embed=True)
         captured = capsys.readouterr()
         assert code == 0, f"Doctor failed: {captured.out}"
         assert "DSN" in captured.out
@@ -96,7 +96,7 @@ class TestDoctorDanglingLink:
         from agent_notes.scripts.doctor import run
 
         with patch("agent_notes.scripts.doctor._check_embedding", return_value=(True, "mocked")):
-            code = run()
+            code = run(check_embed=True)
         captured = capsys.readouterr()
         assert code == 1, f"Expected failure, got: {captured.out}"
         assert "Dangling" in captured.out
@@ -118,3 +118,26 @@ class TestDoctorSkipsOnDsnFailure:
         assert "Embedding Model" in captured.out
         assert "Links Audit" in captured.out
         assert "Vocabulary Integrity" in captured.out
+
+
+class TestDoctorSkipsEmbeddingByDefault:
+    @pytest.fixture(autouse=True)
+    def _seed(self):
+        ws = coredb.get_or_create_workspace("doc-embed-ws", "Doc Embed WS")
+        coredb.get_or_create_project(
+            ws.id,
+            slug="doc-embed-proj",
+            name="Doc Embed Proj",
+            repo_root="/tmp",
+        )
+        coredb.add_vocabulary(ws.id, "bc_kind", "bug")
+        coredb.add_vocabulary(ws.id, "bc_status", "new")
+        coredb.add_vocabulary(ws.id, "bc_severity", "medium")
+        coredb.add_vocabulary(ws.id, "memory_type", "note")
+
+    def test_embedding_skipped_without_check_embed(self, capsys):
+        from agent_notes.scripts.doctor import run
+
+        run(check_embed=False)
+        captured = capsys.readouterr()
+        assert "SKIPPED: use --check-embed" in captured.out

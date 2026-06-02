@@ -14,6 +14,7 @@ from agent_notes.cli.common import (
     EXIT_SUCCESS,
     _add_common,
     _bc_format,
+    _print_sub_help,
     _resolve,
     report_resolution_failure,
 )
@@ -161,6 +162,7 @@ def cmd_bc_get(args: argparse.Namespace) -> int:
         return EXIT_NOT_FOUND
 
     if use_json:
+        bc.pop("embedding", None)
         print(json.dumps({"breadcrumb": bc}, indent=2, default=str))
     else:
         print(_bc_format(bc))
@@ -185,11 +187,13 @@ def cmd_bc_find(args: argparse.Namespace) -> int:
         if args.workspace:
             ws = next((w for w in list_workspaces() if w.slug == args.workspace), None)
             if ws is None:
+                available = [w.slug for w in list_workspaces()]
+                hint = f" Available: {', '.join(available)}" if available else ""
                 if use_json:
                     msg = f"workspace '{args.workspace}' not found"
-                    print(json.dumps({"error": msg}, indent=2))
+                    print(json.dumps({"error": msg, "available": available}, indent=2))
                 else:
-                    print(f"Workspace '{args.workspace}' not found.")
+                    print(f"Workspace '{args.workspace}' not found.{hint}")
                 return EXIT_NOT_FOUND
             ws_id = ws.id
         else:
@@ -227,6 +231,8 @@ def cmd_bc_find(args: argparse.Namespace) -> int:
         )
 
     if use_json:
+        for r in rows:
+            r.pop("embedding", None)
         print(json.dumps({"breadcrumbs": rows}, indent=2, default=str))
     else:
         if not rows:
@@ -423,7 +429,3 @@ def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
     bc_sync.set_defaults(func=cmd_bc_sync)
 
     bc.set_defaults(func=lambda args: (_print_sub_help(bc), EXIT_SUCCESS)[1])
-
-
-def _print_sub_help(parser: argparse.ArgumentParser) -> None:
-    parser.print_help()

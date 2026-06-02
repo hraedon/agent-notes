@@ -7,6 +7,7 @@ from agent_notes.cli.common import (
     EXIT_NOT_CONFIGURED,
     EXIT_SUCCESS,
     _add_common,
+    _print_sub_help,
     _resolve,
     report_resolution_failure,
 )
@@ -69,7 +70,3 @@ def register_search_parsers(sub: argparse._SubParsersAction) -> None:
     srch_mem.set_defaults(func=cmd_search_all, kinds=["memory"])
 
     srch.set_defaults(func=lambda args: (_print_sub_help(srch), EXIT_SUCCESS)[1])
-
-
-def _print_sub_help(parser: argparse.ArgumentParser) -> None:
-    parser.print_help()

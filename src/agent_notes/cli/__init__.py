@@ -114,10 +114,10 @@ def cmd_resolve(path: str | None, use_json: bool) -> int:
     return EXIT_SUCCESS
 
 
-def cmd_doctor(use_json: bool, skip_embed: bool = False) -> int:
+def cmd_doctor(use_json: bool, skip_embed: bool = False, check_embed: bool = False) -> int:
     from agent_notes.scripts.doctor import run as doctor_run
 
-    code = doctor_run(skip_embed=skip_embed)
+    code = doctor_run(skip_embed=skip_embed, check_embed=check_embed)
     if code != 0 and use_json:
         print(json.dumps({"status": "unhealthy", "doctor_exit": code}))
     elif use_json:
@@ -149,7 +149,12 @@ def main() -> int:
     doctor_p.add_argument(
         "--skip-embed",
         action="store_true",
-        help="Skip embedding model check (saves ~30s on first load)",
+        help="Deprecated; embedding check is now opt-in via --check-embed",
+    )
+    doctor_p.add_argument(
+        "--check-embed",
+        action="store_true",
+        help="Run embedding model check (~270MB model load, ~30s on first run)",
     )
 
     register_breadcrumb_parsers(sub)
@@ -170,7 +175,11 @@ def main() -> int:
     if args.command == "resolve":
         return cmd_resolve(args.path, args.json)
     if args.command == "doctor":
-        return cmd_doctor(args.json, skip_embed=getattr(args, "skip_embed", False))
+        return cmd_doctor(
+            args.json,
+            skip_embed=getattr(args, "skip_embed", False),
+            check_embed=getattr(args, "check_embed", False),
+        )
 
     func = getattr(args, "func", None)
     if func is not None:

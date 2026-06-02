@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 
-from agent_notes.cli.common import EXIT_GENERIC, EXIT_NOT_FOUND, EXIT_SUCCESS
+from agent_notes.cli.common import EXIT_GENERIC, EXIT_NOT_FOUND, EXIT_SUCCESS, _print_sub_help
 
 
 def _emit_ref_error(exc: Exception, use_json: bool) -> int:
@@ -36,7 +36,9 @@ def _resolve_link_ref(
 
     ws = next((w for w in list_workspaces() if w.slug == workspace_slug), None)
     if ws is None:
-        raise ValueError(f"workspace '{workspace_slug}' not found")
+        available = [w.slug for w in list_workspaces()]
+        hint = f" Available: {', '.join(available)}" if available else ""
+        raise ValueError(f"workspace '{workspace_slug}' not found.{hint}")
     proj = next((p for p in list_projects(workspace_id=ws.id) if p.slug == project_slug), None)
     if proj is None:
         raise ValueError(f"project '{project_slug}' not found")
@@ -189,7 +191,3 @@ def register_link_parsers(sub: argparse._SubParsersAction) -> None:
     lnk_trace.set_defaults(func=cmd_link_trace)
 
     lnk.set_defaults(func=lambda args: (_print_sub_help(lnk), EXIT_SUCCESS)[1])
-
-
-def _print_sub_help(parser: argparse.ArgumentParser) -> None:
-    parser.print_help()

@@ -14,7 +14,7 @@ import jinja2
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 
-from agent_notes.core.db import _conn, list_projects, list_workspaces
+from agent_notes.core.db import list_projects, list_workspaces
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
@@ -132,7 +132,7 @@ def search(request: Request, q: str = ""):
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers — delegate to model layer, post-process for web display
 # ---------------------------------------------------------------------------
 
 
@@ -147,68 +147,42 @@ def _find_project(workspace_id: int, slug: str):
 
 
 def _query_breadcrumbs(project_id: int) -> list[dict]:
-    with _conn() as conn:
-        from psycopg.rows import dict_row
+    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
 
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            "SELECT identifier, title, kind, status, severity, created_at, updated_at "
-            "FROM breadcrumbs WHERE project_id = %s ORDER BY updated_at DESC LIMIT 200",
-            (project_id,),
-        )
-        return [dict(r) for r in cur.fetchall()]
+    rows = BreadcrumbModel.query_breadcrumbs(project_id=project_id, limit=200)
+    return [_strip_embedding(r) for r in rows]
 
 
 def _query_memories(project_id: int, workspace_id: int) -> list[dict]:
-    with _conn() as conn:
-        from psycopg.rows import dict_row
+    from agent_notes.core import memory_model
 
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            "SELECT name, memory_type, LEFT(body, 120) AS body_preview, "
-            "created_at, updated_at "
-            "FROM memories WHERE project_id = %s AND workspace_id = %s AND active = true "
-            "ORDER BY updated_at DESC LIMIT 200",
-            (project_id, workspace_id),
-        )
-        return [dict(r) for r in cur.fetchall()]
+    return memory_model.list_memories(workspace_id=workspace_id, project_id=project_id, limit=200)
 
 
 def _get_breadcrumb(project_id: int, identifier: str) -> dict | None:
-    with _conn() as conn:
-        from psycopg.rows import dict_row
+    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
 
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            "SELECT identifier, title, kind, status, severity, body, "
-            "external_refs, diagnostic_keys, created_at, updated_at "
-            "FROM breadcrumbs WHERE project_id = %s AND identifier = %s",
-            (project_id, identifier),
-        )
-        row = cur.fetchone()
-        return dict(row) if row else None
+    row = BreadcrumbModel.get_breadcrumb(project_id, identifier)
+    return _strip_embedding(row) if row else None
 
 
 def _get_memory(project_id: int, workspace_id: int, name: str) -> dict | None:
-    with _conn() as conn:
-        from psycopg.rows import dict_row
+    from agent_notes.core import memory_model
 
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            "SELECT id, name, memory_type, body, attributes, "
-            "supersedes, created_at, updated_at "
-            "FROM memories WHERE project_id = %s AND workspace_id = %s "
-            "AND name = %s AND active = true",
-            (project_id, workspace_id, name),
-        )
-        row = cur.fetchone()
-        return dict(row) if row else None
+    return memory_model.get_memory(workspace_id, project_id, name)
+
+
+def _strip_embedding(row: dict) -> dict:
+    """Remove the embedding vector from a breadcrumb dict for display."""
+    return {k: v for k, v in row.items() if k != "embedding"}
 
 
 def _search_all(query_vec: list[float], limit: int = 20) -> list[dict]:
-    with _conn() as conn:
-        from psycopg.rows import dict_row
+    from psycopg.rows import dict_row
 
+    from agent_notes.core.db import _conn
+
+    with _conn() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             """

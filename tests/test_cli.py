@@ -173,7 +173,12 @@ def test_bad_input_emits_parseable_json_error(argv):
 def test_link_add_bad_ref_does_not_traceback():
     """link add has no --json; a malformed ref must be a clean error on stderr
     (exit !=0, empty stdout), never an uncaught traceback."""
-    result = _run("link", "add", "--from", "bad", "--to", "k:w/p/i", "--type", "relates_to", check=False)
+    result = _run(
+        "link", "add",
+        "--from", "bad", "--to", "k:w/p/i",
+        "--type", "relates_to",
+        check=False,
+    )
     assert result.returncode != 0
     assert result.stdout.strip() == ""
     assert "Error" in result.stderr and "Traceback" not in result.stderr

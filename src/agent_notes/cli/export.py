@@ -41,7 +41,11 @@ def cmd_export(args: argparse.Namespace) -> int:
     elif args.workspace:
         ws = next((w for w in list_workspaces() if w.slug == args.workspace), None)
         if ws is None:
-            print(json.dumps({"error": f"workspace '{args.workspace}' not found"}))
+            available = [w.slug for w in list_workspaces()]
+            print(json.dumps({
+                "error": f"workspace '{args.workspace}' not found",
+                "available": available,
+            }))
             return EXIT_NOT_CONFIGURED
         projects = list_projects(workspace_id=ws.id)
         workspaces = [

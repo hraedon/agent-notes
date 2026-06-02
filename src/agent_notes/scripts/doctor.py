@@ -3,18 +3,22 @@
 Checks:
 1. DSN reachable
 2. Schema up to date (core tables present)
-3. Embedding model loads
+3. Embedding model loads (opt-in via --check-embed)
 4. Links audit (dangling links)
 5. Vocabulary integrity
+6. Bridge target reachable
+7. Stale MCP entries in harness configs
 
 Exit code: 0 if all healthy, 1 if any check failed.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import time
+from pathlib import Path
 
 
 def _print_section(title: str) -> None:
@@ -243,8 +247,82 @@ def _check_bridge_target() -> tuple[bool, str]:
         return False, str(exc)
 
 
-def run(skip_embed: bool = False) -> int:
-    """Run all checks and print a summary. Returns exit code."""
+# Known console scripts shipped by this package (from pyproject.toml).
+_KNOWN_SCRIPTS = {
+    "agent-notes",
+    "agent-notes-setup",
+    "agent-notes-migrate",
+    "agent-notes-import-reflections",
+    "agent-notes-doctor",
+    "agent-notes-bridge",
+    "agent-notes-web",
+}
+
+# Harness config files to probe for stale MCP entries.
+_HARNESS_CONFIGS = [
+    Path.home() / ".claude.json",
+    Path.home() / ".config" / "opencode" / "opencode.json",
+]
+
+
+def _extract_mcp_commands(config: dict) -> list[str]:
+    """Extract command strings from MCP server entries in a harness config."""
+    commands = []
+    # Claude Code format: { "mcpServers": { "name": { "command": "...", ... } } }
+    mcp_servers = config.get("mcpServers", {})
+    if isinstance(mcp_servers, dict):
+        for server_cfg in mcp_servers.values():
+            if isinstance(server_cfg, dict) and "command" in server_cfg:
+                commands.append(str(server_cfg["command"]))
+
+    # OpenCode format: { "mcp": { "servers": { "name": { "command": "...", ... } } } }
+    mcp = config.get("mcp", {})
+    if isinstance(mcp, dict):
+        servers = mcp.get("servers", {})
+        if isinstance(servers, dict):
+            for server_cfg in servers.values():
+                if isinstance(server_cfg, dict) and "command" in server_cfg:
+                    commands.append(str(server_cfg["command"]))
+
+    return commands
+
+
+def _check_harness_configs() -> tuple[bool, str]:
+    """Detect stale MCP entries referencing removed agent-notes console scripts."""
+    stale_entries: list[str] = []
+
+    for config_path in _HARNESS_CONFIGS:
+        if not config_path.exists():
+            continue
+        try:
+            text = config_path.read_text(encoding="utf-8")
+            config = json.loads(text)
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        commands = _extract_mcp_commands(config)
+        for cmd in commands:
+            cmd_name = Path(cmd).name
+            # Check if the command looks like an agent-notes script but isn't
+            # in the known set. Also check if it references a path that doesn't exist.
+            if "agent-notes" in cmd_name:
+                if cmd_name not in _KNOWN_SCRIPTS:
+                    stale_entries.append(f"{config_path}: {cmd_name}")
+                elif Path(cmd).is_absolute() and not Path(cmd).exists():
+                    stale_entries.append(f"{config_path}: {cmd} (not on disk)")
+
+    if stale_entries:
+        return False, "Stale MCP entries found:\n    " + "\n    ".join(stale_entries)
+    return True, "No stale MCP entries in harness configs"
+
+
+def run(skip_embed: bool = False, check_embed: bool = False) -> int:
+    """Run all checks and print a summary. Returns exit code.
+
+    Args:
+        skip_embed: Deprecated; kept for backward compatibility (no-op).
+        check_embed: If True, run the embedding model check (~270MB load).
+    """
     print("agent-notes-doctor — health check\n")
 
     all_ok = True
@@ -273,14 +351,14 @@ def run(skip_embed: bool = False) -> int:
         print("One or more prerequisite checks failed.")
         return 1
 
-    if skip_embed:
-        _print_section("3. Embedding Model")
-        print("  SKIPPED: --skip-embed")
-    else:
+    if check_embed:
         ok, msg = _check_embedding()
         _print_section("3. Embedding Model")
         _print_result(ok, msg)
         all_ok = all_ok and ok
+    else:
+        _print_section("3. Embedding Model")
+        print("  SKIPPED: use --check-embed to verify (~270MB model load)")
 
     ok, msg = _check_links_audit()
     _print_section("4. Links Audit")
@@ -294,6 +372,11 @@ def run(skip_embed: bool = False) -> int:
 
     ok, msg = _check_bridge_target()
     _print_section("6. Bridge Target")
+    _print_result(ok, msg)
+    all_ok = all_ok and ok
+
+    ok, msg = _check_harness_configs()
+    _print_section("7. Harness Configs")
     _print_result(ok, msg)
     all_ok = all_ok and ok
 
@@ -313,10 +396,15 @@ def main() -> None:
     parser.add_argument(
         "--skip-embed",
         action="store_true",
-        help="Skip embedding model check (saves ~30s on first load)",
+        help="Deprecated; embedding check is now opt-in via --check-embed",
+    )
+    parser.add_argument(
+        "--check-embed",
+        action="store_true",
+        help="Run embedding model check (~270MB model load, ~30s on first run)",
     )
     args = parser.parse_args()
-    sys.exit(run(skip_embed=args.skip_embed))
+    sys.exit(run(skip_embed=args.skip_embed, check_embed=args.check_embed))
 
 
 if __name__ == "__main__":

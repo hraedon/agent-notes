@@ -4,7 +4,7 @@ import argparse
 import json
 from datetime import datetime
 
-from agent_notes.cli.common import EXIT_GENERIC, EXIT_SUCCESS
+from agent_notes.cli.common import EXIT_GENERIC, EXIT_SUCCESS, _print_sub_help
 
 
 def cmd_changes_since(args: argparse.Namespace) -> int:
@@ -60,7 +60,3 @@ def register_changes_parsers(sub: argparse._SubParsersAction) -> None:
     changes_since.set_defaults(func=cmd_changes_since)
 
     changes.set_defaults(func=lambda args: (_print_sub_help(changes), EXIT_SUCCESS)[1])
-
-
-def _print_sub_help(parser: argparse.ArgumentParser) -> None:
-    parser.print_help()

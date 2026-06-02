@@ -286,7 +286,13 @@ def test_parse_breadcrumb_file_skips_non_breadcrumb(tmp_path):
 
 def test_sync_imports_skips_and_is_idempotent(default_project, tmp_path):
     (tmp_path / "001-foo.md").write_text(
-        '---\nnumber: "001"\ntitle: First\nkind: bug\nstatus: new\nseverity: high\n---\n\nBody one.\n'
+        "---\n"
+        'number: "001"\n'
+        "title: First\n"
+        "kind: bug\n"
+        "status: new\n"
+        "severity: high\n"
+        "---\n\nBody one.\n"
     )
     (tmp_path / "README.md").write_text("# Breadcrumbs\n\nNot a breadcrumb.\n")
     s = sync_breadcrumbs_from_dir(default_project.id, tmp_path, lambda t: _vec768())
@@ -297,7 +303,13 @@ def test_sync_imports_skips_and_is_idempotent(default_project, tmp_path):
 
     # Re-running upserts (no duplicate, title updated).
     (tmp_path / "001-foo.md").write_text(
-        '---\nnumber: "001"\ntitle: First (edited)\nkind: bug\nstatus: new\nseverity: high\n---\n\nB.\n'
+        "---\n"
+        'number: "001"\n'
+        "title: First (edited)\n"
+        "kind: bug\n"
+        "status: new\n"
+        "severity: high\n"
+        "---\n\nB.\n"
     )
     s2 = sync_breadcrumbs_from_dir(default_project.id, tmp_path, lambda t: _vec768())
     assert s2["imported"] == ["001"]
@@ -306,7 +318,13 @@ def test_sync_imports_skips_and_is_idempotent(default_project, tmp_path):
 
 def test_sync_missing_vocab_reported_then_created(default_project, tmp_path):
     (tmp_path / "010-x.md").write_text(
-        '---\nnumber: "010"\ntitle: Design item\nkind: design\nstatus: proposed\nseverity: high\n---\n\nB.\n'
+        "---\n"
+        'number: "010"\n'
+        "title: Design item\n"
+        "kind: design\n"
+        "status: proposed\n"
+        "severity: high\n"
+        "---\n\nB.\n"
     )
     # 'design'/'proposed' are not seeded -> reported, not imported.
     s = sync_breadcrumbs_from_dir(default_project.id, tmp_path, lambda t: _vec768())

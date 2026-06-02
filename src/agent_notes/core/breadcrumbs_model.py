@@ -41,12 +41,30 @@ class BreadcrumbModel:
         cur.execute(
             (
                 "SELECT 1 FROM vocabularies WHERE workspace_id = %s "
-                "AND kind_namespace = %s AND name = %s"
+                "AND kind_namespace = %s AND name = %s AND archived = false"
             ),
             (workspace_id, kind_namespace, name),
         )
         if cur.fetchone() is None:
-            raise ValueError(f"Unknown {kind_namespace} value: {name!r}")
+            cur.execute(
+                "SELECT name FROM vocabularies "
+                "WHERE workspace_id = %s AND kind_namespace = %s AND archived = false "
+                "ORDER BY sort_order",
+                (workspace_id, kind_namespace),
+            )
+            valid = [r["name"] for r in cur.fetchall()]
+            if valid:
+                raise ValueError(
+                    f"Unknown {kind_namespace} value: {name!r}. "
+                    f"Valid values: {', '.join(valid)}"
+                )
+            else:
+                raise ValueError(
+                    f"Unknown {kind_namespace} value: {name!r}. "
+                    f"No {kind_namespace} entries found for this workspace. "
+                    f"Seed with: agent-notes vocabulary add --workspace <slug> "
+                    f"{kind_namespace} {name}"
+                )
 
     @classmethod
     def file_breadcrumb(

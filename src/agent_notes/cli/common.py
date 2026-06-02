@@ -39,7 +39,8 @@ def _resolve(
         if ws is None:
             available = [w.slug for w in list_workspaces()]
             hint = f" Available: {', '.join(available)}" if available else ""
-            print(f"Workspace '{ws_slug}' not found.{hint}", file=sys.stderr)
+            suggestion = " Use --path for auto-resolution or run 'agent-notes workspace list'."
+            print(f"Workspace '{ws_slug}' not found.{hint}{suggestion}", file=sys.stderr)
             raise SystemExit(EXIT_NOT_FOUND)
         proj = next((p for p in list_projects(workspace_id=ws.id) if p.slug == proj_slug), None)
         if proj is None:
@@ -107,6 +108,10 @@ def _bc_format(bc: dict) -> str:
         bc.get("body", ""),
     ]
     return "\n".join(lines)
+
+
+def _print_sub_help(parser: argparse.ArgumentParser) -> None:
+    parser.print_help()
 
 
 def _add_common(p: argparse.ArgumentParser) -> None:

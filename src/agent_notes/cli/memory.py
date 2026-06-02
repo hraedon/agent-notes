@@ -9,6 +9,7 @@ from agent_notes.cli.common import (
     EXIT_NOT_FOUND,
     EXIT_SUCCESS,
     _add_common,
+    _print_sub_help,
     _resolve,
     report_resolution_failure,
 )
@@ -262,7 +263,3 @@ def register_memory_parsers(sub: argparse._SubParsersAction) -> None:
     mem_update.set_defaults(func=cmd_mem_update)
 
     mem.set_defaults(func=lambda args: (_print_sub_help(mem), EXIT_SUCCESS)[1])
-
-
-def _print_sub_help(parser: argparse.ArgumentParser) -> None:
-    parser.print_help()

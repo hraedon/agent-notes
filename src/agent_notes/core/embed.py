@@ -12,6 +12,7 @@ columns exist; see the TODO comment in embed().
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from typing import TYPE_CHECKING
@@ -38,6 +39,15 @@ def _get_model() -> SentenceTransformer:
     if _model is None:
         with _lock:
             if _model is None:
+                # Suppress HF Hub warnings and progress bars for cleaner CLI output.
+                os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+                os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+                os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+
+                # Suppress sentence-transformers logging during model load.
+                logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
+                logging.getLogger("huggingface").setLevel(logging.WARNING)
+
                 from sentence_transformers import SentenceTransformer
 
                 _model = SentenceTransformer(_MODEL_NAME, trust_remote_code=_TRUST_REMOTE_CODE)
