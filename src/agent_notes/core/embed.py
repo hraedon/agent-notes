@@ -6,8 +6,8 @@ and AGENT_NOTES_EMBED_DIM env vars so operators can swap models (MiniLM-384,
 BGE-large-1024) without code changes.
 
 Call order: always embed() before opening a DB transaction (decision 26).
-Dim-vs-schema validation is deferred to Phase 2a when kind tables with vector
-columns exist; see the TODO comment in embed().
+The embed() function validates output dimension against AGENT_NOTES_EMBED_DIM
+on every call to protect the pgvector column from silent drift.
 """
 
 from __future__ import annotations
@@ -30,6 +30,16 @@ _TRUST_REMOTE_CODE = os.environ.get("AGENT_NOTES_TRUST_REMOTE_CODE", "false").lo
     "yes",
 )
 
+# Suppress HF Hub warnings and progress bars at module load so they're
+# effective before sentence_transformers is imported on the first call.
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+
+# Suppress sentence-transformers logging during model load.
+logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
+logging.getLogger("huggingface").setLevel(logging.WARNING)
+
 _model: SentenceTransformer | None = None
 _lock = threading.Lock()
 
@@ -39,15 +49,6 @@ def _get_model() -> SentenceTransformer:
     if _model is None:
         with _lock:
             if _model is None:
-                # Suppress HF Hub warnings and progress bars for cleaner CLI output.
-                os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
-                os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
-                os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-
-                # Suppress sentence-transformers logging during model load.
-                logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
-                logging.getLogger("huggingface").setLevel(logging.WARNING)
-
                 from sentence_transformers import SentenceTransformer
 
                 _model = SentenceTransformer(_MODEL_NAME, trust_remote_code=_TRUST_REMOTE_CODE)

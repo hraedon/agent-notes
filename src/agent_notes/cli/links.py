@@ -38,7 +38,8 @@ def _resolve_link_ref(
     if ws is None:
         available = [w.slug for w in list_workspaces()]
         hint = f" Available: {', '.join(available)}" if available else ""
-        raise ValueError(f"workspace '{workspace_slug}' not found.{hint}")
+        suggestion = " Use --path for auto-resolution or run 'agent-notes workspace list'."
+        raise ValueError(f"workspace '{workspace_slug}' not found.{hint}{suggestion}")
     proj = next((p for p in list_projects(workspace_id=ws.id) if p.slug == project_slug), None)
     if proj is None:
         raise ValueError(f"project '{project_slug}' not found")

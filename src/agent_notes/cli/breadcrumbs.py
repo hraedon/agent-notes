@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -189,11 +190,12 @@ def cmd_bc_find(args: argparse.Namespace) -> int:
             if ws is None:
                 available = [w.slug for w in list_workspaces()]
                 hint = f" Available: {', '.join(available)}" if available else ""
+                suggestion = " Use --path for auto-resolution or run 'agent-notes workspace list'."
                 if use_json:
                     msg = f"workspace '{args.workspace}' not found"
                     print(json.dumps({"error": msg, "available": available}, indent=2))
                 else:
-                    print(f"Workspace '{args.workspace}' not found.{hint}")
+                    print(f"Workspace '{args.workspace}' not found.{hint}{suggestion}")
                 return EXIT_NOT_FOUND
             ws_id = ws.id
         else:
@@ -214,13 +216,33 @@ def cmd_bc_find(args: argparse.Namespace) -> int:
             return code
 
     if args.text:
-        vec = embed(args.text, task="query").tolist()
-        rows = BreadcrumbModel.find_breadcrumbs(
-            query_vec=vec,
-            project_id=proj_id,
-            workspace_id=ws_id,
-            limit=min(args.limit or 10, 50),
-        )
+        # Quick-win: exact identifier lookup (e.g., "BC-001" or "001")
+        # If the text is a short identifier-like string, do a direct lookup
+        # to avoid the 270MB embedding model cold-load.
+        text = args.text.strip()
+        if text.isdigit() or (text.startswith("BC-") and text[3:].isdigit()):
+            rows = BreadcrumbModel.query_breadcrumbs(
+                project_id=proj_id,
+                workspace_id=ws_id,
+                identifier=text,
+                limit=1,
+            )
+            if not rows:
+                # Fall back to identifier partial match
+                rows = BreadcrumbModel.query_breadcrumbs(
+                    project_id=proj_id,
+                    workspace_id=ws_id,
+                    limit=min(args.limit or 50, 200),
+                )
+                rows = [r for r in rows if text.lower() in r["identifier"].lower()]
+        else:
+            vec = embed(args.text, task="query").tolist()
+            rows = BreadcrumbModel.find_breadcrumbs(
+                query_vec=vec,
+                project_id=proj_id,
+                workspace_id=ws_id,
+                limit=min(args.limit or 10, 50),
+            )
     else:
         rows = BreadcrumbModel.query_breadcrumbs(
             project_id=proj_id,
@@ -340,6 +362,70 @@ def cmd_bc_sync(args: argparse.Namespace) -> int:
     return EXIT_CONFLICT if (summary["errors"] or summary["missing_vocab"]) else EXIT_SUCCESS
 
 
+def cmd_bc_export_index(args: argparse.Namespace) -> int:
+    """Write a plain-text fallback index of open breadcrumbs to the repo root.
+
+    This is the offline fallback: if the agent-notes CLI/DB is broken, an agent
+    can still read OPEN_BREADCRUMBS.txt to see what's open.
+    """
+    use_json = getattr(args, "json", False)
+    try:
+        ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
+
+    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
+    from agent_notes.core.db import list_projects
+
+    # Determine output path
+    if args.output:
+        out_path = Path(args.output)
+    else:
+        # Find the project's repo_root
+        proj = next((p for p in list_projects(workspace_id=ws_id) if p.id == proj_id), None)
+        rr = proj.repo_root if proj else None
+        out_path = Path(rr or ".") / "OPEN_BREADCRUMBS.txt"
+
+    open_bcs = BreadcrumbModel.query_breadcrumbs(project_id=proj_id, is_open=True, limit=200)
+    # Sort by severity then recency
+    severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    open_bcs.sort(
+        key=lambda b: (
+            severity_order.get(b.get("severity", "medium"), 2),
+            b.get("updated_at", ""),
+        )
+    )
+
+    lines = [
+        f"# Open Breadcrumbs for {proj_slug}",
+        f"# Generated: {datetime.now().isoformat()}",
+        f"# Total: {len(open_bcs)}",
+        "#",
+        "# This file is a plain-text fallback. If the agent-notes CLI is unavailable,",
+        "# agents can read this file to see open breadcrumbs.",
+        "# Do not edit by hand; regenerate with: agent-notes breadcrumb export-index",
+        "",
+    ]
+
+    for bc in open_bcs:
+        ident = bc.get("identifier", "?")
+        kind = bc.get("kind", "?")
+        status = bc.get("status", "?")
+        severity = bc.get("severity", "medium")
+        title = bc.get("title", "(no title)")
+        lines.append(f"[{severity}] {ident} ({kind} / {status}) — {title}")
+
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    if use_json:
+        print(json.dumps({"path": str(out_path), "count": len(open_bcs)}, indent=2))
+    else:
+        print(f"Exported {len(open_bcs)} open breadcrumb(s) to {out_path}")
+    return EXIT_SUCCESS
+
+
 def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
     bc = sub.add_parser("breadcrumb", help="Breadcrumb operations")
     bc_sub = bc.add_subparsers(dest="bc_cmd")
@@ -427,5 +513,17 @@ def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
     )
     _add_common(bc_sync)
     bc_sync.set_defaults(func=cmd_bc_sync)
+
+    bc_export_index = bc_sub.add_parser(
+        "export-index",
+        help="Export open breadcrumbs to a plain-text fallback index in the repo root",
+    )
+    bc_export_index.add_argument(
+        "--output",
+        default=None,
+        help="Output path (default: <repo-root>/OPEN_BREADCRUMBS.txt)",
+    )
+    _add_common(bc_export_index)
+    bc_export_index.set_defaults(func=cmd_bc_export_index)
 
     bc.set_defaults(func=lambda args: (_print_sub_help(bc), EXIT_SUCCESS)[1])

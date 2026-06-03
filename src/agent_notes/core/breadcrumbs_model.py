@@ -276,6 +276,7 @@ class BreadcrumbModel:
         kind: str | None = None,
         severity: str | None = None,
         is_open: bool | None = None,
+        identifier: str | None = None,
         limit: int = 50,
     ) -> list[dict]:
         conditions: list[str] = []
@@ -306,6 +307,9 @@ class BreadcrumbModel:
                 conditions.append("b.closed_at IS NULL")
             else:
                 conditions.append("b.closed_at IS NOT NULL")
+        if identifier is not None:
+            conditions.append("b.identifier = %s")
+            params.append(identifier)
 
         where = " AND ".join(conditions) if conditions else "TRUE"
         params.append(min(limit, 200))

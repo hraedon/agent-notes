@@ -344,6 +344,8 @@ def run(skip_embed: bool = False, check_embed: bool = False) -> int:
             "3. Embedding Model",
             "4. Links Audit",
             "5. Vocabulary Integrity",
+            "6. Bridge Target",
+            "7. Harness Configs",
         ):
             _print_section(name)
             print("  SKIPPED: prerequisite check(s) failed (DSN / Schema)")

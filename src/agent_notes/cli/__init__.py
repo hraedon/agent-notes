@@ -58,7 +58,11 @@ def _install_claude_session_hook(repo_root: str) -> tuple[str, bool]:
     return settings_path, not already
 
 
-def cmd_init(path: str | None, install_hooks: bool = True) -> int:
+def cmd_init(
+    path: str | None,
+    workspace_slug: str | None = None,
+    install_hooks: bool = True,
+) -> int:
     target = os.path.abspath(path or ".")
 
     git_root = target
@@ -79,9 +83,11 @@ def cmd_init(path: str | None, install_hooks: bool = True) -> int:
 
     from agent_notes.core.db import get_or_create_project, get_or_create_workspace
 
-    ws = get_or_create_workspace("default", "Default Workspace")
+    ws_slug = workspace_slug or "default"
+    ws_name = ws_slug.replace("-", " ").title()
+    ws = get_or_create_workspace(ws_slug, ws_name)
     get_or_create_project(ws.id, slug=name, name=name, repo_root=repo_root)
-    print(f"Project '{name}' registered (workspace=default, repo_root={repo_root}).")
+    print(f"Project '{name}' registered (workspace={ws_slug}, repo_root={repo_root}).")
 
     if install_hooks:
         settings_path, changed = _install_claude_session_hook(repo_root)
@@ -130,12 +136,16 @@ def main() -> int:
         prog="agent-notes",
         description="agent-notes CLI — sync interface to breadcrumbs, memories, and search",
     )
+    parser.add_argument("--version", action="store_true", help="Show version and exit")
     sub = parser.add_subparsers(dest="command")
 
     init_p = sub.add_parser(
         "init", help="Idempotently register a project from a path and wire lifecycle hooks"
     )
     init_p.add_argument("path", nargs="?", default=".")
+    init_p.add_argument(
+        "--workspace", default=None, help="Workspace slug (default: default)"
+    )
     init_p.add_argument(
         "--no-hooks", action="store_true", help="Register only; do not wire the SessionStart hook"
     )
@@ -170,8 +180,14 @@ def main() -> int:
 
     args = parser.parse_args()
 
+    if args.version:
+        from importlib.metadata import version
+
+        print(version("agent-notes"))
+        return EXIT_SUCCESS
+
     if args.command == "init":
-        return cmd_init(args.path, install_hooks=not args.no_hooks)
+        return cmd_init(args.path, workspace_slug=args.workspace, install_hooks=not args.no_hooks)
     if args.command == "resolve":
         return cmd_resolve(args.path, args.json)
     if args.command == "doctor":

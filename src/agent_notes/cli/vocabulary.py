@@ -14,13 +14,14 @@ def cmd_vocab_list(args: argparse.Namespace) -> int:
     if ws is None:
         available = [w.slug for w in list_workspaces()]
         hint = f" Available: {', '.join(available)}" if available else ""
+        suggestion = " Use --path for auto-resolution or run 'agent-notes workspace list'."
         if use_json:
             print(json.dumps({
                 "error": f"workspace '{args.workspace}' not found",
                 "available": available,
             }, indent=2))
         else:
-            print(f"Workspace '{args.workspace}' not found.{hint}")
+            print(f"Workspace '{args.workspace}' not found.{hint}{suggestion}")
         return EXIT_NOT_FOUND
 
     vocabs = list_vocabulary(
@@ -43,13 +44,14 @@ def cmd_vocab_add(args: argparse.Namespace) -> int:
     if ws is None:
         available = [w.slug for w in list_workspaces()]
         hint = f" Available: {', '.join(available)}" if available else ""
+        suggestion = " Use --path for auto-resolution or run 'agent-notes workspace list'."
         if use_json:
             print(json.dumps({
                 "error": f"workspace '{args.workspace}' not found",
                 "available": available,
             }, indent=2))
         else:
-            print(f"Workspace '{args.workspace}' not found.{hint}")
+            print(f"Workspace '{args.workspace}' not found.{hint}{suggestion}")
         return EXIT_NOT_FOUND
 
     vocab = add_vocabulary(
@@ -77,13 +79,14 @@ def cmd_vocab_archive(args: argparse.Namespace) -> int:
     if ws is None:
         available = [w.slug for w in list_workspaces()]
         hint = f" Available: {', '.join(available)}" if available else ""
+        suggestion = " Use --path for auto-resolution or run 'agent-notes workspace list'."
         if use_json:
             print(json.dumps({
                 "error": f"workspace '{args.workspace}' not found",
                 "available": available,
             }, indent=2))
         else:
-            print(f"Workspace '{args.workspace}' not found.{hint}")
+            print(f"Workspace '{args.workspace}' not found.{hint}{suggestion}")
         return EXIT_NOT_FOUND
     archive_vocabulary(ws.id, args.kind, args.name)
     print(f"Archived vocabulary entry: {args.kind}/{args.name}")
