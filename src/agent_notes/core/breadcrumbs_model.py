@@ -441,3 +441,51 @@ class BreadcrumbModel:
                 for r in rows
             ],
         }
+
+    @classmethod
+    def reconcile_with_git(
+        cls,
+        project_id: int,
+        repo_root: str | None,
+        *,
+        apply: bool = False,
+        lookback: int = 400,
+    ) -> list[dict]:
+        """Detect open breadcrumbs that a recent commit already resolved.
+
+        Scans the project's git history for resolution references to each open
+        breadcrumb (see :mod:`agent_notes.core.git_reconcile`). With
+        ``apply=True`` it transitions each match to ``resolved`` and records the
+        resolving commit in ``external_refs`` so the provenance survives — the DB
+        then matches the work record. Without it, the result is advisory only.
+        """
+        from agent_notes.core.git_reconcile import scan_git_for_resolutions
+
+        open_bcs = cls.query_breadcrumbs(project_id=project_id, is_open=True, limit=200)
+        by_id = {b["identifier"]: b for b in open_bcs}
+        hits = scan_git_for_resolutions(repo_root, list(by_id), lookback=lookback)
+
+        results: list[dict] = []
+        for ident, info in hits.items():
+            bc = by_id[ident]
+            applied = False
+            if apply:
+                refs = dict(bc.get("external_refs") or {})
+                refs["resolved_by_commit"] = info["commit"]
+                refs["resolved_by_subject"] = info["subject"]
+                cls.update_breadcrumb(
+                    project_id, ident, status="resolved", external_refs=refs
+                )
+                applied = True
+            results.append(
+                {
+                    "identifier": ident,
+                    "current_status": bc.get("status"),
+                    "suggested_status": "resolved",
+                    "commit": info["commit"],
+                    "subject": info["subject"],
+                    "applied": applied,
+                }
+            )
+        results.sort(key=lambda r: r["identifier"])
+        return results

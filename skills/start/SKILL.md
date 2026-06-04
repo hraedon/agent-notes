@@ -25,7 +25,31 @@ agent-notes workspace list --json
 It returns `id`, `slug`, `name`, and `project_count` for every
 workspace. Don't go fishing through `vocabulary list` for this.
 
-## Three quick lookups
+## First — reconcile against git
+
+Before listing what's open, let the tool self-heal the most common drift:
+breadcrumbs resolved in a commit ("resolve BC-094") that nobody transitioned in
+the DB, so they sit open for weeks. Run:
+
+```
+agent-notes breadcrumb reconcile --path <repo-path>
+```
+
+It scans recent git history for open breadcrumbs referenced with resolution
+intent. The match list is conservative (negation-guarded) but not infallible —
+glance at it. If the matches are genuine resolutions, apply them so the open
+list below reflects reality:
+
+```
+agent-notes breadcrumb reconcile --path <repo-path> --apply
+```
+
+This is the session-start counterpart to the same step in `/end`; running it
+here catches drift left by a prior session that ended without it. Note what you
+reconciled in the briefing (e.g. "reconciled 2 already resolved in git"). If the
+repo isn't git or isn't registered, reconcile prints nothing — move on.
+
+## Then — three quick lookups
 
 Run all three (parallel-safe), then synthesize a compact briefing.
 

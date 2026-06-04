@@ -39,6 +39,23 @@ def cmd_orient(args: argparse.Namespace) -> int:
     changes = changes_since(since, workspace_id=ws_id, project_id=proj_id, limit=args.limit)
     memories = list_memories(workspace_id=ws_id, project_id=proj_id, limit=args.limit)
 
+    # Optionally surface silent-resolution drift: open breadcrumbs that a recent
+    # commit already closed via its message but that nobody transitioned in the
+    # DB. Off by default — `orient` stays git-free and cheap (decision 15 keeps
+    # git out of the default path). Enable with `--reconcile`; the natural place
+    # is the SessionStart hook, configured once, so every session gets the check
+    # without any per-session agent action. Read-only and fail-safe.
+    drift: dict[str, dict[str, str]] = {}
+    if getattr(args, "reconcile", False):
+        from agent_notes.core.db import list_projects
+        from agent_notes.core.git_reconcile import scan_git_for_resolutions
+
+        _proj = next((p for p in list_projects(workspace_id=ws_id) if p.id == proj_id), None)
+        _repo_root = _proj.repo_root if _proj else None
+        drift = scan_git_for_resolutions(
+            _repo_root, [b["identifier"] for b in open_bcs], lookback=200
+        )
+
     payload = {
         "project": proj_slug,
         "workspace": ws_slug,
@@ -62,6 +79,10 @@ def cmd_orient(args: argparse.Namespace) -> int:
             for c in changes
         ],
         "memories": [{"name": m["name"], "type": m["memory_type"]} for m in memories],
+        "resolved_in_git": [
+            {"identifier": ident, "commit": info["commit"], "subject": info["subject"]}
+            for ident, info in sorted(drift.items())
+        ],
     }
 
     if use_json:
@@ -71,6 +92,13 @@ def cmd_orient(args: argparse.Namespace) -> int:
         print(f"\nOpen breadcrumbs ({len(open_bcs)}):")
         for b in open_bcs:
             print(f"  - [{b['severity']}] {b['identifier']} ({b['status']}) — {b['title']}")
+        if drift:
+            print(
+                f"\n⚠ Resolved in git but still open in the DB ({len(drift)}) — "
+                "run 'agent-notes breadcrumb reconcile --apply':"
+            )
+            for ident, info in sorted(drift.items()):
+                print(f"  - {ident} — {info['commit']} {info['subject']!r}")
         print(f"\nChanges in last {args.days}d ({len(changes)}):")
         for c in changes:
             print(f"  - [{c.kind}] {c.identifier} {c.event} @ {c.changed_at}")
@@ -87,5 +115,11 @@ def register_orient_parser(sub: argparse._SubParsersAction) -> None:
     )
     orient.add_argument("--days", type=int, default=7, help="Recent-changes window (days)")
     orient.add_argument("--limit", type=int, default=15)
+    orient.add_argument(
+        "--reconcile",
+        action="store_true",
+        help="Also scan git history for open breadcrumbs already resolved in a "
+        "commit (read-only; off by default). Ideal in the SessionStart hook.",
+    )
     _add_common(orient)
     orient.set_defaults(func=cmd_orient)
