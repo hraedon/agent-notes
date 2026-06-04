@@ -426,6 +426,57 @@ def cmd_bc_export_index(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
+def cmd_bc_reconcile(args: argparse.Namespace) -> int:
+    """Reconcile open breadcrumbs against git history.
+
+    Surfaces (and, with ``--apply``, resolves) open breadcrumbs that a recent
+    commit already closed via its message — the silent-resolution drift that the
+    DB never hears about on its own.
+    """
+    use_json = getattr(args, "json", False)
+    try:
+        ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
+
+    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
+    from agent_notes.core.db import list_projects
+
+    proj = next((p for p in list_projects(workspace_id=ws_id) if p.id == proj_id), None)
+    repo_root = proj.repo_root if proj else None
+    if not repo_root:
+        msg = (
+            f"Project {proj_slug!r} has no repo_root registered; cannot scan git "
+            "history. Set it with 'agent-notes init' / project registration."
+        )
+        if use_json:
+            print(json.dumps({"error": msg, "results": []}))
+        else:
+            print(msg, file=sys.stderr)
+        return EXIT_SUCCESS  # advisory — absence of a repo isn't a hard failure
+
+    results = BreadcrumbModel.reconcile_with_git(
+        proj_id, repo_root, apply=args.apply, lookback=args.lookback
+    )
+
+    if use_json:
+        print(json.dumps({"results": results, "applied": args.apply}, indent=2, default=str))
+        return EXIT_SUCCESS
+
+    if not results:
+        print("No open breadcrumbs appear resolved in git history.")
+        return EXIT_SUCCESS
+
+    verb = "Resolved" if args.apply else "Would resolve"
+    for r in results:
+        print(f"  {verb} {r['identifier']} — {r['commit']} {r['subject']!r}")
+    if not args.apply:
+        print(f"\n{len(results)} suggestion(s). Re-run with --apply to update the DB.")
+    return EXIT_SUCCESS
+
+
 def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
     bc = sub.add_parser("breadcrumb", help="Breadcrumb operations")
     bc_sub = bc.add_subparsers(dest="bc_cmd")
@@ -525,5 +576,23 @@ def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
     )
     _add_common(bc_export_index)
     bc_export_index.set_defaults(func=cmd_bc_export_index)
+
+    bc_reconcile = bc_sub.add_parser(
+        "reconcile",
+        help="Detect (and optionally resolve) open breadcrumbs already closed in git history",
+    )
+    bc_reconcile.add_argument(
+        "--apply",
+        action="store_true",
+        help="Transition matched breadcrumbs to 'resolved' (default: dry-run/suggest only)",
+    )
+    bc_reconcile.add_argument(
+        "--lookback",
+        type=int,
+        default=400,
+        help="Number of recent commits to scan (default: 400)",
+    )
+    _add_common(bc_reconcile)
+    bc_reconcile.set_defaults(func=cmd_bc_reconcile)
 
     bc.set_defaults(func=lambda args: (_print_sub_help(bc), EXIT_SUCCESS)[1])

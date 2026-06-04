@@ -64,4 +64,8 @@ time. See Plan 004 §9 Q4 (resolved 2026-05-27).
 
 ## End of session
 
-`/end` runs `reflect` and commits any working-directory changes. There is no projection to rebuild (Plan 003 decision 46). The server never runs `git` itself (decision 15). During Phase 9a+, `/end` should use the CLI (`agent-notes`) instead of MCP tools where possible.
+`/end` runs `reflect` and commits any working-directory changes. There is no projection to rebuild (Plan 003 decision 46). During Phase 9a+, `/end` should use the CLI (`agent-notes`) instead of MCP tools where possible.
+
+**Git boundary (decision 15):** the server never *mutates* git — no `git mv`/commit as a side effect of a DB operation (that seam bred drift; `/end` owns git writes). Reconciliation (below) is the one place the tooling *reads* git, and only ever read-only `git log`, never as a side effect of `file`/`update`/`query` — only when explicitly invoked.
+
+**Breadcrumb ↔ git reconciliation.** The store's recurring drift is *silent resolution*: work lands in a commit ("resolve BC-094") but nobody transitions the DB, so the breadcrumb sits open for weeks. `agent-notes breadcrumb reconcile [--apply]` scans recent `git log` for open breadcrumbs referenced with resolution intent and (with `--apply`) resolves them, stamping the commit into `external_refs` for provenance. It's wired into `/end` step 1b (auto-reconcile before manual close) and is available as an opt-in `orient --reconcile` drift section (off by default to keep `orient` git-free and cheap; enable it once in the SessionStart hook so every session surfaces drift without per-session agent action). Detection is conservative — verb-near-identifier with a negation guard (`not done`, `todo`, `WIP`, `revert` are ignored) — but not infallible; review the dry-run before `--apply`.
