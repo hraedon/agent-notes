@@ -23,11 +23,34 @@ Look for a breadcrumbs directory at the repo root, in this order: `breadcrumbs/`
 
 If no breadcrumbs directory exists *and* this repo isn't wired to the agent-notes CLI, skip step 1 entirely — do not create one unprompted. Note it in the final report.
 
-### 1b. Close breadcrumbs worked on this session
+### 1b. Auto-reconcile against git first
 
-For each breadcrumb you actually addressed during the session, use the `update-breadcrumb` skill (or invoke `agent-notes breadcrumb update` directly). Match the project's "done" value (`resolved`, `implemented`, `closed` — whatever existing resolved entries use). If you partially addressed one, leave it open and append a note describing what's outstanding.
+Before closing anything by hand, let the tool catch what commits already say. The
+single most common drift is *silent resolution* — the work landed in a commit
+("resolve BC-094") but nobody told the DB, so the breadcrumb sits open for weeks.
+Run:
 
-### 1c. Open breadcrumbs for issues noticed
+```
+agent-notes breadcrumb reconcile --path <repo-path>          # dry-run: shows matches
+agent-notes breadcrumb reconcile --path <repo-path> --apply  # transition them to resolved
+```
+
+It scans recent git history for open breadcrumbs whose identifier appears in a
+commit with resolution intent, and (with `--apply`) resolves them and stamps the
+resolving commit into `external_refs`. Review the dry-run list first — it's
+conservative but not infallible. This handles the breadcrumbs you resolved via
+commit; the next step covers anything reconcile can't see.
+
+### 1c. Close breadcrumbs worked on this session
+
+For each breadcrumb you actually addressed but that reconcile did *not* catch (no
+commit, or a commit message that didn't name it), use the `update-breadcrumb`
+skill (or invoke `agent-notes breadcrumb update` directly). Match the project's
+"done" value (`resolved`, `implemented`, `closed` — whatever existing resolved
+entries use). If you partially addressed one, leave it open and append a note
+describing what's outstanding.
+
+### 1d. Open breadcrumbs for issues noticed
 
 For each defect, design question, or gap noticed during the session that wasn't fixed, use the `file-breadcrumb` skill — which itself requires a dedup search first. Be honest about severity. The "I noticed it but it's not worth filing" instinct is wrong by default; if you noticed it enough to consider filing, file it.
 
