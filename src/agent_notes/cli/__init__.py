@@ -14,6 +14,7 @@ import os
 from agent_notes.cli.breadcrumbs import register_breadcrumb_parsers
 from agent_notes.cli.changes import register_changes_parsers
 from agent_notes.cli.common import EXIT_GENERIC, EXIT_NOT_CONFIGURED, EXIT_SUCCESS
+from agent_notes.cli.events import register_events_parsers
 from agent_notes.cli.export import register_export_parsers
 from agent_notes.cli.links import register_link_parsers
 from agent_notes.cli.memory import register_memory_parsers
@@ -21,6 +22,7 @@ from agent_notes.cli.orient import register_orient_parser
 from agent_notes.cli.search import register_search_parsers
 from agent_notes.cli.skills import register_skills_parser
 from agent_notes.cli.vocabulary import register_vocabulary_parsers
+from agent_notes.cli.work_items import register_work_item_parsers
 from agent_notes.cli.workspace import register_workspace_parsers
 
 
@@ -143,9 +145,7 @@ def main() -> int:
         "init", help="Idempotently register a project from a path and wire lifecycle hooks"
     )
     init_p.add_argument("path", nargs="?", default=".")
-    init_p.add_argument(
-        "--workspace", default=None, help="Workspace slug (default: default)"
-    )
+    init_p.add_argument("--workspace", default=None, help="Workspace slug (default: default)")
     init_p.add_argument(
         "--no-hooks", action="store_true", help="Register only; do not wire the SessionStart hook"
     )
@@ -168,12 +168,14 @@ def main() -> int:
     )
 
     register_breadcrumb_parsers(sub)
+    register_work_item_parsers(sub)
     register_memory_parsers(sub)
     register_link_parsers(sub)
     register_search_parsers(sub)
     register_vocabulary_parsers(sub)
     register_workspace_parsers(sub)
     register_changes_parsers(sub)
+    register_events_parsers(sub)
     register_skills_parser(sub)
     register_export_parsers(sub)
     register_orient_parser(sub)
