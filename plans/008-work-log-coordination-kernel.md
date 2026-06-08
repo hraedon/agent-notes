@@ -24,6 +24,8 @@
 - 2026-06-08: **Tier A degrade contract landed** (`coordinator.py`, `doctor` coordination-mode check, local-lease is default safe mode)
 - 2026-06-08: **Tier A migration script landed** (`migrate_breadcrumbs_to_work_items.py` — idempotent, status mapping, links conversion)
 - 2026-06-08: **Tier A surface update landed** (skills updated to use `work-item` commands and `wi_*` vocabulary)
+- 2026-06-08: **Tier A vocabulary fix landed** (`schema/700_work_log_kernel.sql` seeding uses dynamic CTE lookup for `default` workspace ID instead of hardcoded `workspace_id = 1`; prevents missing `wi_*` vocab entries on existing databases)
+- 2026-06-08: **Tier A acceptance test passed** — full `start → file → add blocks-edge → ready/claim (local lease) → close → end` cycle completes on `coordinator-absent / local-lease` mode; cache rebuild from op-log matches live cache byte-for-state; `export_ops_jsonl` → `ingest_jsonl_ops` round-trips; verifier confirms hash-chain + signatures
 
 **Open items (post-implementation):**
 1. (P4) regista coordinator integration — atomic claim/lease/heartbeat via regista `_claims_api.py`

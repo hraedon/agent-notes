@@ -211,35 +211,39 @@ CREATE INDEX IF NOT EXISTS idx_op_log_events_op
 -- ---------------------------------------------------------------------------
 -- Seed work_item vocabularies (for the default workspace)
 -- ---------------------------------------------------------------------------
+-- Use a CTE to resolve the default workspace ID dynamically so this works
+-- regardless of whether the default workspace was created with id=1 or
+-- id=4 (existing databases where workspaces were created before this
+-- schema ran).  See Plan 008 Tier-A migration fix.
+-- ---------------------------------------------------------------------------
 
+WITH default_ws AS (
+    SELECT id AS ws_id FROM workspaces WHERE slug = 'default' LIMIT 1
+)
 INSERT INTO vocabularies (workspace_id, kind_namespace, name, is_terminal, is_open, sort_order)
-VALUES
-    -- wi_kind entries (same as bc_kind, but separate namespace)
-    (1, 'wi_kind', 'todo',      false, true,  10),
-    (1, 'wi_kind', 'observation', false, true,  20),
-    (1, 'wi_kind', 'decision',    false, true,  30),
-    (1, 'wi_kind', 'risk',        false, true,  40),
-    (1, 'wi_kind', 'task',        false, true,  50),
-    (1, 'wi_kind', 'bug',         false, true,  60),
-    (1, 'wi_kind', 'feature',     false, true,  70),
-    (1, 'wi_kind', 'improvement', false, true,  80),
-    (1, 'wi_kind', 'question',    false, true,  90),
-    (1, 'wi_kind', 'experiment',  false, true,  100),
-    (1, 'wi_kind', 'spike',      false, true,  110),
-    (1, 'wi_kind', 'refactor',   false, true,  120),
-    (1, 'wi_kind', 'docs',       false, true,  130),
-    (1, 'wi_kind', 'ci',         false, true,  140),
-    (1, 'wi_kind', 'job',        false, true,  150),
-    -- wi_status entries (the four core states)
-    (1, 'wi_status', 'open',      false, true,   10),
-    (1, 'wi_status', 'claimed',   false, true,   20),
-    (1, 'wi_status', 'closed',    true,  false,  100),
-    (1, 'wi_status', 'deferred',  true,  false,  110),
-    -- wi_severity entries (same as bc_severity)
-    (1, 'wi_severity', 'low',      false, true,  10),
-    (1, 'wi_severity', 'medium',   false, true,  20),
-    (1, 'wi_severity', 'high',     false, true,  30),
-    (1, 'wi_severity', 'critical', false, true,  40)
+SELECT ws_id, 'wi_kind', 'todo',      false, true,  10 FROM default_ws UNION ALL
+SELECT ws_id, 'wi_kind', 'observation', false, true,  20 FROM default_ws UNION ALL
+SELECT ws_id, 'wi_kind', 'decision',    false, true,  30 FROM default_ws UNION ALL
+SELECT ws_id, 'wi_kind', 'risk',        false, true,  40 FROM default_ws UNION ALL
+SELECT ws_id, 'wi_kind', 'task',        false, true,  50 FROM default_ws UNION ALL
+SELECT ws_id, 'wi_kind', 'bug',         false, true,  60 FROM default_ws UNION ALL
+SELECT ws_id, 'wi_kind', 'feature',     false, true,  70 FROM default_ws UNION ALL
+SELECT ws_id, 'wi_kind', 'improvement', false, true,  80 FROM default_ws UNION ALL
+SELECT ws_id, 'wi_kind', 'question',    false, true,  90 FROM default_ws UNION ALL
+SELECT ws_id, 'wi_kind', 'experiment',  false, true,  100 FROM default_ws UNION ALL
+SELECT ws_id, 'wi_kind', 'spike',      false, true,  110 FROM default_ws UNION ALL
+SELECT ws_id, 'wi_kind', 'refactor',   false, true,  120 FROM default_ws UNION ALL
+SELECT ws_id, 'wi_kind', 'docs',       false, true,  130 FROM default_ws UNION ALL
+SELECT ws_id, 'wi_kind', 'ci',         false, true,  140 FROM default_ws UNION ALL
+SELECT ws_id, 'wi_kind', 'job',        false, true,  150 FROM default_ws UNION ALL
+SELECT ws_id, 'wi_status', 'open',      false, true,   10 FROM default_ws UNION ALL
+SELECT ws_id, 'wi_status', 'claimed',   false, true,   20 FROM default_ws UNION ALL
+SELECT ws_id, 'wi_status', 'closed',    true,  false,  100 FROM default_ws UNION ALL
+SELECT ws_id, 'wi_status', 'deferred',  true,  false,  110 FROM default_ws UNION ALL
+SELECT ws_id, 'wi_severity', 'low',      false, true,  10 FROM default_ws UNION ALL
+SELECT ws_id, 'wi_severity', 'medium',   false, true,  20 FROM default_ws UNION ALL
+SELECT ws_id, 'wi_severity', 'high',     false, true,  30 FROM default_ws UNION ALL
+SELECT ws_id, 'wi_severity', 'critical', false, true,  40 FROM default_ws
 ON CONFLICT (workspace_id, kind_namespace, name) DO UPDATE SET
     is_terminal = EXCLUDED.is_terminal,
     is_open     = EXCLUDED.is_open,

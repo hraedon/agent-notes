@@ -26,7 +26,7 @@ agent-notes-setup
 agent-notes init .
 
 # File a work item (new kernel model)
-agent-notes work-item file --title "Found a bug" --kind bug --status open
+agent-notes work-item file --title "Found a bug" --type bug --status open
 
 # Add a memory
 agent-notes memory add --name "postgres-tuning" --body "..." --type note
