@@ -8,7 +8,7 @@ Consolidates and supersedes the standalone `breadcrumb-mcp` and `memory-mcp` pro
 
 - **Plan 004** (MCP→CLI flattening): Phases 9a–9d complete. CLI is the primary sync surface; skills installed across Claude Code and opencode; MCP servers removed.
 - **Plan 007** (lifecycle enforcement spine): Piece 0 (error contract), Piece 1 (`init` + `orient` + Claude Code `SessionStart` hook), and Piece 2 (opencode plugin with `experimental.chat.system.transform` orientation + `experimental.session.compacting` reconciliation) complete. Both harnesses now enforce the lifecycle spine.
-- **Plan 008** (work-log coordination kernel): **P0–P2 complete, P3 partial, P4 foundation in progress.** The op-CRDT kernel (`op_log`, `work_items` cache, `content_blobs`, verifier), status lattice, merge/reconcile, and cross-project derived index (registry, export/ingest, reverse-edge map) are shipped. P4 local lease table and claim/heartbeat/release CLI are landed. **Tier A degrade contract is now the default safe mode** — `doctor` reports `coordinator-absent / local-lease` mode; the `breadcrumb → work-item` migration script is available. The remaining regista coordinator integration (Tier B) and cross-project trigger loop are pending.
+- **Plan 008** (work-log coordination kernel): **P0–P2 complete, P3 complete, P4 foundation in progress.** The op-CRDT kernel (`op_log`, `work_items` cache, `content_blobs`, verifier), status lattice, merge/reconcile, cross-project derived index (registry, export/ingest, reverse-edge map), and cross-project trigger loop (`agent-notes-trigger-loop`) are shipped. P4 local lease table and claim/heartbeat/release CLI are landed. **Tier A degrade contract is now the default safe mode** — `doctor` reports `coordinator-absent / local-lease` mode; the `breadcrumb → work-item` migration script is available. The remaining regista coordinator integration (Tier B) and `requeue_expired` daemon timer are pending.
 
 ## Quickstart
 
@@ -182,6 +182,31 @@ A sample systemd unit lives at `deploy/agent-notes-bridge.service`. The
 bridge does **not** publish to regista (Plan 004 decision 56); subscribe
 to the wake target if a downstream regista consumer needs the stream.
 
+### Cross-project trigger loop (optional, Plan 008 P3)
+
+`agent-notes-trigger-loop` listens on the Postgres `agent_notes_op_log_events`
+NOTIFY channel and routes cross-project wake events to the appropriate
+project's wake channel:
+
+- `request.created` → target project's wake channel
+- `link.added` (cross-project) → target project's wake channel (as `dependency.blocked`)
+- `item.closed` → dependent projects' wake channels (as `dependency.resolved`)
+
+It reuses the same env vars as the bridge (`AGENT_NOTES_BRIDGE_TARGET`,
+`AGENT_NOTES_BRIDGE_SECRET`, `AGENT_NOTES_BRIDGE_SOURCE`, `AGENT_NOTES_BRIDGE_BATCH_MS`,
+`AGENT_NOTES_BRIDGE_BATCH_N`). The target project is resolved via the registry
+(`projects.wake_channel`); if unset, the default bridge target is used.
+
+```bash
+export AGENT_NOTES_DSN=postgresql://...
+export AGENT_NOTES_BRIDGE_TARGET=http://127.0.0.1:8788/
+export AGENT_NOTES_BRIDGE_SECRET=$(python3 /projects/agent-wake/tools/generate-secret.py)
+agent-notes-trigger-loop
+```
+
+The trigger loop is **best-effort** (Invariant W). A lost wake is recovered by
+the level-tail (`events --since`) on the next SessionStart.
+
 ### Web viewer (read-only)
 
 ```bash
@@ -198,6 +223,7 @@ Browse breadcrumbs, memories, and run semantic search from a browser. No auth; l
 |---|---|---|
 | `agent-notes` | All | CLI — primary sync surface |
 | `agent-notes-bridge` | — | NOTIFY → agent-wake forwarder (optional) |
+| `agent-notes-trigger-loop` | — | Cross-project wake routing (optional, P3) |
 | `agent-notes-web` | — | Read-only browser viewer |
 | `agent-notes-setup` | — | Alias for `migrate --all` |
 | `agent-notes-migrate` | — | Schema migrations from `schema/*.sql` |

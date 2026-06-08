@@ -279,6 +279,7 @@ _KNOWN_SCRIPTS = {
     "agent-notes-import-reflections",
     "agent-notes-doctor",
     "agent-notes-bridge",
+    "agent-notes-trigger-loop",
     "agent-notes-web",
 }
 

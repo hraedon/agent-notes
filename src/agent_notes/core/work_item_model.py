@@ -1032,45 +1032,59 @@ class WorkItemModel:
     ) -> dict:
         """Add a cross-project link (P3).
 
-        The link is stored in the local ``links`` table with the target
-        project identified by slug. The derived index resolves the slug
-        to the actual project_id at query time.
+        Stores the edge in ``cross_project_links`` (cross-repo / foreign
+        projects). If the target project also exists in the local DB, the
+        edge is mirrored in ``links`` for same-project traversal.
+
+        The ``cross_project_links`` table stores the target by slug so it
+        survives across DB instances.
         """
         with _conn() as conn:
             workspace_id = cls._resolve_workspace_for_project(conn, from_project_id)
 
-            # Resolve the target project by slug.
+            # Resolve the target project by slug (optional — may be foreign).
             cur = conn.cursor(row_factory=dict_row)
             cur.execute(
                 "SELECT id, workspace_id FROM projects WHERE slug = %s",
                 (to_project_slug,),
             )
             to_proj = cur.fetchone()
-            if to_proj is None:
-                raise ValueError(f"Target project not found: {to_project_slug!r}")
+            to_project_id = to_proj["id"] if to_proj else None
+            to_workspace_id = to_proj["workspace_id"] if to_proj else None
 
-            to_project_id = to_proj["id"]
-            to_workspace_id = to_proj["workspace_id"]
+            # Always store in cross_project_links (foreign-safe).
+            from agent_notes.core.cross_project import add_cross_repo_link
 
-            from agent_notes.core.links import add_link
-
-            add_link(
-                from_kind="work_item",
-                from_workspace=workspace_id,
-                from_project=from_project_id,
+            add_cross_repo_link(
+                from_project_id=from_project_id,
                 from_identifier=from_identifier,
-                to_kind="work_item",
-                to_workspace=to_workspace_id,
-                to_project=to_project_id,
+                to_project_slug=to_project_slug,
                 to_identifier=to_identifier,
                 relationship=relationship,
             )
+
+            # Mirror in links if the target project is local.
+            if to_project_id is not None:
+                from agent_notes.core.links import add_link
+
+                add_link(
+                    from_kind="work_item",
+                    from_workspace=workspace_id,
+                    from_project=from_project_id,
+                    from_identifier=from_identifier,
+                    to_kind="work_item",
+                    to_workspace=to_workspace_id,
+                    to_project=to_project_id,
+                    to_identifier=to_identifier,
+                    relationship=relationship,
+                )
 
             # Write a link op to the op_log for provenance.
             payload = {
                 "from_project_id": from_project_id,
                 "from_identifier": from_identifier,
                 "to_project_id": to_project_id,
+                "to_project_slug": to_project_slug,
                 "to_identifier": to_identifier,
                 "relationship": relationship,
                 "cross_project": True,
@@ -1094,8 +1108,10 @@ class WorkItemModel:
                     "from_project_id": from_project_id,
                     "from_identifier": from_identifier,
                     "to_project_id": to_project_id,
+                    "to_project_slug": to_project_slug,
                     "to_identifier": to_identifier,
                     "relationship": relationship,
+                    "cross_project": True,
                 },
             )
 
@@ -1104,6 +1120,7 @@ class WorkItemModel:
                 "from_project_id": from_project_id,
                 "from_identifier": from_identifier,
                 "to_project_id": to_project_id,
+                "to_project_slug": to_project_slug,
                 "to_identifier": to_identifier,
                 "relationship": relationship,
             }

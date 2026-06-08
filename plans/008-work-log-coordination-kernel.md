@@ -1,8 +1,8 @@
 # Plan 008 — Work-log coordination kernel (provenance-enforced, op-CRDT)
 
-**Status:** in-progress 2026-06-08 — **P0+P1 complete**, **P2 complete**, **P3 partial** (cross-project foundation + derived index + registry + export/ingest + cross-repo ready + reverse-edge map; trigger loop routing pending), **P4 foundation in progress** (local lease table + claim/heartbeat/release CLI + requeue sweep + degrade contract; regista coordinator integration pending)
+**Status:** in-progress 2026-06-08 — **P0+P1 complete**, **P2 complete**, **P3 complete** (cross-project foundation + derived index + registry + export/ingest + cross-repo ready + reverse-edge map + trigger loop), **P4 foundation in progress** (local lease table + claim/heartbeat/release CLI + requeue sweep + degrade contract; regista coordinator integration and requeue daemon timer pending)
 
-> **Switch-to-new-version bar is defined below** — see [Definition of Done](#definition-of-done-added-2026-06-08-opus-48). Adopting the kernel today requires only **Tier A** (degrade contract as default mode + migration + lived-in surface + backlog reconcile + green gates + tag). The regista coordinator and cross-project triggering are **Tier B** — optional layers that attach later and are **not** blockers for the switch.
+> **Switch-to-new-version bar is defined below** — see [Definition of Done](#definition-of-done-added-2026-06-08-opus-48). Adopting the kernel today requires only **Tier A** (degrade contract as default mode + migration + lived-in surface + backlog reconcile + green gates + tag). The regista coordinator and requeue daemon timer are **Tier B** — optional layers that attach later and are **not** blockers for the switch.
 
 **Implementation log:**
 - 2026-06-08: P0 kernel landed (op_log, content_blobs, work_items cache, fold, ready/claimable, event surface, CLI)
@@ -17,6 +17,7 @@
 - 2026-06-08: P3 cross-repo ready query landed (`work_items_ready_v` checks `cross_project_work_items` for blockers)
 - 2026-06-08: P3 reverse-edge map landed (`cross_project_reverse_edges_v`, `get_blocked_by`, `get_cross_project_blockers`)
 - 2026-06-08: P3 CLI landed (`work-item export-ops`, `work-item ingest-ops`, `work-item rebuild-cache`)
+- 2026-06-08: P3 trigger loop landed (`agent-notes-trigger-loop` — LISTEN on `agent_notes_op_log_events`, route `request.created`/`dependency.blocked`/`dependency.resolved` to target wake channels via agent-wake)
 - 2026-06-08: P4 local lease schema landed (`work_item_leases` table, `sweep_expired_leases()`, `work_items_claimable_v` excluding active leases)
 - 2026-06-08: P4 CLI landed (`work-item claim`, `work-item release`, `work-item heartbeat`, `work-item requeue-expired`)
 - 2026-06-08: P4 model layer landed (`WorkItemModel.claim_work_item`, `release_work_item`, `heartbeat_work_item`)
@@ -25,9 +26,8 @@
 - 2026-06-08: **Tier A surface update landed** (skills updated to use `work-item` commands and `wi_*` vocabulary)
 
 **Open items (post-implementation):**
-1. (P3) Cross-project trigger loop — wake routing for `request.created`/`dependency.blocked` events via agent-wake (needs an async listener on `agent_notes_op_log_events` NOTIFY channel)
-2. (P4) regista coordinator integration — atomic claim/lease/heartbeat via regista `_claims_api.py`
-3. (P4) `requeue_expired` daemon — cron/systemd timer that runs `sweep_expired_leases()` periodically
+1. (P4) regista coordinator integration — atomic claim/lease/heartbeat via regista `_claims_api.py`
+2. (P4) `requeue_expired` daemon — cron/systemd timer that runs `sweep_expired_leases()` periodically
 **Author:** Opus 4.8 (design session with principal; reviewed by MiMo; prior-art deep dive + agentattest analysis)
 
 ---

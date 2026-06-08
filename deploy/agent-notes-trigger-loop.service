@@ -1,0 +1,20 @@
+[Unit]
+Description=agent-notes cross-project trigger loop (Plan 008 P3)
+After=network.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust user/paths to taste. The trigger loop needs AGENT_NOTES_DSN to LISTEN
+# and AGENT_NOTES_BRIDGE_TARGET / _SECRET to forward to agent-wake's HTTP ingest.
+User=%i
+Environment=AGENT_NOTES_DSN=postgresql://agent_notes:CHANGEME@127.0.0.1:5432/agent_notes
+Environment=AGENT_NOTES_BRIDGE_TARGET=http://127.0.0.1:8788/
+Environment=AGENT_NOTES_BRIDGE_SECRET=CHANGEME
+Environment=AGENT_NOTES_BRIDGE_SOURCE=agent-notes
+ExecStart=/usr/local/bin/agent-notes-trigger-loop
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target

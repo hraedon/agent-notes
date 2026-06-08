@@ -960,13 +960,32 @@ class TestCrossProjectLink:
         assert result["relationship"] == "blocks"
 
     def test_add_cross_project_link_unknown_target(self, default_project):
-        with pytest.raises(ValueError, match="Target project not found"):
-            WorkItemModel.add_cross_project_link(
-                from_project_id=default_project.id,
-                from_identifier="WI-LOCAL-02",
-                to_project_slug="nonexistent",
-                to_identifier="WI-TARGET-02",
+        """Foreign target projects are stored in cross_project_links without raising."""
+        result = WorkItemModel.add_cross_project_link(
+            from_project_id=default_project.id,
+            from_identifier="WI-LOCAL-02",
+            to_project_slug="nonexistent",
+            to_identifier="WI-TARGET-02",
+        )
+        assert result["from_identifier"] == "WI-LOCAL-02"
+        assert result["to_project_slug"] == "nonexistent"
+        assert result["to_project_id"] is None
+        assert result["relationship"] == "blocks"
+
+        # Verify the edge is in cross_project_links.
+        from agent_notes.core.db import _conn
+
+        with _conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT 1 FROM cross_project_links
+                WHERE from_project_id = %s AND from_identifier = %s
+                  AND to_project_slug = %s AND to_identifier = %s
+                """,
+                (default_project.id, "WI-LOCAL-02", "nonexistent", "WI-TARGET-02"),
             )
+            assert cur.fetchone() is not None
 
 
 # ---------------------------------------------------------------------------

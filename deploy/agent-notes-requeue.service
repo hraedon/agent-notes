@@ -1,0 +1,10 @@
+[Unit]
+Description=agent-notes requeue expired leases (Plan 008 P4)
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+# Adjust user/paths to taste. Needs AGENT_NOTES_DSN.
+User=%i
+Environment=AGENT_NOTES_DSN=postgresql://agent_notes:CHANGEME@127.0.0.1:5432/agent_notes
+ExecStart=/usr/local/bin/agent-notes work-item requeue-expired
