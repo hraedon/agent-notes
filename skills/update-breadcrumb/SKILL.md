@@ -3,31 +3,29 @@ name: update-breadcrumb
 description: Update an existing breadcrumb — transition its status, append context to the body, or mark it resolved. Invoke when the user says "close BC-X", "this resolves BC-X", "update breadcrumb X", or when you yourself addressed a breadcrumb during this session.
 ---
 
-# /update-breadcrumb — Move a Breadcrumb Forward
+# /update-breadcrumb — Move a Work Item Forward
 
-Breadcrumbs are not write-once. As work happens, their state changes:
+Work items are not write-once. As work happens, their state changes:
 status moves through a small lifecycle, body accumulates findings,
 severity gets re-rated when evidence comes in. Keep them current; a
-stale breadcrumb is worse than no breadcrumb because it makes the
-backlog dishonest.
+stale item is worse than no item because it makes the backlog dishonest.
 
 ## Status transitions
 
 The legal status values are project-defined — check
-`agent-notes vocabulary list --workspace <ws> --kind breadcrumb_status
+`agent-notes vocabulary list --workspace <ws> --kind wi_status
 --json` if unsure. The common shape is:
 
-- `new` / `proposed` — just filed, not triaged.
-- `open` / `accepted` — confirmed real, not yet worked.
-- `in-progress` — actively being addressed.
-- `resolved` / `closed` — done. Body should explain how.
-- `wontfix` — deliberately not addressing; body must say why.
+- `open` — just filed, not triaged.
+- `claimed` — actively being addressed.
+- `closed` — done. Body should explain how.
+- `deferred` — deliberately not addressing; body must say why.
 
-Move forward, not sideways. Don't flip `resolved` back to `open` to
-record a regression — file a new breadcrumb that references the old one
+Move forward, not sideways. Don't flip `closed` back to `open` to
+record a regression — file a new work item that references the old one
 via `agent-notes link add` and explain the relationship.
 
-## When to append body vs. file a new breadcrumb
+## When to append body vs. file a new work item
 
 Append to the existing body when:
 
@@ -35,7 +33,7 @@ Append to the existing body when:
 - You partially addressed it and want to record what's left.
 - A reviewer left a question or pushback worth preserving.
 
-File a *new* breadcrumb (and link them) when:
+File a *new* work item (and link them) when:
 
 - The investigation surfaced a distinct second problem.
 - The original was filed against the wrong project or workspace.
@@ -47,15 +45,14 @@ When you actually fixed it in the diff you're about to commit:
 
 1. Append a short resolution note to the body — what you changed, where,
    and what to verify. One paragraph is enough.
-2. Transition status to the project's "done" value (`resolved`,
-   `implemented`, `closed` — match what existing resolved entries use).
+2. Transition status to `closed` (or the project's "done" value).
 3. If the project moves resolved entries to a sub-folder, that's
    handled by the on-disk projection layer, not by this skill.
 
 ## How to run it
 
 ```
-agent-notes breadcrumb update <identifier> \
+agent-notes work-item update <identifier> \
   --path <repo-path> \
   --status <new-status> \
   --body "<existing body + appended note>" \

@@ -11,7 +11,7 @@ were already known. This skill collapses that lookup into one place.
 
 Run this when:
 
-- A new session begins on a project with breadcrumbs / memories.
+- A new session begins on a project with work items / memories.
 - The user asks "where did we leave off?" or "what's outstanding?"
 - You're picking up work from a different model or session.
 
@@ -28,14 +28,14 @@ workspace. Don't go fishing through `vocabulary list` for this.
 ## First — reconcile against git
 
 Before listing what's open, let the tool self-heal the most common drift:
-breadcrumbs resolved in a commit ("resolve BC-094") that nobody transitioned in
+work items resolved in a commit ("resolve WI-094") that nobody transitioned in
 the DB, so they sit open for weeks. Run:
 
 ```
 agent-notes breadcrumb reconcile --path <repo-path>
 ```
 
-It scans recent git history for open breadcrumbs referenced with resolution
+It scans recent git history for open work items referenced with resolution
 intent. The match list is conservative (negation-guarded) but not infallible —
 glance at it. If the matches are genuine resolutions, apply them so the open
 list below reflects reality:
@@ -53,23 +53,22 @@ repo isn't git or isn't registered, reconcile prints nothing — move on.
 
 Run all three (parallel-safe), then synthesize a compact briefing.
 
-### 1. Recent open breadcrumbs
+### 1. Recent open work items
 
 ```
-agent-notes breadcrumb find \
+agent-notes work-item find \
   --path <repo-path> \
   --status open \
   --limit 10 \
   --json
 ```
 
-Also pull `--status new` and `--status in-progress` if the project
-uses those. Combine and sort by severity then recency. Show the top
-5–8 in a list:
+Also pull `--status claimed` if the project uses that. Combine and
+sort by severity then recency. Show the top 5–8 in a list:
 
 ```
-- BC-CLI-007 (bug / high) — Memory CLI swaps workspace/project args
-- BC-CLI-002 (todo / medium) — install-skills lacks frontmatter validation
+- WI-007 (bug / high) — Memory CLI swaps workspace/project args
+- WI-002 (todo / medium) — install-skills lacks frontmatter validation
 ```
 
 ### 2. Active memories
@@ -112,10 +111,10 @@ Aim for ~10 lines, not a full dossier. Sample:
 ```
 ## Session start — agent-notes
 
-**Open breadcrumbs (3):**
-- BC-CLI-007 (bug / high) — workspace/project arg swap in get_memory
-- BC-CLI-002 (todo / medium) — install-skills frontmatter validation
-- BC-CLI-003 (rfc / low)    — expose LISTEN helpers via CLI
+**Open work items (3):**
+- WI-007 (bug / high) — workspace/project arg swap in get_memory
+- WI-002 (todo / medium) — install-skills frontmatter validation
+- WI-003 (rfc / low)    — expose LISTEN helpers via CLI
 
 **Where we left off (reflection 2026-05-24-kimi-k2-6):**
 - Phase 9a landed; 204 tests pass.
@@ -132,5 +131,5 @@ to do; you're just laying out the state.
 ---
 
 If `agent-notes` exits non-zero or its JSON shape doesn't match what
-this skill expects, the CLI contract has drifted — file a breadcrumb
+this skill expects, the CLI contract has drifted — file a work item
 under project agent-notes.

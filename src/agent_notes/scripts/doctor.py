@@ -1,13 +1,14 @@
-"""Health-check script for agent-notes installations (Phase 6.3).
+"""Health-check script for agent-notes installations (Phase 6.3 + Plan 008 P4).
 
 Checks:
 1. DSN reachable
-2. Schema up to date (core tables present)
-3. Embedding model loads (opt-in via --check-embed)
-4. Links audit (dangling links)
-5. Vocabulary integrity
-6. Bridge target reachable
-7. Stale MCP entries in harness configs
+2. Schema up to date (core tables + kernel tables present)
+3. Coordination mode (degrade contract — local-lease is default)
+4. Embedding model loads (opt-in via --check-embed)
+5. Links audit (dangling links)
+6. Vocabulary integrity
+7. Bridge target reachable
+8. Stale MCP entries in harness configs
 
 Exit code: 0 if all healthy, 1 if any check failed.
 """
@@ -52,6 +53,13 @@ def _check_schema() -> tuple[bool, str]:
         "links",
         "change_log",
         "all_notes_search_v",
+        # Plan 008 kernel schema
+        "op_log",
+        "work_items",
+        "content_blobs",
+        "op_log_events",
+        "work_item_sequences",
+        "work_item_leases",
     }
     try:
         from agent_notes.core.db import _conn
@@ -68,7 +76,23 @@ def _check_schema() -> tuple[bool, str]:
         missing = expected - actual
         if missing:
             return False, f"Missing tables/views: {sorted(missing)}"
-        return True, f"All expected tables/views present: {sorted(expected)}"
+        return True, f"All expected tables/views present ({len(expected)} total)"
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _check_coordination_mode() -> tuple[bool, str]:
+    """Report the coordination mode (Plan 008 P4 degrade contract).
+
+    Coordinator-absent / local-lease is the default safe mode.
+    This check is always PASS because the absence of a coordinator is
+    a normal, first-class state — not a failure.
+    """
+    try:
+        from agent_notes.core.coordinator import get_coordination_mode
+
+        mode = get_coordination_mode()
+        return True, mode
     except Exception as exc:
         return False, str(exc)
 
@@ -339,13 +363,18 @@ def run(skip_embed: bool = False, check_embed: bool = False) -> int:
     all_ok = all_ok and ok
     schema_ok = ok
 
+    ok, msg = _check_coordination_mode()
+    _print_section("3. Coordination Mode")
+    _print_result(ok, msg)
+    all_ok = all_ok and ok
+
     if not (dsn_ok and schema_ok):
         for name in (
-            "3. Embedding Model",
-            "4. Links Audit",
-            "5. Vocabulary Integrity",
-            "6. Bridge Target",
-            "7. Harness Configs",
+            "4. Embedding Model",
+            "5. Links Audit",
+            "6. Vocabulary Integrity",
+            "7. Bridge Target",
+            "8. Harness Configs",
         ):
             _print_section(name)
             print("  SKIPPED: prerequisite check(s) failed (DSN / Schema)")
@@ -355,30 +384,30 @@ def run(skip_embed: bool = False, check_embed: bool = False) -> int:
 
     if check_embed:
         ok, msg = _check_embedding()
-        _print_section("3. Embedding Model")
+        _print_section("4. Embedding Model")
         _print_result(ok, msg)
         all_ok = all_ok and ok
     else:
-        _print_section("3. Embedding Model")
+        _print_section("4. Embedding Model")
         print("  SKIPPED: use --check-embed to verify (~270MB model load)")
 
     ok, msg = _check_links_audit()
-    _print_section("4. Links Audit")
+    _print_section("5. Links Audit")
     _print_result(ok, msg)
     all_ok = all_ok and ok
 
     ok, msg = _check_vocab_integrity()
-    _print_section("5. Vocabulary Integrity")
+    _print_section("6. Vocabulary Integrity")
     _print_result(ok, msg)
     all_ok = all_ok and ok
 
     ok, msg = _check_bridge_target()
-    _print_section("6. Bridge Target")
+    _print_section("7. Bridge Target")
     _print_result(ok, msg)
     all_ok = all_ok and ok
 
     ok, msg = _check_harness_configs()
-    _print_section("7. Harness Configs")
+    _print_section("8. Harness Configs")
     _print_result(ok, msg)
     all_ok = all_ok and ok
 

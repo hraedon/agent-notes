@@ -7,7 +7,7 @@ description: Wrap up a working session and leave a clean handoff before context 
 
 A session ends well when the next agent (or future-you) can pick up without re-deriving what just happened. That means three things end up on disk before you stop:
 
-- breadcrumbs that match the actual state of the world (closed if fixed, opened if newly noticed),
+- work items that match the actual state of the world (closed if fixed, opened if newly noticed),
 - a reflection that captures the subjective read (what was hard, what you'd want a second pair of eyes on),
 - a commit that bundles all of the above.
 
@@ -15,19 +15,19 @@ Steps 1–4 below are the discipline. The pressure to skip them comes from the s
 
 ---
 
-## Step 1 — Reconcile breadcrumbs
+## Step 1 — Reconcile work items
 
-### 1a. Locate the breadcrumbs convention
+### 1a. Locate the work items convention
 
-Look for a breadcrumbs directory at the repo root, in this order: `breadcrumbs/`, `.breadcrumbs/`, `docs/breadcrumbs/`. Read its `README.md` if present — honor the schema (frontmatter fields, statuses, resolved-folder convention). Do not impose your own.
+Look for a work items directory at the repo root, in this order: `work-items/`, `.work-items/`, `docs/work-items/`. Read its `README.md` if present — honor the schema (frontmatter fields, statuses, resolved-folder convention). Do not impose your own.
 
-If no breadcrumbs directory exists *and* this repo isn't wired to the agent-notes CLI, skip step 1 entirely — do not create one unprompted. Note it in the final report.
+If no work items directory exists *and* this repo isn't wired to the agent-notes CLI, skip step 1 entirely — do not create one unprompted. Note it in the final report.
 
 ### 1b. Auto-reconcile against git first
 
 Before closing anything by hand, let the tool catch what commits already say. The
 single most common drift is *silent resolution* — the work landed in a commit
-("resolve BC-094") but nobody told the DB, so the breadcrumb sits open for weeks.
+("resolve WI-094") but nobody told the DB, so the work item sits open for weeks.
 Run:
 
 ```
@@ -35,22 +35,21 @@ agent-notes breadcrumb reconcile --path <repo-path>          # dry-run: shows ma
 agent-notes breadcrumb reconcile --path <repo-path> --apply  # transition them to resolved
 ```
 
-It scans recent git history for open breadcrumbs whose identifier appears in a
+It scans recent git history for open work items whose identifier appears in a
 commit with resolution intent, and (with `--apply`) resolves them and stamps the
 resolving commit into `external_refs`. Review the dry-run list first — it's
-conservative but not infallible. This handles the breadcrumbs you resolved via
+conservative but not infallible. This handles the work items you resolved via
 commit; the next step covers anything reconcile can't see.
 
-### 1c. Close breadcrumbs worked on this session
+### 1c. Close work items worked on this session
 
-For each breadcrumb you actually addressed but that reconcile did *not* catch (no
+For each work item you actually addressed but that reconcile did *not* catch (no
 commit, or a commit message that didn't name it), use the `update-breadcrumb`
-skill (or invoke `agent-notes breadcrumb update` directly). Match the project's
-"done" value (`resolved`, `implemented`, `closed` — whatever existing resolved
-entries use). If you partially addressed one, leave it open and append a note
-describing what's outstanding.
+skill (or invoke `agent-notes work-item update` directly). Transition status to
+`closed` (or the project's "done" value). If you partially addressed one, leave
+it open and append a note describing what's outstanding.
 
-### 1d. Open breadcrumbs for issues noticed
+### 1d. Open work items for issues noticed
 
 For each defect, design question, or gap noticed during the session that wasn't fixed, use the `file-breadcrumb` skill — which itself requires a dedup search first. Be honest about severity. The "I noticed it but it's not worth filing" instinct is wrong by default; if you noticed it enough to consider filing, file it.
 
@@ -58,9 +57,9 @@ For each defect, design question, or gap noticed during the session that wasn't 
 
 ## Step 2 — Sync AGENTS.md known-issues section
 
-If — *and only if* — the project's `AGENTS.md` already contains a "Known issues" section that summarizes open breadcrumbs, update it to match the reconciled state:
+If — *and only if* — the project's `AGENTS.md` already contains a "Known issues" section that summarizes open work items, update it to match the reconciled state:
 
-1. List open breadcrumbs (and any other "open-ish" statuses the project uses: `new`, `proposed`, `in-progress`) via `agent-notes breadcrumb find --status <s> --json`.
+1. List open work items (and any other "open-ish" statuses the project uses: `open`, `claimed`) via `agent-notes work-item find --status <s> --json`.
 2. Recompute the severity breakdown and rewrite the summary line.
 3. Replace stale bullets.
 
@@ -92,7 +91,7 @@ git log --oneline -5
 
 Review what's staged/unstaged. Watch for: secrets, `.env`, generated artifacts, files unrelated to this session's work. Stage deliberately — prefer named paths over `git add -A` when there's any doubt. `git add -A` is acceptable only when the diff has been reviewed and nothing surprising is present (an untracked reflection or breadcrumb you just authored is *not* a surprise).
 
-Subject ≤ 72 chars, imperative mood, summarizing the session's outcome. Body: bullet the main changes; reference breadcrumb identifiers resolved or opened. Use a HEREDOC for the message. Never `--no-verify`. Do not push unless the user asked.
+Subject ≤ 72 chars, imperative mood, summarizing the session's outcome. Body: bullet the main changes; reference work item identifiers resolved or opened. Use a HEREDOC for the message. Never `--no-verify`. Do not push unless the user asked.
 
 If you intend to push, this skill is the wrong gate — `/push` runs documentation checks and the test suite. `/end` is local wrap-up only; it does not run tests.
 
@@ -103,8 +102,8 @@ If you intend to push, this skill is the wrong gate — `/push` runs documentati
 ```
 ## Session End — <date>
 
-**Breadcrumbs closed:** <list or "none">
-**Breadcrumbs opened:** <list or "none">
+**Work items closed:** <list or "none">
+**Work items opened:** <list or "none">
 **Reflection:** <path written by /reflect> (ingested: yes / fallback)
 **Commit:** <short hash> <subject>
 ```
@@ -120,7 +119,7 @@ State explicitly any step that couldn't be completed (no breadcrumbs convention,
 | "I'll write the reflection file inline — saves a tool call." | You skip the DB ingest. The reflection becomes invisible to `/start` next session. Half the point is gone. |
 | "I'll commit now and add the reflection in a follow-up." | The follow-up doesn't happen. The reflection rides in this commit or not at all. |
 | "Tests passed earlier in the session, so I don't need to run them." | /end doesn't gate on tests; that's `/push`. But don't claim a green tree as evidence — the diff has moved. |
-| "The breadcrumb dir is empty, so I don't need to dedup-search." | Search includes resolved/ and other workspaces. Empty active/ ≠ empty store. |
+| "The work item dir is empty, so I don't need to dedup-search." | Search includes resolved/ and other workspaces. Empty active/ ≠ empty store. |
 | "The user just said 'wrap it up so I can go,' so I'll trim." | The user asked for a wrap-up, not a half-wrap-up. If genuine time pressure is on, surface it explicitly and ask which step to cut — don't silently cut the reflection. |
 | "Two minor issues aren't worth filing." | If they were salient enough to consider, file them. The cost of an unneeded breadcrumb is one row; the cost of a missed one is rediscovery next session. |
 | "I'll just `git add -A` and trust it." | Untracked files you didn't author get swept up. Look at `git status` first; stage named paths if anything surprising is there. |
@@ -136,5 +135,5 @@ State explicitly any step that couldn't be completed (no breadcrumbs convention,
 ---
 
 If `agent-notes` exits non-zero or its JSON shape doesn't match what
-this skill expects, the CLI contract has drifted — file a breadcrumb
+this skill expects, the CLI contract has drifted — file a work item
 under project agent-notes.

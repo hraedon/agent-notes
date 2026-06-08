@@ -27,7 +27,7 @@ The CLI gives you two complementary tools; use both.
 1. **Structured filter** — fast, exact on type/status:
 
    ```
-   agent-notes breadcrumb find \
+   agent-notes work-item find \
      --path <repo-path> \
      --status open \
      --type <type-if-known> \
@@ -60,8 +60,8 @@ Pass `--scope` to broaden the search:
   `--workspace` required.
 
 ```
-agent-notes breadcrumb find --path <repo-path> --scope workspace --text "<q>" --json
-agent-notes breadcrumb find --scope global --text "<q>" --json
+agent-notes work-item find --path <repo-path> --scope workspace --text "<q>" --json
+agent-notes work-item find --scope global --text "<q>" --json
 ```
 
 Do both project-scoped and workspace- (or global-) scoped searches when
@@ -70,13 +70,13 @@ cost is ~one CLI call.
 
 ## Interpreting results
 
-The JSON returns a `breadcrumbs` array with `identifier`, `title`,
+The JSON returns a `work_items` array with `identifier`, `title`,
 `kind`, `status`, and a `score` when `--text` was used. Show the top
 3–5 to the user in a compact list:
 
 ```
-- BC-CLI-007 (bug / open) — CLI swaps workspace/project args in get_memory
-- BC-CLI-002 (todo / new) — install-skills lacks frontmatter validation
+- WI-007 (bug / open) — CLI swaps workspace/project args in get_memory
+- WI-002 (todo / open) — install-skills lacks frontmatter validation
 ```
 
 If any look like the issue at hand, link to the `update-breadcrumb`

@@ -666,9 +666,7 @@ class WorkItemModel:
 
             # Only claimable items can be claimed
             if status != "open":
-                raise ValueError(
-                    f"Cannot claim: status is {status!r} (must be 'open')"
-                )
+                raise ValueError(f"Cannot claim: status is {status!r} (must be 'open')")
 
             # Check if already leased
             cur.execute(

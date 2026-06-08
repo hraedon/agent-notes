@@ -1,6 +1,8 @@
 # Plan 008 — Work-log coordination kernel (provenance-enforced, op-CRDT)
 
-**Status:** in-progress 2026-06-08 — **P0+P1 complete**, **P2 complete**, **P3 partial** (cross-project foundation + derived index + registry + export/ingest + cross-repo ready + reverse-edge map; trigger loop routing pending), **P4 foundation in progress** (local lease table + claim/heartbeat/release CLI + requeue sweep; regista coordinator integration pending)
+**Status:** in-progress 2026-06-08 — **P0+P1 complete**, **P2 complete**, **P3 partial** (cross-project foundation + derived index + registry + export/ingest + cross-repo ready + reverse-edge map; trigger loop routing pending), **P4 foundation in progress** (local lease table + claim/heartbeat/release CLI + requeue sweep + degrade contract; regista coordinator integration pending)
+
+> **Switch-to-new-version bar is defined below** — see [Definition of Done](#definition-of-done-added-2026-06-08-opus-48). Adopting the kernel today requires only **Tier A** (degrade contract as default mode + migration + lived-in surface + backlog reconcile + green gates + tag). The regista coordinator and cross-project triggering are **Tier B** — optional layers that attach later and are **not** blockers for the switch.
 
 **Implementation log:**
 - 2026-06-08: P0 kernel landed (op_log, content_blobs, work_items cache, fold, ready/claimable, event surface, CLI)
@@ -18,13 +20,100 @@
 - 2026-06-08: P4 local lease schema landed (`work_item_leases` table, `sweep_expired_leases()`, `work_items_claimable_v` excluding active leases)
 - 2026-06-08: P4 CLI landed (`work-item claim`, `work-item release`, `work-item heartbeat`, `work-item requeue-expired`)
 - 2026-06-08: P4 model layer landed (`WorkItemModel.claim_work_item`, `release_work_item`, `heartbeat_work_item`)
+- 2026-06-08: **Tier A degrade contract landed** (`coordinator.py`, `doctor` coordination-mode check, local-lease is default safe mode)
+- 2026-06-08: **Tier A migration script landed** (`migrate_breadcrumbs_to_work_items.py` — idempotent, status mapping, links conversion)
+- 2026-06-08: **Tier A surface update landed** (skills updated to use `work-item` commands and `wi_*` vocabulary)
 
 **Open items (post-implementation):**
 1. (P3) Cross-project trigger loop — wake routing for `request.created`/`dependency.blocked` events via agent-wake (needs an async listener on `agent_notes_op_log_events` NOTIFY channel)
 2. (P4) regista coordinator integration — atomic claim/lease/heartbeat via regista `_claims_api.py`
-3. (P4) Degrade contract — coordinator down → reads + progress on held items + append/file freely; no new claims
-4. (P4) `requeue_expired` daemon — cron/systemd timer that runs `sweep_expired_leases()` periodically
+3. (P4) `requeue_expired` daemon — cron/systemd timer that runs `sweep_expired_leases()` periodically
 **Author:** Opus 4.8 (design session with principal; reviewed by MiMo; prior-art deep dive + agentattest analysis)
+
+---
+
+## Definition of Done (added 2026-06-08, Opus 4.8)
+
+This plan describes a multi-phase research arc whose *full* completion (L3 regista
+coordinator, causal-stability watermark, cross-project trigger loop) is **weeks of
+multi-project work and is NOT the bar for adopting the new version.** The bar for
+"switch the daily driver to the kernel today" is **Tier A** below; everything in
+**Tier B** attaches later as an optional layer and is explicitly out of scope for the
+switch.
+
+The line is drawn where the plan's own thesis draws it: *"Compose by optional
+capability, not hard dependency. A bare work-log kernel works alone."* and **Invariant
+W** — readiness and coordination state are always recomputable from the log/index;
+agent-wake and the regista coordinator are best-effort accelerators carrying no
+authoritative state. **Shipping without L3 loses no correctness — only race-free
+concurrency at multi-writer scale**, which is not the single-/few-writer reality the
+tool is adopted into today. That is what makes the cut honest rather than a corner.
+
+### Tier A — required to switch to the new version (today's bar)
+
+1. **Degrade contract is the DEFAULT, named, safe mode — not undefined behavior.**
+   Coordinator-absent is the user's normal state (no regista coordinator running), so it
+   must be a *first-class* mode: reads, progress on already-held items, and `append`/
+   `file` all work freely; the **local lease table** (already landed) provides
+   claim/heartbeat/release for the single-/few-writer case; with no coordinator
+   configured the kernel **does not attempt — and never hangs or crashes attempting — a
+   distributed claim.** `doctor` prints which coordination mode is active.
+2. **Migration executed and verified** — breadcrumbs → work-item entities, `links` rows →
+   typed edges, `change_log` → op-log. Run on a **backed-up** store, reusing the Plan 007
+   files→DB importer; the NULL-`repo_root` decision (backfill vs default-and-flag) is
+   made and recorded; **rebuild-from-log reproduces the cache byte-for-state** (the
+   "cache cannot diverge-as-a-bug" invariant, actually demonstrated).
+3. **The surface the user touches runs on the kernel with no behavior regression** — the
+   CLI verbs, the 7 skills (`file-breadcrumb` … `end`), and the Plan 007 lifecycle hooks
+   operate against work-items / the op-log. `breadcrumb` verbs keep working (alias or
+   documented rename); a daily session (`start` → file/update → `end`) works end-to-end.
+4. **Breadcrumb backlog reconciled** — all 11 open breadcrumbs triaged; already-fixed
+   ones closed (BC-022 confirmed not-reproducible; BC-026 JSON-clean — verify and close);
+   the small real ones (BC-018 dead `query` subcommand, BC-019 public pool close,
+   BC-024 summary command, BC-025 reflection filename collisions) fixed **or** explicitly
+   deferred with a one-line reason. No silently-stale "open" rows.
+5. **Green gates** — full `pytest` green; `agent-notes doctor` all-PASS on the migrated
+   store; the **P1 verifier** confirms the hash-chain + signatures over the migrated
+   op-log; `export_ops_jsonl` → `ingest_jsonl_ops` round-trips.
+6. **Docs are truthful about the boundary** — README/AGENTS describe the kernel as the
+   live model AND state plainly that the regista coordinator is an **optional, not-yet-
+   attached L3 layer** and that cross-project triggering is deferred. No write-only-
+   theater claims (no "attested" language the verifier doesn't actually enforce on the
+   adopted path).
+7. **Tagged + reversible** — a version tag (e.g. `v1.0.0`) with a CHANGELOG entry, and a
+   documented rollback (restore the pre-migration backup + previous tag).
+
+**Tier-A acceptance test (the one command that proves "switch-ready"):** on a fresh
+clone with only `AGENT_NOTES_DSN` set and **no** regista/agent-wake configured, a full
+`start → file work-item → add blocks-edge → ready/claim (local lease) → close → end`
+cycle completes, `doctor` is all-PASS reporting *coordinator-absent / local-lease* mode,
+and the cache rebuilt from the op-log alone matches the live cache.
+
+### Tier B — deferred to its own arc (NOT required to switch; attach later)
+
+- **(L3) regista coordinator integration** — atomic distributed claim/lease/heartbeat via
+  regista `_claims_api.py`. Only needed for race-free claims under *true* concurrent
+  multi-writer load. Until attached, Tier-A's degrade contract is the contract.
+- **(P3) Cross-project trigger loop** — `request`/`wait`/reverse-edge wake routing via
+  agent-wake (async listener on the `agent_notes_op_log_events` NOTIFY channel). The op
+  schema already carries the cross-log reference fields, so this stays purely additive.
+- **(P4) Causal-stability watermark + archival truncation** — only matters at multi-
+  replica scale; structural compaction (per-entity chains + cache) already keeps growth
+  off the hot path.
+- **(P4) `requeue_expired` as a managed daemon** — `sweep_expired_leases()` exists and is
+  CLI-invokable; running it on a cron/systemd timer is ops polish. A startup + on-demand
+  sweep is sufficient for the single-writer reality.
+- **(P1+) Keyless / Sigstore signer** — local-key signer (already the default) covers the
+  offline / air-gapped / regulated path the tool ships into.
+
+**Sequencing note for the agents finishing this:** do Tier A in the order 2 → 3 → 1 →
+4 → 5 → 6 → 7 (migration and the lived-in surface first, since they carry the real risk;
+the degrade contract is mostly *guarding against* a coordinator path that isn't wired
+yet, so it is small once 2–3 are solid). Do **not** start any Tier-B item until every
+Tier-A box is checked and the tag is cut — a half-attached coordinator is worse than a
+cleanly-absent one.
+
+---
 **Strategic role:** Completes agent-notes' *original* vision — "coordinating small bits
 of work into a larger project over time" — by growing the DB-canonical memory layer
 ([[Plan 007]]) into an **op-CRDT work log** with dependency edges, a `ready` query,

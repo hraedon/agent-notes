@@ -39,7 +39,7 @@ Do **not** file one when:
    of these before going further:
 
    ```
-   agent-notes breadcrumb find --path <repo-path> --scope workspace --text "<keywords>" --json
+   agent-notes work-item find --path <repo-path> --scope workspace --text "<keywords>" --json
    agent-notes search all "<query>" --path <repo-path> --json
    ```
 
@@ -52,7 +52,7 @@ Do **not** file one when:
    `find-breadcrumb` skill.
 
 2. **Pick a type from the project's existing vocabulary.** Run
-   `agent-notes vocabulary list --workspace <ws> --kind breadcrumb_type
+   `agent-notes vocabulary list --workspace <ws> --kind wi_kind
    --json` to see what's in use. Common values: `bug`, `defect`,
    `design-question`, `todo`, `observation`, `rfc`. Don't invent a new
    type unless none of the existing values fit; new vocabulary entries
@@ -71,18 +71,18 @@ Do **not** file one when:
 5. **File it.** Run:
 
    ```
-   agent-notes breadcrumb file \
+   agent-notes work-item file \
      --path <repo-path> \
      --title "<sentence>" \
      --body "<two paragraphs>" \
      --type <existing-type> \
-     --status new \
+     --status open \
      --severity <low|medium|high|critical> \
      --json
    ```
 
    Parse the JSON; the returned `identifier` is the canonical handle
-   (e.g. `BC-CLI-007`). Tell the user that identifier so they can
+   (e.g. `WI-001`). Tell the user that identifier so they can
    reference it.
 
 ## Severity guidance

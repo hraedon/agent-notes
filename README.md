@@ -8,7 +8,7 @@ Consolidates and supersedes the standalone `breadcrumb-mcp` and `memory-mcp` pro
 
 - **Plan 004** (MCP→CLI flattening): Phases 9a–9d complete. CLI is the primary sync surface; skills installed across Claude Code and opencode; MCP servers removed.
 - **Plan 007** (lifecycle enforcement spine): Piece 0 (error contract), Piece 1 (`init` + `orient` + Claude Code `SessionStart` hook), and Piece 2 (opencode plugin with `experimental.chat.system.transform` orientation + `experimental.session.compacting` reconciliation) complete. Both harnesses now enforce the lifecycle spine.
-- **Plan 008** (work-log coordination kernel): **P0–P3 partial complete, P4 foundation in progress.** The op-CRDT kernel (`op_log`, `work_items` cache, `content_blobs`, verifier), status lattice, merge/reconcile, and cross-project derived index (registry, export/ingest, reverse-edge map) are shipped. P4 local lease table and claim/heartbeat/release CLI are landed; the remaining regista coordinator integration and degrade contract are pending.
+- **Plan 008** (work-log coordination kernel): **P0–P2 complete, P3 partial, P4 foundation in progress.** The op-CRDT kernel (`op_log`, `work_items` cache, `content_blobs`, verifier), status lattice, merge/reconcile, and cross-project derived index (registry, export/ingest, reverse-edge map) are shipped. P4 local lease table and claim/heartbeat/release CLI are landed. **Tier A degrade contract is now the default safe mode** — `doctor` reports `coordinator-absent / local-lease` mode; the `breadcrumb → work-item` migration script is available. The remaining regista coordinator integration (Tier B) and cross-project trigger loop are pending.
 
 ## Quickstart
 
@@ -25,8 +25,8 @@ agent-notes-setup
 # Register your project
 agent-notes init .
 
-# File a breadcrumb
-agent-notes breadcrumb file --title "Found a bug" --kind bug --status new
+# File a work item (new kernel model)
+agent-notes work-item file --title "Found a bug" --kind bug --status open
 
 # Add a memory
 agent-notes memory add --name "postgres-tuning" --body "..." --type note
