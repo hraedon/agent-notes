@@ -571,7 +571,7 @@ class WorkItemModel:
                 WHERE project_id = %s
                   AND identifier != %s
                   AND embedding IS NOT NULL
-                  AND 1 - (embedding <=> %s::vector) >= %s
+                  AND embedding <=> %s::vector <= 1 - %s
                 ORDER BY similarity DESC
                 LIMIT 10
                 """,

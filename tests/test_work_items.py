@@ -328,6 +328,85 @@ class TestEventSurface:
         assert any(e["event_type"] == "item.created" for e in created_events)
         assert any(e["event_type"] == "item.closed" for e in closed_events)
 
+    def test_events_since_cursor(self, default_project):
+        # File first item and record cursor
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-EVT-03",
+            title="First event",
+            embedding=_vec768(),
+        )
+        events_after_first = kernel.events_since(cursor=0, limit=10)
+        first_cursor = events_after_first[0]["id"]
+
+        # File second item
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-EVT-04",
+            title="Second event",
+            embedding=_vec768(),
+        )
+
+        # Query with cursor from first event should only return newer events
+        events_after_cursor = kernel.events_since(cursor=first_cursor, limit=10)
+        assert all(e["id"] > first_cursor for e in events_after_cursor)
+        assert any(e["payload"].get("identifier") == "WI-EVT-04" for e in events_after_cursor)
+
+
+# ---------------------------------------------------------------------------
+# suggest_duplicates
+# ---------------------------------------------------------------------------
+
+
+class TestSuggestDuplicates:
+    def test_suggest_duplicates_no_embedding(self, default_project):
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-DUP-01",
+            title="No embed",
+            # leave embedding NULL
+        )
+        dups = WorkItemModel.suggest_duplicates(default_project.id, "WI-DUP-01")
+        assert dups == []
+
+    def test_suggest_duplicates_no_matches(self, default_project):
+        # Use orthogonal-ish vectors so similarity is near zero
+        v1 = [1.0] + [0.0] * 767
+        v2 = [0.0] * 767 + [1.0]
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-DUP-02",
+            title="Unique item about quantum caching",
+            embedding=v1,
+        )
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-DUP-03",
+            title="Totally different item about lunar pipelines",
+            embedding=v2,
+        )
+        dups = WorkItemModel.suggest_duplicates(default_project.id, "WI-DUP-02", threshold=0.99)
+        assert dups == []
+
+    def test_suggest_duplicates_finds_similar(self, default_project):
+        # Same non-zero embedding (simulates identical semantic content)
+        same_vec = [0.1] * 768
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-DUP-04",
+            title="Duplicate item about caching",
+            embedding=same_vec,
+        )
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-DUP-05",
+            title="Another item about caching",
+            embedding=same_vec,
+        )
+        dups = WorkItemModel.suggest_duplicates(default_project.id, "WI-DUP-04", threshold=0.90)
+        identifiers = [d["identifier"] for d in dups]
+        assert "WI-DUP-05" in identifiers
+
 
 # ---------------------------------------------------------------------------
 # Diagnose
@@ -373,6 +452,209 @@ class TestFold:
         assert count >= 1
         fetched = WorkItemModel.get_work_item(default_project.id, "WI-FOLD-01")
         assert fetched is not None
+
+
+# ---------------------------------------------------------------------------
+# Status lattice (P2)
+# ---------------------------------------------------------------------------
+
+
+def _insert_op_direct(conn, entity_id, entity_type, op_type, lamport, payload, parent_op_ids=None):
+    """Insert an op directly into op_log with a fixed lamport (for testing concurrent ops)."""
+    import psycopg
+
+    from agent_notes.core.kernel import _make_op_id
+
+    parent_op_ids = parent_op_ids or []
+    # Add a unique nonce to ensure distinct op_id even when payload+lamport are identical
+    import time
+
+    nonce = time.time_ns()
+    test_payload = dict(payload)
+    test_payload["_test_nonce"] = nonce
+    op_id = _make_op_id(entity_type, op_type, test_payload, parent_op_ids)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO op_log
+            (op_id, entity_id, entity_type, op_type, lamport, actor_id, payload, parent_op_ids)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            op_id,
+            entity_id,
+            entity_type,
+            op_type,
+            lamport,
+            "test-actor",
+            psycopg.types.json.Jsonb(test_payload),
+            parent_op_ids,
+        ),
+    )
+    return op_id
+
+
+class TestStatusLattice:
+    def test_open_dominates_closed_concurrent(self, default_project):
+        # Create a work item
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-LAT-01",
+            title="Lattice test",
+            status="open",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+
+        # Insert two concurrent status ops at the same lamport
+        with kernel._conn() as conn:
+            _insert_op_direct(conn, entity_id, "work_item", "set_status", 999, {"status": "closed"})
+            _insert_op_direct(conn, entity_id, "work_item", "set_status", 999, {"status": "open"})
+            conn.commit()
+
+        # Rebuild and check: open should win
+        with kernel._conn() as conn:
+            folded = kernel.fold_work_item(conn, entity_id)
+        assert folded is not None
+        assert folded["status"] == "open"
+
+    def test_closed_dominates_deferred_concurrent(self, default_project):
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-LAT-02",
+            title="Lattice test 2",
+            status="open",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+
+        with kernel._conn() as conn:
+            _insert_op_direct(
+                conn, entity_id, "work_item", "set_status", 999, {"status": "deferred"}
+            )
+            _insert_op_direct(conn, entity_id, "work_item", "set_status", 999, {"status": "closed"})
+            conn.commit()
+
+        with kernel._conn() as conn:
+            folded = kernel.fold_work_item(conn, entity_id)
+        assert folded is not None
+        assert folded["status"] == "closed"
+
+    def test_tie_break_by_op_id(self, default_project):
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-LAT-03",
+            title="Lattice tie",
+            status="open",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+
+        # Two concurrent ops setting same status but different op_ids
+        with kernel._conn() as conn:
+            _insert_op_direct(
+                conn, entity_id, "work_item", "set_status", 999, {"status": "claimed"}
+            )
+            _insert_op_direct(
+                conn, entity_id, "work_item", "set_status", 999, {"status": "claimed"}
+            )
+            conn.commit()
+
+        # They should be identical status, so whichever wins is fine
+        with kernel._conn() as conn:
+            folded = kernel.fold_work_item(conn, entity_id)
+        assert folded is not None
+        assert folded["status"] == "claimed"
+
+    def test_sequential_ops_not_affected(self, default_project):
+        # Sequential ops: last one wins (normal case)
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-LAT-04",
+            title="Sequential",
+            status="open",
+            embedding=_vec768(),
+        )
+        WorkItemModel.close_work_item(default_project.id, "WI-LAT-04")
+        fetched = WorkItemModel.get_work_item(default_project.id, "WI-LAT-04")
+        assert fetched["status"] == "closed"
+
+    def test_close_op_dominates_open_concurrent(self, default_project):
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-LAT-05",
+            title="Close vs open",
+            status="open",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+
+        with kernel._conn() as conn:
+            _insert_op_direct(conn, entity_id, "work_item", "close", 999, {"reason": "test"})
+            _insert_op_direct(conn, entity_id, "work_item", "set_status", 999, {"status": "open"})
+            conn.commit()
+
+        with kernel._conn() as conn:
+            folded = kernel.fold_work_item(conn, entity_id)
+        assert folded is not None
+        assert folded["status"] == "open"  # open dominates closed
+
+    def test_merge_op_replaces_state(self, default_project):
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-LAT-06",
+            title="Merge test",
+            status="open",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+
+        with kernel._conn() as conn:
+            _insert_op_direct(
+                conn,
+                entity_id,
+                "work_item",
+                "merge",
+                999,
+                {
+                    "merged_state": {
+                        "title": "Merged title",
+                        "status": "claimed",
+                        "severity": "high",
+                    }
+                },
+            )
+            conn.commit()
+
+        with kernel._conn() as conn:
+            folded = kernel.fold_work_item(conn, entity_id)
+        assert folded is not None
+        assert folded["title"] == "Merged title"
+        assert folded["status"] == "claimed"
+        assert folded["severity"] == "high"
+
+    def test_concurrent_set_field_and_status(self, default_project):
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-LAT-07",
+            title="Concurrent fields",
+            status="open",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+
+        with kernel._conn() as conn:
+            _insert_op_direct(
+                conn, entity_id, "work_item", "set_field", 999, {"title": "New title"}
+            )
+            _insert_op_direct(conn, entity_id, "work_item", "set_status", 999, {"status": "closed"})
+            conn.commit()
+
+        with kernel._conn() as conn:
+            folded = kernel.fold_work_item(conn, entity_id)
+        assert folded is not None
+        assert folded["title"] == "New title"
+        assert folded["status"] == "closed"
 
 
 # ---------------------------------------------------------------------------

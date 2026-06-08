@@ -26,6 +26,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from agent_notes.core.db import _conn
+from agent_notes.core.envelope import NullSigner, make_envelope
 
 # ---------------------------------------------------------------------------
 # Content-addressed blobs
@@ -105,15 +106,35 @@ def commit_op(
     payload: dict,
     parent_op_ids: list[str] | None = None,
     actor_id: str | None = None,
+    signer: Any | None = None,
 ) -> dict:
     """Write an op to op_log and return the committed op dict.
 
     This is the low-level primitive. Callers (e.g. WorkItemModel) should
     open a connection, call this, then fold the entity, then commit.
+
+    From P0 every op carries a DSSE envelope in ``payload['envelope']``;
+    the envelope is *not* part of the ``op_id`` hash (decision: the op is
+    the payload inside the envelope).  ``signer`` defaults to ``NullSigner``
+    so the structural format is present from day one; flipping to
+    ``LocalKeySigner`` in P1 is a config change.
     """
     parent_op_ids = parent_op_ids or []
     op_id = _make_op_id(entity_type, op_type, payload, parent_op_ids)
     lamport = _next_lamport(conn)
+
+    signer = signer or NullSigner()
+    effective_actor_id = actor_id if actor_id is not None else signer.key_id()
+
+    # Build envelope around the inner payload; envelope is stored inside the
+    # JSONB payload column but excluded from the op_id hash.
+    envelope = make_envelope(
+        payload_type="agent-provenance-v0/op",
+        payload=payload,
+        signer=signer,
+    )
+    stored_payload = dict(payload)
+    stored_payload["envelope"] = envelope
 
     cur = conn.cursor(row_factory=dict_row)
     cur.execute(
@@ -130,8 +151,8 @@ def commit_op(
             entity_type,
             op_type,
             lamport,
-            actor_id,
-            psycopg.types.json.Jsonb(payload),
+            effective_actor_id,
+            psycopg.types.json.Jsonb(stored_payload),
             parent_op_ids,
         ),
     )
@@ -164,14 +185,143 @@ def _get_entity_ops(conn: psycopg.Connection, entity_id: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Status lattice (P2)
+# ---------------------------------------------------------------------------
+
+# Fail-safe direction: open dominates closed (surface unfinished work).
+_STATUS_LATTICE = {
+    "open": 3,
+    "claimed": 2,
+    "closed": 1,
+    "deferred": 0,
+}
+
+
+def _status_rank(status: str | None) -> int:
+    return _STATUS_LATTICE.get(status, -1) if status is not None else -1
+
+
+def _resolve_status_lattice(
+    status_ops: list[dict],
+    current_status: str | None,
+) -> str | None:
+    """Pick the winning status from a set of concurrent ops.
+
+    For a single status op (sequential case) the new status is applied
+    directly — last-write-wins.  For multiple concurrent status ops,
+    the higher lattice rank wins.  Ties are broken by lexicographically
+    smaller ``op_id`` (deterministic, content-addressed).
+    """
+    if not status_ops:
+        return current_status
+
+    # Single op: sequential, apply directly.
+    if len(status_ops) == 1:
+        op = status_ops[0]
+        if op["op_type"] == "close":
+            return "closed"
+        return (op.get("payload") or {}).get("status")
+
+    # Multiple ops: concurrent — resolve among them by lattice.
+    winning_status: str | None = None
+    winning_op_id: str | None = None
+
+    for op in status_ops:
+        op_type = op["op_type"]
+        op_id = op["op_id"]
+        if op_type == "close":
+            new_status = "closed"
+        else:
+            new_status = (op.get("payload") or {}).get("status")
+
+        if new_status is None:
+            continue
+
+        if winning_status is None:
+            winning_status = new_status
+            winning_op_id = op_id
+            continue
+
+        current_rank = _status_rank(winning_status)
+        new_rank = _status_rank(new_status)
+
+        if new_rank > current_rank:
+            winning_status = new_status
+            winning_op_id = op_id
+        elif new_rank == current_rank and op_id < (winning_op_id or ""):
+            winning_status = new_status
+            winning_op_id = op_id
+
+    return winning_status
+
+
+def _apply_op_to_state(state: dict[str, Any], op: dict) -> None:
+    """Apply a single non-status op to the state accumulator."""
+    op_type = op["op_type"]
+    payload = op.get("payload") or {}
+
+    if op_type == "create":
+        state["project_id"] = payload.get("project_id")
+        state["identifier"] = payload.get("identifier")
+        state["title"] = payload.get("title")
+        state["body_hash"] = payload.get("body_hash")
+        state["kind"] = payload.get("kind")
+        state["status"] = payload.get("status", "open")
+        state["severity"] = payload.get("severity", "medium")
+        state["external_refs"] = payload.get("external_refs", {})
+        state["diagnostic_keys"] = payload.get("diagnostic_keys", {})
+        state["embedding"] = payload.get("embedding")
+        state["frontmatter_version"] = payload.get("frontmatter_version", 1)
+
+    elif op_type == "set_field":
+        for field in ("title", "kind", "severity", "body_hash", "frontmatter_version"):
+            if field in payload:
+                state[field] = payload[field]
+        if "external_refs" in payload:
+            state["external_refs"].update(payload["external_refs"])
+        if "diagnostic_keys" in payload:
+            state["diagnostic_keys"].update(payload["diagnostic_keys"])
+        if "embedding" in payload:
+            state["embedding"] = payload["embedding"]
+
+    elif op_type == "snapshot":
+        sealed = payload.get("sealed_state", {})
+        state.update(sealed)
+
+    elif op_type == "merge":
+        merged = payload.get("merged_state", {})
+        state.update(merged)
+
+
 def fold_work_item(conn: psycopg.Connection, entity_id: str) -> dict | None:
     """Rebuild a work_item from its op chain and write to the cache.
+
+    P2 changes:
+    - Ops are grouped by ``lamport``; concurrent ops (same lamport) have their
+      status changes resolved by the fail-safe lattice (open > claimed > closed).
+    - ``merge`` ops replace state with the merged payload.
 
     Returns the folded work_item dict, or None if the entity has no ops.
     """
     ops = _get_entity_ops(conn, entity_id)
     if not ops:
         return None
+
+    # Group ops by lamport for concurrent resolution.
+    groups: list[list[dict]] = []
+    current_lamport: int | None = None
+    current_group: list[dict] = []
+    for op in ops:
+        if op["lamport"] != current_lamport:
+            if current_group:
+                groups.append(current_group)
+            current_lamport = op["lamport"]
+            current_group = [op]
+        else:
+            current_group.append(op)
+    if current_group:
+        groups.append(current_group)
 
     # State accumulator
     state: dict[str, Any] = {
@@ -189,44 +339,16 @@ def fold_work_item(conn: psycopg.Connection, entity_id: str) -> dict | None:
         "frontmatter_version": 1,
     }
 
-    for op in ops:
-        op_type = op["op_type"]
-        payload = op.get("payload") or {}
+    for group in groups:
+        status_ops: list[dict] = []
+        for op in group:
+            if op["op_type"] in ("set_status", "close"):
+                status_ops.append(op)
+            else:
+                _apply_op_to_state(state, op)
 
-        if op_type == "create":
-            state["project_id"] = payload.get("project_id")
-            state["identifier"] = payload.get("identifier")
-            state["title"] = payload.get("title")
-            state["body_hash"] = payload.get("body_hash")
-            state["kind"] = payload.get("kind")
-            state["status"] = payload.get("status", "open")
-            state["severity"] = payload.get("severity", "medium")
-            state["external_refs"] = payload.get("external_refs", {})
-            state["diagnostic_keys"] = payload.get("diagnostic_keys", {})
-            state["embedding"] = payload.get("embedding")
-            state["frontmatter_version"] = payload.get("frontmatter_version", 1)
-
-        elif op_type == "set_status":
-            state["status"] = payload.get("status")
-
-        elif op_type == "set_field":
-            for field in ("title", "kind", "severity", "body_hash", "frontmatter_version"):
-                if field in payload:
-                    state[field] = payload[field]
-            if "external_refs" in payload:
-                state["external_refs"].update(payload["external_refs"])
-            if "diagnostic_keys" in payload:
-                state["diagnostic_keys"].update(payload["diagnostic_keys"])
-            if "embedding" in payload:
-                state["embedding"] = payload["embedding"]
-
-        elif op_type == "close":
-            state["status"] = "closed"
-
-        elif op_type == "snapshot":
-            # snapshot op carries a sealed state payload; replace entirely.
-            sealed = payload.get("sealed_state", {})
-            state.update(sealed)
+        if status_ops:
+            state["status"] = _resolve_status_lattice(status_ops, state.get("status"))
 
     # If we never got a create op, this is a dangling entity.
     if state["project_id"] is None or state["identifier"] is None:

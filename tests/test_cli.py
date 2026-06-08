@@ -174,9 +174,14 @@ def test_link_add_bad_ref_does_not_traceback():
     """link add has no --json; a malformed ref must be a clean error on stderr
     (exit !=0, empty stdout), never an uncaught traceback."""
     result = _run(
-        "link", "add",
-        "--from", "bad", "--to", "k:w/p/i",
-        "--type", "relates_to",
+        "link",
+        "add",
+        "--from",
+        "bad",
+        "--to",
+        "k:w/p/i",
+        "--type",
+        "relates_to",
         check=False,
     )
     assert result.returncode != 0

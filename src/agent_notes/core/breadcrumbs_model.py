@@ -55,8 +55,7 @@ class BreadcrumbModel:
             valid = [r["name"] for r in cur.fetchall()]
             if valid:
                 raise ValueError(
-                    f"Unknown {kind_namespace} value: {name!r}. "
-                    f"Valid values: {', '.join(valid)}"
+                    f"Unknown {kind_namespace} value: {name!r}. Valid values: {', '.join(valid)}"
                 )
             else:
                 raise ValueError(
@@ -406,7 +405,7 @@ class BreadcrumbModel:
                 WHERE project_id = %s
                   AND identifier != %s
                   AND embedding IS NOT NULL
-                  AND 1 - (embedding <=> %s::vector) >= %s
+                  AND embedding <=> %s::vector <= 1 - %s
                 ORDER BY similarity DESC
                 LIMIT 10
                 """,
@@ -473,9 +472,7 @@ class BreadcrumbModel:
                 refs = dict(bc.get("external_refs") or {})
                 refs["resolved_by_commit"] = info["commit"]
                 refs["resolved_by_subject"] = info["subject"]
-                cls.update_breadcrumb(
-                    project_id, ident, status="resolved", external_refs=refs
-                )
+                cls.update_breadcrumb(project_id, ident, status="resolved", external_refs=refs)
                 applied = True
             results.append(
                 {

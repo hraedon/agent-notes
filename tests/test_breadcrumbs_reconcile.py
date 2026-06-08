@@ -47,8 +47,14 @@ def git_project(tmp_path):
 def test_reconcile_dry_run_suggests_without_mutating(git_project):
     proj, repo = git_project
     BreadcrumbModel.file_breadcrumb(
-        project_id=proj.id, identifier="BC-001", title="x", body="",
-        kind="bug", status="new", severity="high", embedding=_vec(),
+        project_id=proj.id,
+        identifier="BC-001",
+        title="x",
+        body="",
+        kind="bug",
+        status="new",
+        severity="high",
+        embedding=_vec(),
     )
     _git(repo, "commit", "--allow-empty", "-q", "-m", "resolve BC-001: done")
 
@@ -66,8 +72,14 @@ def test_reconcile_dry_run_suggests_without_mutating(git_project):
 def test_reconcile_apply_resolves_and_records_provenance(git_project):
     proj, repo = git_project
     BreadcrumbModel.file_breadcrumb(
-        project_id=proj.id, identifier="BC-002", title="y", body="",
-        kind="bug", status="new", severity="medium", embedding=_vec(),
+        project_id=proj.id,
+        identifier="BC-002",
+        title="y",
+        body="",
+        kind="bug",
+        status="new",
+        severity="medium",
+        embedding=_vec(),
     )
     _git(repo, "commit", "--allow-empty", "-q", "-m", "fix BC-002 properly")
 
@@ -85,8 +97,14 @@ def test_reconcile_apply_resolves_and_records_provenance(git_project):
 def test_reconcile_leaves_genuinely_open_bc_untouched(git_project):
     proj, repo = git_project
     BreadcrumbModel.file_breadcrumb(
-        project_id=proj.id, identifier="BC-003", title="z", body="",
-        kind="bug", status="new", severity="low", embedding=_vec(),
+        project_id=proj.id,
+        identifier="BC-003",
+        title="z",
+        body="",
+        kind="bug",
+        status="new",
+        severity="low",
+        embedding=_vec(),
     )
     _git(repo, "commit", "--allow-empty", "-q", "-m", "working on BC-003 (not done)")
 

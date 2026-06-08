@@ -94,6 +94,7 @@ def report_resolution_failure(
 def _output(data: Any, use_json: bool) -> None:
     if use_json:
         from importlib.metadata import version
+
         payload = {"version": version("agent-notes"), **data}
         print(json.dumps(payload, indent=2, default=str, ensure_ascii=False))
     else:

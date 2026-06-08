@@ -44,10 +44,14 @@ def cmd_export(args: argparse.Namespace) -> int:
             available = [w.slug for w in list_workspaces()]
             hint = f" Available: {', '.join(available)}" if available else ""
             suggestion = " Use --path for auto-resolution or run 'agent-notes workspace list'."
-            print(json.dumps({
-                "error": f"workspace '{args.workspace}' not found",
-                "available": available,
-            }))
+            print(
+                json.dumps(
+                    {
+                        "error": f"workspace '{args.workspace}' not found",
+                        "available": available,
+                    }
+                )
+            )
             print(f"Workspace '{args.workspace}' not found.{hint}{suggestion}", file=sys.stderr)
             return EXIT_NOT_CONFIGURED
         projects = list_projects(workspace_id=ws.id)

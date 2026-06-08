@@ -542,3 +542,17 @@ Changes from v1.0:
 | K5.4 | `change_log.identifier` semantics for workspace-level events | Kimi | Deferred per Kimi's own note; document when first written |
 
 **Status:** plan is converging. Net change in v1.5 is editorial cleanup + schema correctness (memories `active`, projects `repo_root`) + one architectural simplification (single binary, GLM #7). No further architectural debates open. Ready for Phase 0 dispatch.
+
+---
+
+## 13. Plan 008 P2 decision — fail-safe status lattice
+
+**Decision 57 (2026-06-08):** On genuinely concurrent status ops (same lamport), the fail-safe lattice is `open > claimed > closed > deferred` — open dominates closed. This surfaces unfinished work rather than silently hiding it. Configurable lattices are a P3+ concern; do not build a policy engine in P2.
+
+**Implementation:** The `fold_work_item` function groups ops by lamport. Within a group:
+- A single status op is applied directly (sequential, last-write-wins).
+- Multiple concurrent status ops are resolved by lattice rank; ties break by lexicographically smaller `op_id` (deterministic because `op_id` is a content hash).
+
+**Merge op:** The `merge` op carries a `merged_state` payload and replaces the entire state. This is the reconciliation primitive for replica logs.
+
+**Rationale:** This matches the Radicle COB / git-bug model: deterministic ordering by `(lamport, op_id)` with a lattice for concurrent conflicts. The lattice direction is intentionally fail-safe (unfinished work is visible) because silently closing work is the anti-pattern this project exists to kill.

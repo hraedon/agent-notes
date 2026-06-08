@@ -16,10 +16,15 @@ def cmd_vocab_list(args: argparse.Namespace) -> int:
         hint = f" Available: {', '.join(available)}" if available else ""
         suggestion = " Use --path for auto-resolution or run 'agent-notes workspace list'."
         if use_json:
-            print(json.dumps({
-                "error": f"workspace '{args.workspace}' not found",
-                "available": available,
-            }, indent=2))
+            print(
+                json.dumps(
+                    {
+                        "error": f"workspace '{args.workspace}' not found",
+                        "available": available,
+                    },
+                    indent=2,
+                )
+            )
         else:
             print(f"Workspace '{args.workspace}' not found.{hint}{suggestion}")
         return EXIT_NOT_FOUND
@@ -46,10 +51,15 @@ def cmd_vocab_add(args: argparse.Namespace) -> int:
         hint = f" Available: {', '.join(available)}" if available else ""
         suggestion = " Use --path for auto-resolution or run 'agent-notes workspace list'."
         if use_json:
-            print(json.dumps({
-                "error": f"workspace '{args.workspace}' not found",
-                "available": available,
-            }, indent=2))
+            print(
+                json.dumps(
+                    {
+                        "error": f"workspace '{args.workspace}' not found",
+                        "available": available,
+                    },
+                    indent=2,
+                )
+            )
         else:
             print(f"Workspace '{args.workspace}' not found.{hint}{suggestion}")
         return EXIT_NOT_FOUND
@@ -81,10 +91,15 @@ def cmd_vocab_archive(args: argparse.Namespace) -> int:
         hint = f" Available: {', '.join(available)}" if available else ""
         suggestion = " Use --path for auto-resolution or run 'agent-notes workspace list'."
         if use_json:
-            print(json.dumps({
-                "error": f"workspace '{args.workspace}' not found",
-                "available": available,
-            }, indent=2))
+            print(
+                json.dumps(
+                    {
+                        "error": f"workspace '{args.workspace}' not found",
+                        "available": available,
+                    },
+                    indent=2,
+                )
+            )
         else:
             print(f"Workspace '{args.workspace}' not found.{hint}{suggestion}")
         return EXIT_NOT_FOUND

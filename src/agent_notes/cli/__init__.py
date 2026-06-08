@@ -21,6 +21,7 @@ from agent_notes.cli.memory import register_memory_parsers
 from agent_notes.cli.orient import register_orient_parser
 from agent_notes.cli.search import register_search_parsers
 from agent_notes.cli.skills import register_skills_parser
+from agent_notes.cli.verify import register_verify_parsers
 from agent_notes.cli.vocabulary import register_vocabulary_parsers
 from agent_notes.cli.work_items import register_work_item_parsers
 from agent_notes.cli.workspace import register_workspace_parsers
@@ -179,6 +180,7 @@ def main() -> int:
     register_skills_parser(sub)
     register_export_parsers(sub)
     register_orient_parser(sub)
+    register_verify_parsers(sub)
 
     args = parser.parse_args()
 

@@ -48,9 +48,7 @@ def resolve_dsn(explicit: str | None = None) -> str:
         try:
             data = json.loads(path.read_text())
         except (OSError, ValueError) as exc:
-            raise RuntimeError(
-                f"agent-notes config at {path} could not be read: {exc}"
-            ) from exc
+            raise RuntimeError(f"agent-notes config at {path} could not be read: {exc}") from exc
         dsn = data.get("dsn")
         if dsn:
             return dsn

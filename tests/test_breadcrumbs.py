@@ -277,9 +277,7 @@ def _setup_two_bcs(default_project):
 def test_parse_breadcrumb_file_skips_non_breadcrumb(tmp_path):
     (tmp_path / "README.md").write_text("# Breadcrumbs\n\nIndex, not a breadcrumb.\n")
     assert parse_breadcrumb_file(tmp_path / "README.md") is None
-    (tmp_path / "001-x.md").write_text(
-        '---\nnumber: "001"\ntitle: Foo\nkind: bug\n---\n\nBody.\n'
-    )
+    (tmp_path / "001-x.md").write_text('---\nnumber: "001"\ntitle: Foo\nkind: bug\n---\n\nBody.\n')
     parsed = parse_breadcrumb_file(tmp_path / "001-x.md")
     assert parsed["identifier"] == "001" and parsed["title"] == "Foo"
 
@@ -347,8 +345,13 @@ def test_sync_prune_removes_absent(tmp_path):
         ws.id, slug="prune-proj", name="prune-proj", repo_root="/projects/prune"
     )
     BreadcrumbModel.file_breadcrumb(
-        project_id=proj.id, identifier="OLD-1", title="stale", kind="bug",
-        status="new", severity="high", embedding=_vec768(),
+        project_id=proj.id,
+        identifier="OLD-1",
+        title="stale",
+        kind="bug",
+        status="new",
+        severity="high",
+        embedding=_vec768(),
     )
     (tmp_path / "002-keep.md").write_text(
         '---\nnumber: "002"\ntitle: Keep\nkind: bug\nstatus: new\nseverity: high\n---\n\nB.\n'
@@ -368,12 +371,22 @@ def test_orient_digest(default_project, capsys):
     from agent_notes.cli.orient import cmd_orient
 
     BreadcrumbModel.file_breadcrumb(
-        project_id=default_project.id, identifier="OR-1", title="Open item",
-        kind="bug", status="open", severity="high", embedding=_vec768(),
+        project_id=default_project.id,
+        identifier="OR-1",
+        title="Open item",
+        kind="bug",
+        status="open",
+        severity="high",
+        embedding=_vec768(),
     )
     BreadcrumbModel.file_breadcrumb(
-        project_id=default_project.id, identifier="OR-2", title="Done item",
-        kind="bug", status="resolved", severity="low", embedding=_vec768(),
+        project_id=default_project.id,
+        identifier="OR-2",
+        title="Done item",
+        kind="bug",
+        status="resolved",
+        severity="low",
+        embedding=_vec768(),
     )
     ns = argparse.Namespace(
         path="/projects/sf2", workspace=None, project=None, json=True, days=30, limit=15
@@ -382,5 +395,5 @@ def test_orient_digest(default_project, capsys):
     data = json.loads(capsys.readouterr().out)
     assert data["project"] == "sf2"
     ids = {b["identifier"] for b in data["open_breadcrumbs"]}
-    assert "OR-1" in ids          # open surfaced
-    assert "OR-2" not in ids      # resolved (terminal) excluded
+    assert "OR-1" in ids  # open surfaced
+    assert "OR-2" not in ids  # resolved (terminal) excluded
