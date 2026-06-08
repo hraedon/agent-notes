@@ -6,7 +6,9 @@ Consolidates and supersedes the standalone `breadcrumb-mcp` and `memory-mcp` pro
 
 ## Status
 
-CLI flattening (Plan 004 Phase 9a) complete and shipping. Skills (Phase 9b) installed across Claude Code and opencode. NOTIFY→agent-wake bridge (Phase 9c) implemented; live integration gated on agent-wake v0 tag. MCP servers removed (Phase 9d).
+- **Plan 004** (MCP→CLI flattening): Phases 9a–9d complete. CLI is the primary sync surface; skills installed across Claude Code and opencode; MCP servers removed.
+- **Plan 007** (lifecycle enforcement spine): Piece 0 (error contract), Piece 1 (`init` + `orient` + Claude Code `SessionStart` hook), and Piece 2 (opencode plugin with `experimental.chat.system.transform` orientation + `experimental.session.compacting` reconciliation) complete. Both harnesses now enforce the lifecycle spine.
+- **Plan 008** (work-log coordination kernel): **P0–P3 partial complete, P4 foundation in progress.** The op-CRDT kernel (`op_log`, `work_items` cache, `content_blobs`, verifier), status lattice, merge/reconcile, and cross-project derived index (registry, export/ingest, reverse-edge map) are shipped. P4 local lease table and claim/heartbeat/release CLI are landed; the remaining regista coordinator integration and degrade contract are pending.
 
 ## Quickstart
 
@@ -66,6 +68,18 @@ agent-notes vocabulary list [--kind ...] [--path PATH] [--json]
 agent-notes vocabulary add --workspace <slug> <kind> <name> [--sort-order N] [--terminal] [--closed] [--json]
 agent-notes vocabulary archive <kind> <value>
 
+agent-notes work-item file --title T [--body B] [--type ...] [--status ...] [--path PATH] [--json]
+agent-notes work-item update <id> [--status ...] [--body ...] [--append-body ...] [--json]
+agent-notes work-item get <id> [--with-body] [--json]
+agent-notes work-item find [--status ...] [--type ...] [--text ...] [--path PATH] [--json]
+agent-notes work-item ready [--path PATH] [--json]
+agent-notes work-item claimable [--path PATH] [--json]
+agent-notes work-item claim <id> [--actor-id ...] [--ttl 300] [--json]
+agent-notes work-item release <id> [--actor-id ...] [--json]
+agent-notes work-item heartbeat <id> [--actor-id ...] [--ttl 300] [--json]
+agent-notes work-item requeue-expired [--json]
+agent-notes work-item close <id> [--path PATH] [--json]
+
 agent-notes changes since <timestamp-or-id> [--json]
 
 agent-notes install-skills [--target claude|opencode] [--dry-run]
@@ -96,6 +110,20 @@ agent-notes install-skills --target claude       # → ~/.claude/skills/<name>/S
 agent-notes install-skills --target opencode     # → ~/.config/opencode/command/<name>.md
 # Add --dry-run to preview without writing.
 ```
+
+### Opencode plugin (lifecycle enforcement)
+
+For **automatic** session-start orientation and compaction reconciliation,
+use the opencode plugin (Plan 007 Piece 2). Unlike skills (which the
+model chooses to invoke), the plugin injects prompts into the system
+prompt and compaction context on every session:
+
+```bash
+# Add to ~/.config/opencode/opencode.json:
+#   "plugin": ["/projects/agent-notes/integrations/opencode/index.js"]
+```
+
+See `integrations/opencode/README.md` for full setup.
 
 Both targets read the same `skills/<name>/SKILL.md` source. The
 opencode target strips the `name:` line from YAML frontmatter

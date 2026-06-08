@@ -7,9 +7,10 @@ Conventions and quick reference for agents (and humans) working on agent-notes.
 ## Orient
 
 1. **Read first:** `plans/001-architecture-and-implementation.md` — authoritative architecture, design decisions (numbered, peer-reviewed), and phased task tables.
-2. **Then:** `plans/003-drop-projection-add-web-frontend.md` for the projection-removal and web frontend changes (Phase 8a).
-3. **Then:** `plans/004-flatten-cli-and-async-bridge.md` for the MCP->CLI flattening (Phase 9a–the current phase).
-4. **Then:** the current phase's task table tells you what's in scope.
+2. **Then:** `plans/003-drop-projection-add-web-frontend.md` for the projection-removal and web frontend changes (Phase 8a — complete).
+3. **Then:** `plans/004-flatten-cli-and-async-bridge.md` for the MCP->CLI flattening (Phase 9a–9d — complete).
+4. **Then:** `plans/007-lifecycle-enforcement-spine.md` for the lifecycle enforcement and cross-harness instantiation (Piece 0–1 complete; Piece 2 opencode hooks pending).
+5. **Then:** `plans/008-work-log-coordination-kernel.md` for the op-CRDT work log, provenance, and cross-project coordination (P0–P3 partial complete — the current phase).
 
 ## Build / test / lint
 
@@ -26,6 +27,8 @@ Tests for triggers, recursive CTEs, and `change_log` semantics must run against 
 ## Architecture in one paragraph
 
 One Postgres database (`agent_notes`), one Python package (`agent_notes`), one `Server` base class with composable kind registries. The **CLI (`agent-notes`) is the primary sync surface** (Plan 004 Phase 9a+). The shared `core/` library handles DB connection pooling, embedding, links, change_log, NOTIFY, and search. A read-only web frontend (`agent-notes-web`) provides browser-based browsing of breadcrumbs, memories, and semantic search.
+
+**Work-log coordination kernel** (Plan 008, P0–P3): the `op_log` is an append-only, attested operation log (op-CRDT model) with content-addressed blobs, a deterministic fold into the `work_items` cache, a fail-safe status lattice, and a standalone verifier CLI. Cross-project coordination (P3) adds `request`/`wait` ops, a derived index for foreign work items, and a reverse-edge map so the `ready` query spans projects.
 
 ## Schema conventions
 
@@ -61,6 +64,12 @@ judgment in prose. Install with `agent-notes install-skills --target
 {claude,opencode}` (idempotent). Both targets share the same
 SKILL.md source; the opencode target rewrites frontmatter at install
 time. See Plan 004 §9 Q4 (resolved 2026-05-27).
+
+**Opencode plugin** (Plan 007 Piece 2): `integrations/opencode/index.js`
+uses `experimental.chat.system.transform` to inject `agent-notes orient`
+output into every session's system prompt, and `experimental.session.compacting`
+to append a reconciliation checklist before compaction. This is the
+non-optional enforcement layer that complements the opt-in skills.
 
 ## End of session
 

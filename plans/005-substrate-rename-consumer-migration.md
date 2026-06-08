@@ -1,8 +1,8 @@
 # Plan 005 — Consumer migration: substrate → regista
 
-**Status:** Phase 2 of the cross-project rename. **Blocked until regista Plan 018 completes** and `v0.4.0` is tagged.
+**Status:** COMPLETE (2026-05-28). The rename landed in commit `112446d` (sf2) and `b43ada8` (regista). All live source references have been updated; historical plans and breadcrumbs are intentionally left untouched per the "Intentionally not touched" section below.
 **Scope:** agent-notes specifically. See `/projects/RENAME-substrate-to-regista.md` for the orchestration context.
-**Regista refs in this repo:** 17 (light touch).
+**Regista refs in this repo:** 0 in live source (`src/`, `pyproject.toml`); 1 in a comment (`src/agent_notes/core/bc_files.py`).
 
 ---
 

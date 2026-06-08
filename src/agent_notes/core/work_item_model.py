@@ -638,6 +638,202 @@ class WorkItemModel:
         return kernel.claimable_work_items(project_id, workspace_id, limit)
 
     @classmethod
+    def claim_work_item(
+        cls,
+        project_id: int,
+        identifier: str,
+        actor_id: str | None = None,
+        ttl_seconds: int = 300,
+    ) -> dict:
+        """Claim a work item (P4 — local lease, no coordinator yet).
+
+        Writes a ``claim`` op to the op_log and inserts a row into
+        ``work_item_leases``.  Returns the folded work_item.
+        """
+        with _conn() as conn:
+            cls._resolve_workspace_for_project(conn, project_id)
+            cur = conn.cursor(row_factory=dict_row)
+            cur.execute(
+                "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
+                (project_id, identifier),
+            )
+            old = cur.fetchone()
+            if old is None:
+                raise ValueError(f"Work item not found: {identifier!r} in project {project_id}")
+
+            entity_id = old["entity_id"]
+            status = old["status"]
+
+            # Only claimable items can be claimed
+            if status != "open":
+                raise ValueError(
+                    f"Cannot claim: status is {status!r} (must be 'open')"
+                )
+
+            # Check if already leased
+            cur.execute(
+                "SELECT 1 FROM work_item_leases WHERE entity_id = %s AND expires_at > now()",
+                (entity_id,),
+            )
+            if cur.fetchone() is not None:
+                raise ValueError(f"Work item {identifier!r} is already claimed")
+
+            # Write claim op
+            op = kernel.commit_op(
+                conn,
+                entity_id=entity_id,
+                entity_type=cls.entity_type,
+                op_type="claim",
+                payload={"actor_id": actor_id, "ttl_seconds": ttl_seconds},
+                parent_op_ids=[entity_id],
+                actor_id=actor_id,
+            )
+
+            # Insert lease
+            cur.execute(
+                """
+                INSERT INTO work_item_leases (entity_id, actor_id, expires_at)
+                VALUES (%s, %s, now() + interval '%s seconds')
+                ON CONFLICT (entity_id) DO UPDATE SET
+                    actor_id = EXCLUDED.actor_id,
+                    acquired_at = now(),
+                    expires_at = EXCLUDED.expires_at,
+                    heartbeat_count = work_item_leases.heartbeat_count + 1
+                """,
+                (entity_id, actor_id or "unknown", ttl_seconds),
+            )
+
+            # Write a set_status op to move status to 'claimed'
+            kernel.commit_op(
+                conn,
+                entity_id=entity_id,
+                entity_type=cls.entity_type,
+                op_type="set_status",
+                payload={"status": "claimed"},
+                parent_op_ids=[entity_id],
+                actor_id=actor_id,
+            )
+
+            kernel.emit_event(
+                conn,
+                op_id=op["op_id"],
+                event_type="claim.granted",
+                payload={"entity_id": entity_id, "identifier": identifier, "actor_id": actor_id},
+            )
+
+            # Fold into cache
+            folded = kernel.fold_work_item(conn, entity_id)
+            if folded is None:
+                raise RuntimeError("fold_work_item returned None after claim op")
+
+            conn.commit()
+            return dict(folded)
+
+    @classmethod
+    def release_work_item(
+        cls,
+        project_id: int,
+        identifier: str,
+        actor_id: str | None = None,
+    ) -> dict:
+        """Release a claimed work item (P4).
+
+        Writes a ``release`` op and deletes the lease row.
+        """
+        with _conn() as conn:
+            cls._resolve_workspace_for_project(conn, project_id)
+            cur = conn.cursor(row_factory=dict_row)
+            cur.execute(
+                "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
+                (project_id, identifier),
+            )
+            old = cur.fetchone()
+            if old is None:
+                raise ValueError(f"Work item not found: {identifier!r} in project {project_id}")
+
+            entity_id = old["entity_id"]
+
+            # Write release op
+            op = kernel.commit_op(
+                conn,
+                entity_id=entity_id,
+                entity_type=cls.entity_type,
+                op_type="release",
+                payload={"actor_id": actor_id},
+                parent_op_ids=[entity_id],
+                actor_id=actor_id,
+            )
+
+            # Delete lease
+            cur.execute(
+                "DELETE FROM work_item_leases WHERE entity_id = %s",
+                (entity_id,),
+            )
+
+            # Write set_status op to move back to 'open'
+            kernel.commit_op(
+                conn,
+                entity_id=entity_id,
+                entity_type=cls.entity_type,
+                op_type="set_status",
+                payload={"status": "open"},
+                parent_op_ids=[entity_id],
+                actor_id=actor_id,
+            )
+
+            kernel.emit_event(
+                conn,
+                op_id=op["op_id"],
+                event_type="claim.released",
+                payload={"entity_id": entity_id, "identifier": identifier, "actor_id": actor_id},
+            )
+
+            folded = kernel.fold_work_item(conn, entity_id)
+            if folded is None:
+                raise RuntimeError("fold_work_item returned None after release op")
+
+            conn.commit()
+            return dict(folded)
+
+    @classmethod
+    def heartbeat_work_item(
+        cls,
+        project_id: int,
+        identifier: str,
+        actor_id: str | None = None,
+        ttl_seconds: int = 300,
+    ) -> dict:
+        """Heartbeat a claimed work item to extend its lease (P4)."""
+        with _conn() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            cur.execute(
+                "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
+                (project_id, identifier),
+            )
+            old = cur.fetchone()
+            if old is None:
+                raise ValueError(f"Work item not found: {identifier!r} in project {project_id}")
+
+            entity_id = old["entity_id"]
+
+            cur.execute(
+                """
+                UPDATE work_item_leases
+                SET expires_at = now() + interval '%s seconds',
+                    heartbeat_count = heartbeat_count + 1
+                WHERE entity_id = %s
+                RETURNING *
+                """,
+                (ttl_seconds, entity_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError(f"Work item {identifier!r} is not claimed — cannot heartbeat")
+
+            conn.commit()
+            return dict(row)
+
+    @classmethod
     def get_work_item_body(cls, project_id: int, identifier: str) -> str | None:
         """Return the body text for a work item by looking up its blob."""
         with _conn() as conn:

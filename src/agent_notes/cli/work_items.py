@@ -616,6 +616,124 @@ def cmd_wi_rebuild_cache(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
+def cmd_wi_claim(args: argparse.Namespace) -> int:
+    """Claim a work item (P4)."""
+    use_json = getattr(args, "json", False)
+    try:
+        ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
+
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    try:
+        wi = WorkItemModel.claim_work_item(
+            project_id=proj_id,
+            identifier=args.identifier,
+            actor_id=args.actor_id,
+            ttl_seconds=args.ttl,
+        )
+    except ValueError as exc:
+        if use_json:
+            print(json.dumps({"error": str(exc)}, indent=2))
+        else:
+            print(f"Error: {exc}")
+        return EXIT_CONFLICT
+
+    if use_json:
+        print(json.dumps({"work_item": wi}, indent=2, default=str))
+    else:
+        print(f"Claimed: **{wi['identifier']}** (expires in {args.ttl}s)")
+    return EXIT_SUCCESS
+
+
+def cmd_wi_release(args: argparse.Namespace) -> int:
+    """Release a claimed work item (P4)."""
+    use_json = getattr(args, "json", False)
+    try:
+        ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
+
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    try:
+        wi = WorkItemModel.release_work_item(
+            project_id=proj_id,
+            identifier=args.identifier,
+            actor_id=args.actor_id,
+        )
+    except ValueError as exc:
+        if use_json:
+            print(json.dumps({"error": str(exc)}, indent=2))
+        else:
+            print(f"Error: {exc}")
+        return EXIT_CONFLICT
+
+    if use_json:
+        print(json.dumps({"work_item": wi}, indent=2, default=str))
+    else:
+        print(f"Released: **{wi['identifier']}**")
+    return EXIT_SUCCESS
+
+
+def cmd_wi_heartbeat(args: argparse.Namespace) -> int:
+    """Heartbeat a claimed work item to extend its lease (P4)."""
+    use_json = getattr(args, "json", False)
+    try:
+        ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
+
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    try:
+        lease = WorkItemModel.heartbeat_work_item(
+            project_id=proj_id,
+            identifier=args.identifier,
+            actor_id=args.actor_id,
+            ttl_seconds=args.ttl,
+        )
+    except ValueError as exc:
+        if use_json:
+            print(json.dumps({"error": str(exc)}, indent=2))
+        else:
+            print(f"Error: {exc}")
+        return EXIT_CONFLICT
+
+    if use_json:
+        print(json.dumps({"lease": lease}, indent=2, default=str))
+    else:
+        print(
+            f"Heartbeat: **{args.identifier}** "
+            f"(expires {lease['expires_at']}, heartbeats: {lease['heartbeat_count']})"
+        )
+    return EXIT_SUCCESS
+
+
+def cmd_wi_requeue_expired(args: argparse.Namespace) -> int:
+    """Sweep expired work-item leases and return them to claimable (P4)."""
+    use_json = getattr(args, "json", False)
+    from agent_notes.core.db import _conn
+
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT sweep_expired_leases()")
+        count = cur.fetchone()[0]
+
+    if use_json:
+        print(json.dumps({"expired_leases_removed": count}, indent=2))
+    else:
+        print(f"Swept {count} expired lease(s)")
+    return EXIT_SUCCESS
+
+
 def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
     wi = sub.add_parser("work-item", help="Work item operations (Plan 008 kernel)")
     wi_sub = wi.add_subparsers(dest="wi_cmd")
@@ -688,6 +806,39 @@ def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
     wi_claimable.add_argument("--limit", type=int, default=50)
     _add_common(wi_claimable)
     wi_claimable.set_defaults(func=cmd_wi_claimable)
+
+    # Claim / lease commands (P4)
+    wi_claim = wi_sub.add_parser("claim", help="Claim a work item (acquire lease)")
+    wi_claim.add_argument("identifier")
+    wi_claim.add_argument("--actor-id", default=None, help="Actor claiming the item")
+    wi_claim.add_argument(
+        "--ttl", type=int, default=300, help="Lease TTL in seconds (default: 300)"
+    )
+    _add_common(wi_claim)
+    wi_claim.set_defaults(func=cmd_wi_claim)
+
+    wi_release = wi_sub.add_parser("release", help="Release a claimed work item")
+    wi_release.add_argument("identifier")
+    wi_release.add_argument("--actor-id", default=None, help="Actor releasing the item")
+    _add_common(wi_release)
+    wi_release.set_defaults(func=cmd_wi_release)
+
+    wi_heartbeat = wi_sub.add_parser(
+        "heartbeat", help="Heartbeat a claimed work item to extend lease"
+    )
+    wi_heartbeat.add_argument("identifier")
+    wi_heartbeat.add_argument("--actor-id", default=None, help="Actor heartbeating the item")
+    wi_heartbeat.add_argument(
+        "--ttl", type=int, default=300, help="Extended TTL in seconds (default: 300)"
+    )
+    _add_common(wi_heartbeat)
+    wi_heartbeat.set_defaults(func=cmd_wi_heartbeat)
+
+    wi_requeue = wi_sub.add_parser(
+        "requeue-expired", help="Sweep expired leases and return items to claimable"
+    )
+    _add_common(wi_requeue)
+    wi_requeue.set_defaults(func=cmd_wi_requeue_expired)
 
     wi_close = wi_sub.add_parser("close", help="Close a work item")
     wi_close.add_argument("identifier")
