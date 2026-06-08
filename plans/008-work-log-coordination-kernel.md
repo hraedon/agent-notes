@@ -1,6 +1,25 @@
 # Plan 008 — Work-log coordination kernel (provenance-enforced, op-CRDT)
 
-**Status:** proposed 2026-06-07 — **architecture converged**, not yet started
+**Status:** in-progress 2026-06-08 — **P0+P1 complete**, **P2 complete**, **P3 partial** (cross-project foundation + derived index + registry + export/ingest + cross-repo ready + reverse-edge map; trigger loop routing pending)
+
+**Implementation log:**
+- 2026-06-08: P0 kernel landed (op_log, content_blobs, work_items cache, fold, ready/claimable, event surface, CLI)
+- 2026-06-08: P1 verifier landed (hash-chain, signature, policy checks, standalone CLI)
+- 2026-06-08: P2 status lattice landed (fail-safe: open > claimed > closed > deferred, tie-break by op_id)
+- 2026-06-08: P2 merge op support landed (merged_state replaces fold state)
+- 2026-06-08: P2 deterministic merge/reconcile landed (`merge_entity`, `reconcile_entity` — union + sort + fold + merge op)
+- 2026-06-08: P3 cross-project foundation landed (`request`/`wait` ops, `project:identifier` addressing, `add_cross_project_link`)
+- 2026-06-08: P3 registry landed (`projects.log_location` + `projects.wake_channel`, Backstage-style descriptors)
+- 2026-06-08: P3 derived index landed (`cross_project_ops`, `cross_project_work_items`, `cross_project_freshness`)
+- 2026-06-08: P3 export/ingest landed (`export_ops_jsonl` → JSONL; `ingest_jsonl_ops` → derived index; `rebuild_cross_project_cache`)
+- 2026-06-08: P3 cross-repo ready query landed (`work_items_ready_v` checks `cross_project_work_items` for blockers)
+- 2026-06-08: P3 reverse-edge map landed (`cross_project_reverse_edges_v`, `get_blocked_by`, `get_cross_project_blockers`)
+- 2026-06-08: P3 CLI landed (`work-item export-ops`, `work-item ingest-ops`, `work-item rebuild-cache`)
+
+**Open items (post-implementation):**
+1. (P3) Cross-project trigger loop — wake routing for `request.created`/`dependency.blocked` events via agent-wake (needs an async listener on `agent_notes_op_log_events` NOTIFY channel)
+2. (P4) regista coordinator integration — atomic claim/lease/heartbeat
+3. (P4) Degrade contract — coordinator down → reads + progress on held items + append/file freely; no new claims
 **Author:** Opus 4.8 (design session with principal; reviewed by MiMo; prior-art deep dive + agentattest analysis)
 **Strategic role:** Completes agent-notes' *original* vision — "coordinating small bits
 of work into a larger project over time" — by growing the DB-canonical memory layer

@@ -75,8 +75,10 @@ class Project:
     workspace_id: int
     slug: str
     name: str
-    repo_root: str | None
-    created_at: datetime
+    repo_root: str | None = None
+    log_location: str | None = None
+    wake_channel: str | None = None
+    created_at: datetime | None = None
 
 
 @dataclass
@@ -135,19 +137,24 @@ def get_or_create_project(
     slug: str,
     name: str,
     repo_root: str | None = None,
+    log_location: str | None = None,
+    wake_channel: str | None = None,
 ) -> Project:
     with _conn() as conn:
         cur = conn.cursor()
         cur.execute(
             """
-            INSERT INTO projects (workspace_id, slug, name, repo_root)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO projects (workspace_id, slug, name, repo_root, log_location, wake_channel)
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (workspace_id, slug) DO UPDATE SET
                 name = EXCLUDED.name,
-                repo_root = COALESCE(EXCLUDED.repo_root, projects.repo_root)
-            RETURNING id, workspace_id, slug, name, repo_root, created_at
+                repo_root = COALESCE(EXCLUDED.repo_root, projects.repo_root),
+                log_location = COALESCE(EXCLUDED.log_location, projects.log_location),
+                wake_channel = COALESCE(EXCLUDED.wake_channel, projects.wake_channel)
+            RETURNING id, workspace_id, slug, name, repo_root,
+                      log_location, wake_channel, created_at
             """,
-            (workspace_id, slug, name, repo_root),
+            (workspace_id, slug, name, repo_root, log_location, wake_channel),
         )
         conn.commit()
         row = cur.fetchone()
@@ -159,16 +166,16 @@ def list_projects(workspace_id: int | None = None) -> list[Project]:
         cur = conn.cursor()
         if workspace_id is not None:
             cur.execute(
-                "SELECT id, workspace_id, slug, name, repo_root, created_at "
+                "SELECT id, workspace_id, slug, name, repo_root, "
+                "log_location, wake_channel, created_at "
                 "FROM projects WHERE workspace_id = %s ORDER BY slug",
                 (workspace_id,),
             )
         else:
             cur.execute(
-                (
-                    "SELECT id, workspace_id, slug, name, repo_root, created_at "
-                    "FROM projects ORDER BY workspace_id, slug"
-                )
+                "SELECT id, workspace_id, slug, name, repo_root, "
+                "log_location, wake_channel, created_at "
+                "FROM projects ORDER BY workspace_id, slug"
             )
         return [_row_to_project(r) for r in cur.fetchall()]
 
@@ -184,7 +191,7 @@ def resolve_project(path: str) -> dict:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT p.id, p.slug AS project, p.repo_root,
+            SELECT p.id, p.slug AS project, p.repo_root, p.log_location, p.wake_channel,
                    w.slug AS workspace
             FROM projects p
             JOIN workspaces w ON w.id = p.workspace_id
@@ -198,6 +205,8 @@ def resolve_project(path: str) -> dict:
                     "workspace": row["workspace"],
                     "project": row["project"],
                     "repo_root": row["repo_root"],
+                    "log_location": row["log_location"],
+                    "wake_channel": row["wake_channel"],
                     # "exact" = path is the project root; "ancestor" = path is
                     # *inside* a registered project (incl. resolving to a broad
                     # librarian root). Callers surface this so an unregistered
@@ -217,6 +226,8 @@ def _row_to_project(row: dict) -> Project:
         slug=row["slug"],
         name=row["name"],
         repo_root=row.get("repo_root"),
+        log_location=row.get("log_location"),
+        wake_channel=row.get("wake_channel"),
         created_at=row["created_at"],
     )
 

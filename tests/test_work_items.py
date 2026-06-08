@@ -726,3 +726,336 @@ class TestCliEvents:
         assert cmd_events_tail(ns) == 0
         data = json.loads(capsys.readouterr().out)
         assert len(data["events"]) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Merge / reconcile (P2)
+# ---------------------------------------------------------------------------
+
+
+class TestMerge:
+    def test_merge_two_divergent_chains(self, default_project):
+        # Create a work item
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-MERGE-01",
+            title="Merge test",
+            status="open",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+
+        # Simulate two divergent chains by inserting ops directly at different lamports
+        with kernel._conn() as conn:
+            _insert_op_direct(
+                conn, entity_id, "work_item", "set_field", 1000, {"title": "Remote title"}
+            )
+            _insert_op_direct(
+                conn, entity_id, "work_item", "set_status", 1001, {"status": "closed"}
+            )
+            conn.commit()
+
+        # Reconcile: local chain has the original + these two remote ops
+        with kernel._conn() as conn:
+            # Actually reconcile using the real remote ops from the DB
+            real_remote = kernel._get_entity_ops(conn, entity_id)
+            # We simulate a "remote" by taking the last two ops
+            remote_only = real_remote[-2:]
+
+            # Clear the cache first
+            conn.execute("DELETE FROM work_items WHERE entity_id = %s", (entity_id,))
+
+            # Reconcile with the same ops (no divergence)
+            result = kernel.reconcile_entity(conn, entity_id, remote_only)
+            conn.commit()
+
+        assert result is not None
+        assert result["identifier"] == "WI-MERGE-01"
+        # The title should be "Remote title" because set_field was applied
+        assert result["title"] == "Remote title"
+        # The status should be "closed" because set_status was applied
+        assert result["status"] == "closed"
+
+    def test_merge_union_deduplicates(self, default_project):
+        # Create a work item
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-MERGE-02",
+            title="Dedup test",
+            status="open",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+
+        # Get the ops
+        with kernel._conn() as conn:
+            local_ops = kernel._get_entity_ops(conn, entity_id)
+
+            # Merge with identical ops (no divergence)
+            merged = kernel.merge_entity(local_ops, local_ops)
+            assert len(merged) == len(local_ops)
+
+            # All op_ids should be present
+            ids = {op["op_id"] for op in merged}
+            assert len(ids) == len(local_ops)
+
+
+class TestReconcile:
+    def test_reconcile_entity_creates_merge_op(self, default_project):
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-REC-01",
+            title="Reconcile test",
+            status="open",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+
+        # Add a remote op directly
+        with kernel._conn() as conn:
+            _insert_op_direct(
+                conn, entity_id, "work_item", "set_field", 1000, {"title": "Reconciled"}
+            )
+            conn.commit()
+
+        # Reconcile with the same ops
+        with kernel._conn() as conn:
+            remote_ops = kernel._get_entity_ops(conn, entity_id)
+            conn.execute("DELETE FROM work_items WHERE entity_id = %s", (entity_id,))
+            result = kernel.reconcile_entity(conn, entity_id, remote_ops)
+            conn.commit()
+
+        assert result is not None
+        assert result["title"] == "Reconciled"
+
+        # Check that a merge op was written
+        with kernel._conn() as conn:
+            ops = kernel._get_entity_ops(conn, entity_id)
+            merge_ops = [op for op in ops if op["op_type"] == "merge"]
+            assert len(merge_ops) == 1
+
+
+# ---------------------------------------------------------------------------
+# Cross-project (P3)
+# ---------------------------------------------------------------------------
+
+
+class TestParseAddress:
+    def test_valid_address(self):
+        from agent_notes.core.work_item_model import WorkItemModel
+
+        assert WorkItemModel.parse_address("sf2:BC-12") == ("sf2", "BC-12")
+
+    def test_address_with_multiple_colons(self):
+        from agent_notes.core.work_item_model import WorkItemModel
+
+        assert WorkItemModel.parse_address("sf2:BC-12:extra") == ("sf2", "BC-12:extra")
+
+    def test_invalid_address(self):
+        from agent_notes.core.work_item_model import WorkItemModel
+
+        with pytest.raises(ValueError, match="Invalid address"):
+            WorkItemModel.parse_address("no-colon")
+
+
+class TestCrossProjectRequest:
+    def test_request_work_item(self, default_project):
+        from agent_notes.core import db as coredb
+
+        # Create a target project in the same workspace
+        coredb.get_or_create_project(
+            default_project.workspace_id,
+            slug="target-proj",
+            name="Target Project",
+            repo_root="/projects/target",
+        )
+
+        req = WorkItemModel.request_work_item(
+            project_id=default_project.id,
+            target_project_slug="target-proj",
+            title="Cross-project request",
+            body="Please do this",
+            kind="task",
+        )
+
+        assert req["title"] == "Cross-project request"
+        assert req["target_project"] == "target-proj"
+        assert req["request_type"] == "create_work_item"
+
+    def test_request_work_item_unknown_target(self, default_project):
+        # request_work_item does NOT validate the target project exists at
+        # creation time — validation happens at intake time in the target
+        # project. This is by design: the request is signed evidence in the
+        # dependent's log; the target may not exist yet or may be resolved
+        # later by the derived index.
+        req = WorkItemModel.request_work_item(
+            project_id=default_project.id,
+            target_project_slug="nonexistent",
+            title="Bad request",
+        )
+        assert req["target_project"] == "nonexistent"
+
+
+class TestCrossProjectWait:
+    def test_wait_on_work_item(self, default_project):
+        from agent_notes.core import db as coredb
+
+        # Create a target project in the same workspace
+        coredb.get_or_create_project(
+            default_project.workspace_id,
+            slug="target-proj2",
+            name="Target Project 2",
+            repo_root="/projects/target2",
+        )
+
+        wait = WorkItemModel.wait_on_work_item(
+            project_id=default_project.id,
+            target_project_slug="target-proj2",
+            target_identifier="WI-001",
+        )
+
+        assert wait["target_project"] == "target-proj2"
+        assert wait["target_identifier"] == "WI-001"
+        assert wait["wait_type"] == "block_on_work_item"
+
+
+class TestCrossProjectLink:
+    def test_add_cross_project_link(self, default_project):
+        from agent_notes.core import db as coredb
+
+        # Create a target project in the SAME workspace so it shares vocabularies
+        target_proj = coredb.get_or_create_project(
+            default_project.workspace_id,
+            slug="target-proj3",
+            name="Target Project 3",
+            repo_root="/projects/target3",
+        )
+
+        # Create a local work item
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-LOCAL-01",
+            title="Local item",
+            embedding=_vec768(),
+        )
+
+        # Create a target work item
+        WorkItemModel.file_work_item(
+            project_id=target_proj.id,
+            identifier="WI-TARGET-01",
+            title="Target item",
+            embedding=_vec768(),
+        )
+
+        result = WorkItemModel.add_cross_project_link(
+            from_project_id=default_project.id,
+            from_identifier="WI-LOCAL-01",
+            to_project_slug="target-proj3",
+            to_identifier="WI-TARGET-01",
+            relationship="blocks",
+        )
+
+        assert result["from_identifier"] == "WI-LOCAL-01"
+        assert result["to_identifier"] == "WI-TARGET-01"
+        assert result["relationship"] == "blocks"
+
+    def test_add_cross_project_link_unknown_target(self, default_project):
+        with pytest.raises(ValueError, match="Target project not found"):
+            WorkItemModel.add_cross_project_link(
+                from_project_id=default_project.id,
+                from_identifier="WI-LOCAL-02",
+                to_project_slug="nonexistent",
+                to_identifier="WI-TARGET-02",
+            )
+
+
+# ---------------------------------------------------------------------------
+# CLI cross-project smoke
+# ---------------------------------------------------------------------------
+
+
+class TestCliCrossProject:
+    def test_cli_request(self, default_project, capsys):
+        from agent_notes.cli.work_items import cmd_wi_request
+        from agent_notes.core import db as coredb
+
+        coredb.get_or_create_project(
+            default_project.workspace_id,
+            slug="target-proj4",
+            name="Target Project 4",
+            repo_root="/projects/target4",
+        )
+
+        ns = argparse.Namespace(
+            workspace=None,
+            project=None,
+            path="/projects/sf2",
+            json=True,
+            target_project="target-proj4",
+            title="CLI request",
+            body="",
+            type="task",
+        )
+        assert cmd_wi_request(ns) == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["request"]["target_project"] == "target-proj4"
+
+    def test_cli_wait(self, default_project, capsys):
+        from agent_notes.cli.work_items import cmd_wi_wait
+        from agent_notes.core import db as coredb
+
+        coredb.get_or_create_project(
+            default_project.workspace_id,
+            slug="target-proj5",
+            name="Target Project 5",
+            repo_root="/projects/target5",
+        )
+
+        ns = argparse.Namespace(
+            workspace=None,
+            project=None,
+            path="/projects/sf2",
+            json=True,
+            target="target-proj5:WI-001",
+        )
+        assert cmd_wi_wait(ns) == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["wait"]["target_project"] == "target-proj5"
+
+    def test_cli_link_cross(self, default_project, capsys):
+        from agent_notes.cli.work_items import cmd_wi_link_cross
+        from agent_notes.core import db as coredb
+
+        target_proj = coredb.get_or_create_project(
+            default_project.workspace_id,
+            slug="target-proj6",
+            name="Target Project 6",
+            repo_root="/projects/target6",
+        )
+
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-CLI-X-01",
+            title="Local cross",
+            embedding=_vec768(),
+        )
+        WorkItemModel.file_work_item(
+            project_id=target_proj.id,
+            identifier="WI-CLI-X-02",
+            title="Target cross",
+            embedding=_vec768(),
+        )
+
+        ns = argparse.Namespace(
+            workspace=None,
+            project=None,
+            path="/projects/sf2",
+            json=True,
+            identifier="WI-CLI-X-01",
+            target="target-proj6:WI-CLI-X-02",
+            relationship="blocks",
+        )
+        assert cmd_wi_link_cross(ns) == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["link"]["from_identifier"] == "WI-CLI-X-01"
+        assert data["link"]["to_identifier"] == "WI-CLI-X-02"

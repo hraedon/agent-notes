@@ -1,9 +1,11 @@
-"""Work-log coordination kernel — op-CRDT model for single-writer (Plan 008 P0).
+"""Work-log coordination kernel — op-CRDT model (Plan 008 P0–P2).
 
 Public surface:
 - `create_op` / `commit_op` — write an op to the op-log and fold into cache.
 - `fold_entity` — rebuild current state for an entity from its op chain.
 - `fold_all` — rebuild the entire cache (useful for recovery).
+- `merge_entity` — deterministic merge of two divergent chains (P2).
+- `reconcile_entity` — merge remote ops into local, write a `merge` op (P2).
 - `ready_work_items` — query the `work_items_ready_v` view.
 - `content_hash` — SHA-256 of canonical text for content-addressed blobs.
 
@@ -12,7 +14,8 @@ Design notes:
 - P2 (multi-writer) replaces this with per-actor Lamport counters.
 - Bodies are content-addressed so metadata edits never re-log the body.
 - The fold is deterministic: apply ops ordered by ``(lamport, op_id)``.
-- Status lattice for P0: simple last-write-wins (no concurrent conflict yet).
+- Status lattice (P2): fail-safe, open dominates closed (surface unfinished work).
+- Merge (P2): union of ops from both chains, sort by (lamport, op_id), fold.
 """
 
 from __future__ import annotations
@@ -394,6 +397,148 @@ def fold_work_item(conn: psycopg.Connection, entity_id: str) -> dict | None:
     )
     row = cur.fetchone()
     return dict(row)
+
+
+# ---------------------------------------------------------------------------
+# Merge / reconcile (P2)
+# ---------------------------------------------------------------------------
+
+
+def merge_entity(local_ops: list[dict], remote_ops: list[dict]) -> list[dict]:
+    """Deterministic merge of two divergent op chains.
+
+    Returns the merged, sorted list of ops. The merge is:
+    1. Union all ops (deduplicate by op_id).
+    2. Sort by (lamport, op_id).
+    3. Return the sorted list.
+
+    This is the git-bag op-CRDT merge primitive. The fold of the merged
+    chain is deterministic because the sort is deterministic.
+    """
+    # Build a set of seen op_ids and a list of unique ops.
+    seen: set[str] = set()
+    merged: list[dict] = []
+    for op in local_ops + remote_ops:
+        op_id = op["op_id"]
+        if op_id not in seen:
+            seen.add(op_id)
+            merged.append(op)
+
+    # Sort by (lamport, op_id) for deterministic fold.
+    merged.sort(key=lambda op: (op["lamport"], op["op_id"]))
+    return merged
+
+
+def reconcile_entity(
+    conn: psycopg.Connection,
+    entity_id: str,
+    remote_ops: list[dict],
+    actor_id: str | None = None,
+) -> dict:
+    """Reconcile remote ops into the local log for an entity.
+
+    Steps:
+    1. Fetch local ops.
+    2. Merge with remote ops (deterministic union + sort).
+    3. Fold the merged chain to get the reconciled state.
+    4. Write a ``merge`` op that records the merged state.
+    5. Re-fold and update the cache.
+
+    Returns the folded work_item dict.
+    """
+    local_ops = _get_entity_ops(conn, entity_id)
+    merged_ops = merge_entity(local_ops, remote_ops)
+
+    # Fold the merged chain to determine the reconciled state.
+    # We do this in-memory by reusing the fold logic.
+    state: dict[str, Any] = {
+        "entity_id": entity_id,
+        "project_id": None,
+        "identifier": None,
+        "title": None,
+        "body_hash": None,
+        "kind": None,
+        "status": None,
+        "severity": "medium",
+        "external_refs": {},
+        "diagnostic_keys": {},
+        "embedding": None,
+        "frontmatter_version": 1,
+    }
+
+    current_lamport: int | None = None
+    current_group: list[dict] = []
+
+    def _flush_group() -> None:
+        nonlocal current_group
+        if not current_group:
+            return
+        status_ops = [op for op in current_group if op["op_type"] in ("set_status", "close")]
+        for op in current_group:
+            if op["op_type"] not in ("set_status", "close"):
+                _apply_op_to_state(state, op)
+        if status_ops:
+            state["status"] = _resolve_status_lattice(status_ops, state.get("status"))
+        current_group = []
+
+    for op in merged_ops:
+        lamport = op["lamport"]
+        if lamport != current_lamport:
+            _flush_group()
+            current_lamport = lamport
+        current_group.append(op)
+    _flush_group()
+
+    # Write a merge op that records the reconciled state.
+    # We only write the merge op if the state is valid (has project_id and identifier).
+    if state["project_id"] is None or state["identifier"] is None:
+        # No create op in the merged chain — nothing to reconcile.
+        return None
+
+    parent_op_ids = [op["op_id"] for op in merged_ops]
+    merge_payload = {
+        "merged_state": {
+            "project_id": state["project_id"],
+            "identifier": state["identifier"],
+            "title": state["title"],
+            "body_hash": state["body_hash"],
+            "kind": state["kind"],
+            "status": state["status"],
+            "severity": state["severity"],
+            "external_refs": state["external_refs"],
+            "diagnostic_keys": state["diagnostic_keys"],
+            "embedding": state["embedding"],
+            "frontmatter_version": state["frontmatter_version"],
+        }
+    }
+
+    merge_op = commit_op(
+        conn,
+        entity_id=entity_id,
+        entity_type="work_item",
+        op_type="merge",
+        payload=merge_payload,
+        parent_op_ids=parent_op_ids,
+        actor_id=actor_id,
+    )
+
+    # Re-fold into cache.
+    folded = fold_work_item(conn, entity_id)
+    if folded is None:
+        raise RuntimeError("fold_work_item returned None after merge op")
+
+    emit_event(
+        conn,
+        op_id=merge_op["op_id"],
+        event_type="item.merged",
+        payload={
+            "entity_id": entity_id,
+            "identifier": state["identifier"],
+            "merged_op_count": len(merged_ops),
+        },
+    )
+
+    return dict(folded)
 
 
 # ---------------------------------------------------------------------------

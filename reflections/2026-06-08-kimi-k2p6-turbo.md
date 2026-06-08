@@ -1,47 +1,51 @@
 ---
-model: kimi-k2p6-turbo
-datetime: 2026-06-08T01:15Z
+model: fireworks-ai/accounts/fireworks/routers/kimi-k2p6-turbo
+datetime: 2026-06-08T14:00 UTC
 project: agent-notes
 ---
 
 # Session Reflection — 2026-06-08
 
-**Work summary:** Closed out Plan 008 P1 (verifier CLI) and P2 (merge/reconcile with status lattice). P1 added `agent-notes verify` with DSSE signature verification, hash-chain checks, built-in policy, and 21 tests. P2 added the fail-safe status lattice (`open > claimed > closed > deferred`) to `fold_work_item`, enabling deterministic merge of concurrent ops. Also fixed a NaN bug in `suggest_duplicates` (both breadcrumbs and work items) where zero-vector similarity leaked unrelated rows. Total: 257 tests pass (32 new since P0).
+**Work summary:** Implemented Plan 008 P3 cross-project layer — the derived index, registry, export/ingest, and cross-repo ready query. Also completed P2 merge/reconcile (deterministic merge + reconcile_entity) which was flagged as pending from the previous session.
 
 ---
 
 ## On the project
 
-The codebase continues to be a pleasure to work in. The test-driven, DB-canonical approach means every change is verifiable. The `WorkItemModel` -> `BreadcrumbModel` mirroring is holding up well — adding a new kind is mechanical. The one thing that feels slightly off: the CLI `__init__.py` is now importing 13+ parser modules. The registration pattern is growing linearly. A plugin system (entry points) might be needed before P3 adds more verbs.
+The agent-notes codebase is coherent and the Plan 008 phasing is well-designed. The separation of P0 (single-writer kernel), P1 (verifier), P2 (merge/reconcile), and P3 (cross-project) is clean — each layer adds capability without breaking the previous one. The existing test infrastructure (testcontainers for Postgres) is solid and makes the integration tests trustworthy.
 
-The `op_log` / `change_log` coexistence is still the elephant in the room. Both tables exist, both emit events. The migration to make `op_log` the sole audit source is going to be a large standalone PR. The plan is explicit about this, so the tension is intentional, not a mistake.
+One thing that feels slightly fragile is the `work_items_ready_v` view — it now has two NOT EXISTS subqueries (same-project blockers via `links` and cross-project blockers via `cross_project_work_items`). The query plan hasn't been checked at scale; if the cross-project cache grows large, the view might need materialization. The plan document mentions this is a P3 concern but doesn't explicitly call out a performance benchmark or limit. I'd flag this as a latent gap.
 
 ## On the work done
 
-**P1 verifier:** The verifier module (`verifier.py`) is clean and standalone. The `Violation` dataclass with severity levels (error vs warning) is the right primitive — it lets the verifier run in "audit mode" (warnings only) vs "gate mode" (errors fail). The `NullSigner` -> `LocalKeySigner` upgrade path is smooth: the envelope format is present from day one, and flipping to real signatures is a config change. The `cryptography` package was promoted from optional to a real dependency (pyproject.toml) — this is correct for P1.
+**What went well:**
+- The schema migration (`701_work_log_cross_project.sql`) is fully idempotent and the view update is clean. The `ON CONFLICT` UPSERT pattern in `ingest_jsonl_ops` means ingestion is idempotent by design — which is exactly what a derived index needs.
+- The `cross_project.py` module reuses the same fold logic (`_apply_op_to_state`, `_resolve_status_lattice`) from `kernel.py`, so there's no drift between local and foreign folding. This was the right call.
+- The round-trip test (`test_export_then_ingest`) proves the export → ingest → rebuild pipeline works end-to-end.
 
-**P2 status lattice:** The lattice implementation (`_STATUS_LATTICE` in `kernel.py`) is straightforward. The key insight is that the lattice only applies to **concurrent** ops (same lamport). Sequential ops still use last-write-wins. The grouping-by-lamport in `fold_work_item` is the cleanest way to implement this without rewriting the entire fold. The tie-breaker (lexicographically smaller `op_id`) is deterministic because `op_id` is a content hash.
+**What I'd want a second pair of eyes on:**
+- The `cross_project_work_items` cache doesn't store the `body_hash` content — only the hash. If the foreign body is needed, we need to also ingest `content_blobs` from the source repo. The current design assumes bodies are resolved lazily (or not needed for the blocker query). Is that the right assumption? The plan says "bodies are content-addressed blobs" but the cross-project layer doesn't replicate the blob table.
+- The `freshness_offset` field in `cross_project_ops` is populated from the JSONL but never actually used for incremental ingestion. The current approach is "ingest everything, rely on idempotent UPSERT." For a large repo's op-log, this is O(N) every time. The plan mentions size-or-time segments (P4) but not incremental delta ingestion.
 
-**NaN bug:** The `suggest_duplicates` SQL used `1 - (embedding <=> vec) >= threshold`. PostgreSQL's `NaN >= 0.95` evaluates to `True`, so zero-vector similarity queries leaked unrelated rows. The fix was to use `embedding <=> vec <= 1 - threshold` instead, which correctly evaluates `False` for `NaN`. Both `breadcrumbs_model.py` and `work_item_model.py` were fixed.
-
-What I'd want a second pair of eyes on:
-- The `parent_op_ids` in `commit_op` is still simplistic (`[entity_id]` for updates). For true multi-writer (P4), this needs to be the actual set of unmerged ops.
-- The `merge` op is implemented in the fold but there's no CLI or model helper to create one. P3 will need this.
-- The `wi_status_changed_fn` trigger is still a copy of `bc_status_changed_fn`. The migration PR should deduplicate these.
+**What was awkward:**
+- The `ingested_at` column name in `cross_project_ops` vs `created_at` in `op_log` caused a subtle bug in the first fold attempt (the code looked for `created_at` which doesn't exist in the cross-project table). The test caught it immediately, but it suggests the column naming convention isn't uniform across tables.
 
 ## On what remains
 
-P2 is done. The next phases are:
-- **P3 — cross-project:** Registry + index + `request`/`wait` ops + cross-project trigger loop. Needs the `merge` op to be creatable via CLI.
-- **P4 — full multi-agent:** regista coordinator, atomic claim/lease/heartbeat, degrade contract, `requeue_expired`, causal-stability watermark.
+**P3 (next session):**
+1. Cross-project trigger loop — wake routing for `request.created`/`dependency.blocked` events. This needs an async listener on the `agent_notes_op_log_events` NOTIFY channel, which maps to the agent-wake HTTP bridge. The current `bridge.py` listens on `agent_notes_changes` (the old `change_log` channel). The new channel `agent_notes_op_log_events` needs its own bridge or an extension of the existing one.
+2. The `wait` op should probably resume a session when the target closes. The current `wait_on_work_item` method writes the `wait` op but there's no mechanism to poll the foreign status or route the wake event back to the waiting session.
 
-Not needed before P3 ships:
-- Breadcrumb -> work-item migration (still its own PR)
-- `op_log` replacing `change_log` as sole audit source (its own PR)
+**P4 (future):**
+1. regista coordinator integration — atomic claim/lease/heartbeat
+2. Degrade contract — coordinator down → reads + progress on held items + append/file freely; no new claims
+3. `requeue_expired` sweep for lease-expired items
+4. Causal-stability watermark for compaction
 
 ## Gaps to flag
 
-- **Missing CLI for merge op:** `merge` is handled in `fold_work_item` but there's no `agent-notes work-item merge` command. P3 will need this.
-- **Schema drift risk:** `content_blobs` stores bodies as `TEXT`. For very large bodies (e.g., 10MB logs), this could be a problem. The schema should be watched; if bodies grow, switch to `BYTEA` or a separate storage backend.
-- **Dead code:** `cmd_bc_query` in `cli/breadcrumbs.py` is still dead code (BC-018). Not fixed in this session.
-- **Silent failure mode:** `WorkItemModel.file_work_item` with `identifier=None` calls `allocate_work_item_identifier`, which uses `FOR UPDATE` on the sequence table. If two calls race (concurrent writers), the second might block. P0 is single-writer, so this is fine. P4 needs the coordinator for atomic claim.
+- **`content_blobs` cross-project replication:** `cross_project_work_items` stores `body_hash` but not the body content. If a foreign work item's body is needed (e.g., for `diagnose` or `get --with-body`), the current code will look up the hash locally and fail. The `get_cross_project_work_item` function does not attempt to fetch the body. `src/agent_notes/core/cross_project.py:244`
+- **`freshness_offset` unused:** The schema has `freshness_offset` but the ingestion code doesn't use it for incremental delta ingestion. The `rebuild_cross_project_cache` function rebuilds *everything* every time. For a large repo, this is O(N). `src/agent_notes/core/cross_project.py:283`
+- **No performance benchmark for `work_items_ready_v`:** The view now has two NOT EXISTS subqueries. The cross-project one joins `cross_project_links` to `cross_project_work_items`. At scale, this may need a materialized view or an index-only scan. No benchmark exists. `schema/701_work_log_cross_project.sql:114`
+- **Schema drift in `created_at` vs `ingested_at`:** The `cross_project_ops` table uses `ingested_at` instead of `created_at`, which is the name used in `op_log`. This tripped a bug in the first fold attempt. The test caught it, but it's a convention inconsistency. `schema/701_work_log_cross_project.sql:44`
+- **`projects.log_location` / `wake_channel` not validated:** The registry columns are free-text with no format validation. A bad log_location URL or wake_channel endpoint won't be caught until the bridge tries to POST. `schema/701_work_log_cross_project.sql:17`

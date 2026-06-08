@@ -415,12 +415,204 @@ def cmd_wi_diagnose(args: argparse.Namespace) -> int:
         wi = result["work_item"]
         print(f"**{wi['identifier']}** — {wi['title']}")
         print(f"Status: {wi['status']} | Kind: {wi['kind']}")
-        print(f"\nOps ({len(result['ops'])}):")
+        print(f"\nOps ({len(result['ops'])})\u003a")
         for op in result["ops"]:
             print(f"  {op['op_type']} (lamport={op['lamport']})")
-        print(f"\nRecent changes ({len(result['recent_changes'])}):")
+        print(f"\nRecent changes ({len(result['recent_changes'])})\u003a")
         for ch in result["recent_changes"]:
             print(f"  {ch['event']} @ {ch['changed_at']}")
+    return EXIT_SUCCESS
+
+
+def cmd_wi_request(args: argparse.Namespace) -> int:
+    """Request a new work item in a target project (cross-project, P3)."""
+    use_json = getattr(args, "json", False)
+    try:
+        ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
+
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    try:
+        req = WorkItemModel.request_work_item(
+            project_id=proj_id,
+            target_project_slug=args.target_project,
+            title=args.title,
+            body=args.body or "",
+            kind=args.type,
+        )
+    except ValueError as exc:
+        if use_json:
+            print(json.dumps({"error": str(exc)}, indent=2))
+        else:
+            print(f"Error: {exc}")
+        return EXIT_CONFLICT
+
+    if use_json:
+        print(json.dumps({"request": req}, indent=2, default=str))
+    else:
+        print(f"Request filed: **{req['identifier']}** → {args.target_project} ({req['kind']})")
+    return EXIT_SUCCESS
+
+
+def cmd_wi_wait(args: argparse.Namespace) -> int:
+    """Wait on a target project's work item (cross-project, P3)."""
+    use_json = getattr(args, "json", False)
+    try:
+        ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
+
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    try:
+        target_project, target_identifier = WorkItemModel.parse_address(args.target)
+    except ValueError as exc:
+        if use_json:
+            print(json.dumps({"error": str(exc)}, indent=2))
+        else:
+            print(f"Error: {exc}")
+        return EXIT_CONFLICT
+
+    try:
+        wait = WorkItemModel.wait_on_work_item(
+            project_id=proj_id,
+            target_project_slug=target_project,
+            target_identifier=target_identifier,
+        )
+    except ValueError as exc:
+        if use_json:
+            print(json.dumps({"error": str(exc)}, indent=2))
+        else:
+            print(f"Error: {exc}")
+        return EXIT_NOT_FOUND
+
+    if use_json:
+        print(json.dumps({"wait": wait}, indent=2, default=str))
+    else:
+        print(f"Wait registered: **{wait['identifier']}** → {target_project}:{target_identifier}")
+    return EXIT_SUCCESS
+
+
+def cmd_wi_link_cross(args: argparse.Namespace) -> int:
+    """Add a cross-project link (P3)."""
+    use_json = getattr(args, "json", False)
+    try:
+        ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
+
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    try:
+        target_project, target_identifier = WorkItemModel.parse_address(args.target)
+    except ValueError as exc:
+        if use_json:
+            print(json.dumps({"error": str(exc)}, indent=2))
+        else:
+            print(f"Error: {exc}")
+        return EXIT_CONFLICT
+
+    try:
+        result = WorkItemModel.add_cross_project_link(
+            from_project_id=proj_id,
+            from_identifier=args.identifier,
+            to_project_slug=target_project,
+            to_identifier=target_identifier,
+            relationship=args.relationship,
+        )
+    except ValueError as exc:
+        if use_json:
+            print(json.dumps({"error": str(exc)}, indent=2))
+        else:
+            print(f"Error: {exc}")
+        return EXIT_NOT_FOUND
+
+    if use_json:
+        print(json.dumps({"link": result}, indent=2, default=str))
+    else:
+        print(
+            f"Link added: **{result['from_identifier']}** "
+            f"{result['relationship']} {target_project}:{result['to_identifier']}"
+        )
+    return EXIT_SUCCESS
+
+
+def cmd_wi_export_ops(args: argparse.Namespace) -> int:
+    """Export local op-log for a project as JSONL (cross-project interchange)."""
+    use_json = getattr(args, "json", False)
+    try:
+        ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
+
+    from agent_notes.core.cross_project import export_ops_jsonl
+
+    jsonl = export_ops_jsonl(proj_id)
+    if use_json:
+        lines = jsonl.strip().split("\n") if jsonl.strip() else []
+        ops = [json.loads(line) for line in lines if line.strip()]
+        print(json.dumps({"project": proj_slug, "ops": ops}, indent=2, default=str))
+    else:
+        print(jsonl, end="")
+    return EXIT_SUCCESS
+
+
+def cmd_wi_ingest_ops(args: argparse.Namespace) -> int:
+    """Ingest JSONL ops into the cross-project derived index."""
+    use_json = getattr(args, "json", False)
+    source_project = args.source_project
+    if not source_project:
+        if use_json:
+            print(json.dumps({"error": "--source-project is required"}, indent=2))
+        else:
+            print("Error: --source-project is required")
+        return EXIT_CONFLICT
+
+    import sys
+
+    from agent_notes.core.cross_project import ingest_jsonl_ops
+
+    if args.file:
+        try:
+            with open(args.file, "r", encoding="utf-8") as f:
+                jsonl_data = f.read()
+        except OSError as exc:
+            if use_json:
+                print(json.dumps({"error": f"Cannot read {args.file}: {exc}"}, indent=2))
+            else:
+                print(f"Error: cannot read {args.file}: {exc}")
+            return EXIT_NOT_FOUND
+    else:
+        jsonl_data = sys.stdin.read()
+
+    count = ingest_jsonl_ops(jsonl_data, source_project)
+    if use_json:
+        print(json.dumps({"ingested": count, "source_project": source_project}, indent=2))
+    else:
+        print(f"Ingested {count} op(s) from {source_project}")
+    return EXIT_SUCCESS
+
+
+def cmd_wi_rebuild_cache(args: argparse.Namespace) -> int:
+    """Rebuild the cross-project work_items cache from the derived index."""
+    use_json = getattr(args, "json", False)
+    from agent_notes.core.cross_project import rebuild_cross_project_cache
+
+    count = rebuild_cross_project_cache()
+    if use_json:
+        print(json.dumps({"rebuilt": count}, indent=2))
+    else:
+        print(f"Rebuilt {count} cross-project work item(s)")
     return EXIT_SUCCESS
 
 
@@ -511,5 +703,53 @@ def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
     wi_diagnose.add_argument("identifier")
     _add_common(wi_diagnose)
     wi_diagnose.set_defaults(func=cmd_wi_diagnose)
+
+    # Cross-project commands (P3)
+    wi_request = wi_sub.add_parser(
+        "request", help="Request a new work item in a target project (cross-project)"
+    )
+    wi_request.add_argument("target_project", help="Target project slug")
+    wi_request.add_argument("--title", required=True)
+    wi_request.add_argument("--body", default="")
+    wi_request.add_argument("--type", default="task", dest="type")
+    _add_common(wi_request)
+    wi_request.set_defaults(func=cmd_wi_request)
+
+    wi_wait = wi_sub.add_parser("wait", help="Wait on a target project's work item (cross-project)")
+    wi_wait.add_argument("target", help="Target address: project:identifier")
+    _add_common(wi_wait)
+    wi_wait.set_defaults(func=cmd_wi_wait)
+
+    wi_link_cross = wi_sub.add_parser(
+        "link-cross", help="Add a cross-project link (blocks by default)"
+    )
+    wi_link_cross.add_argument("identifier", help="Local work item identifier")
+    wi_link_cross.add_argument("target", help="Target address: project:identifier")
+    wi_link_cross.add_argument(
+        "--relationship", default="blocks", help="Link relationship (default: blocks)"
+    )
+    _add_common(wi_link_cross)
+    wi_link_cross.set_defaults(func=cmd_wi_link_cross)
+
+    # Cross-project interchange (P3)
+    wi_export = wi_sub.add_parser(
+        "export-ops", help="Export local op-log as JSONL (cross-project interchange)"
+    )
+    _add_common(wi_export)
+    wi_export.set_defaults(func=cmd_wi_export_ops)
+
+    wi_ingest = wi_sub.add_parser(
+        "ingest-ops", help="Ingest JSONL ops into the cross-project derived index"
+    )
+    wi_ingest.add_argument("--source-project", required=True, help="Source project slug")
+    wi_ingest.add_argument("--file", default=None, help="Path to JSONL file (default: stdin)")
+    _add_common(wi_ingest)
+    wi_ingest.set_defaults(func=cmd_wi_ingest_ops)
+
+    wi_rebuild = wi_sub.add_parser(
+        "rebuild-cache", help="Rebuild cross-project work_items cache from derived index"
+    )
+    _add_common(wi_rebuild)
+    wi_rebuild.set_defaults(func=cmd_wi_rebuild_cache)
 
     wi.set_defaults(func=lambda args: (_print_sub_help(wi), EXIT_SUCCESS)[1])

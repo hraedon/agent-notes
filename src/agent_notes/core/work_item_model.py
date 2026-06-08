@@ -650,3 +650,277 @@ class WorkItemModel:
             if row is None:
                 return None
             return kernel.get_blob(conn, row["body_hash"])
+
+    # -----------------------------------------------------------------------
+    # Cross-project support (P3)
+    # -----------------------------------------------------------------------
+
+    @classmethod
+    def request_work_item(
+        cls,
+        project_id: int,
+        target_project_slug: str,
+        title: str,
+        body: str = "",
+        kind: str = "task",
+        actor_id: str | None = None,
+    ) -> dict:
+        """Request a new work item in a target project (cross-project, P3).
+
+        Writes a ``request`` op in the **dependent's** (local) log. The
+        target project's intake process will materialize a real work item
+        from this request. The request is signed evidence; the target project
+        owns the created item.
+        """
+        with _conn() as conn:
+            workspace_id = cls._resolve_workspace_for_project(conn, project_id)
+            cls._validate_vocab(conn, workspace_id, "wi_kind", kind)
+
+            # Generate a local identifier for the request.
+            cur = conn.cursor(row_factory=psycopg.rows.tuple_row)
+            cur.execute("SELECT allocate_work_item_identifier(%s)", (project_id,))
+            identifier = cur.fetchone()[0]
+
+            body_hash = kernel.store_blob(conn, body)
+            payload = {
+                "project_id": project_id,
+                "identifier": identifier,
+                "title": title,
+                "body_hash": body_hash,
+                "kind": kind,
+                "status": "open",
+                "severity": "medium",
+                "external_refs": {},
+                "diagnostic_keys": {},
+                "target_project": target_project_slug,
+                "request_type": "create_work_item",
+            }
+
+            entity_id = kernel._make_op_id(cls.entity_type, "request", payload, [])
+            op = kernel.commit_op(
+                conn,
+                entity_id=entity_id,
+                entity_type=cls.entity_type,
+                op_type="request",
+                payload=payload,
+                actor_id=actor_id,
+            )
+
+            # Request entities don't go into the work_items cache (they're
+            # not real work items — they're signed evidence). They live only
+            # in the op_log. The target project B creates a real work item
+            # from this request via its intake process.
+            kernel.emit_event(
+                conn,
+                op_id=op["op_id"],
+                event_type="request.created",
+                payload={
+                    "entity_id": entity_id,
+                    "identifier": identifier,
+                    "project_id": project_id,
+                    "target_project": target_project_slug,
+                },
+            )
+
+            write_change(
+                conn,
+                kind=cls.kind,
+                workspace_id=workspace_id,
+                project_id=project_id,
+                identifier=identifier,
+                event="filed",
+                payload={"title": title, "kind": kind, "request_type": "create_work_item"},
+            )
+
+            conn.commit()
+            return {
+                "entity_id": entity_id,
+                "identifier": identifier,
+                "project_id": project_id,
+                "title": title,
+                "kind": kind,
+                "target_project": target_project_slug,
+                "request_type": "create_work_item",
+            }
+
+    @classmethod
+    def wait_on_work_item(
+        cls,
+        project_id: int,
+        target_project_slug: str,
+        target_identifier: str,
+        actor_id: str | None = None,
+    ) -> dict:
+        """Register a wait on a target project's work item (cross-project, P3).
+
+        Writes a ``wait`` op in the local log. This signals that the local
+        session is blocked until the target item resolves. The wake system
+        will resume the session when the target closes.
+        """
+        with _conn() as conn:
+            workspace_id = cls._resolve_workspace_for_project(conn, project_id)
+
+            # Generate a local identifier for the wait record.
+            cur = conn.cursor(row_factory=psycopg.rows.tuple_row)
+            cur.execute("SELECT allocate_work_item_identifier(%s)", (project_id,))
+            identifier = cur.fetchone()[0]
+
+            payload = {
+                "project_id": project_id,
+                "identifier": identifier,
+                "title": f"Wait on {target_project_slug}:{target_identifier}",
+                "target_project": target_project_slug,
+                "target_identifier": target_identifier,
+                "wait_type": "block_on_work_item",
+                "status": "waiting",
+            }
+
+            entity_id = kernel._make_op_id(cls.entity_type, "wait", payload, [])
+            op = kernel.commit_op(
+                conn,
+                entity_id=entity_id,
+                entity_type=cls.entity_type,
+                op_type="wait",
+                payload=payload,
+                actor_id=actor_id,
+            )
+
+            # Wait records don't go into the work_items cache. They live only
+            # in the op_log as signed evidence of the wait intent.
+            kernel.emit_event(
+                conn,
+                op_id=op["op_id"],
+                event_type="wait.registered",
+                payload={
+                    "entity_id": entity_id,
+                    "identifier": identifier,
+                    "project_id": project_id,
+                    "target_project": target_project_slug,
+                    "target_identifier": target_identifier,
+                },
+            )
+
+            write_change(
+                conn,
+                kind=cls.kind,
+                workspace_id=workspace_id,
+                project_id=project_id,
+                identifier=identifier,
+                event="filed",
+                payload={
+                    "title": payload["title"],
+                    "kind": "wait",
+                    "wait_type": "block_on_work_item",
+                },
+            )
+
+            conn.commit()
+            return {
+                "entity_id": entity_id,
+                "identifier": identifier,
+                "project_id": project_id,
+                "title": payload["title"],
+                "kind": "wait",
+                "target_project": target_project_slug,
+                "target_identifier": target_identifier,
+                "wait_type": "block_on_work_item",
+            }
+
+    @classmethod
+    def add_cross_project_link(
+        cls,
+        from_project_id: int,
+        from_identifier: str,
+        to_project_slug: str,
+        to_identifier: str,
+        relationship: str = "blocks",
+        actor_id: str | None = None,
+    ) -> dict:
+        """Add a cross-project link (P3).
+
+        The link is stored in the local ``links`` table with the target
+        project identified by slug. The derived index resolves the slug
+        to the actual project_id at query time.
+        """
+        with _conn() as conn:
+            workspace_id = cls._resolve_workspace_for_project(conn, from_project_id)
+
+            # Resolve the target project by slug.
+            cur = conn.cursor(row_factory=dict_row)
+            cur.execute(
+                "SELECT id, workspace_id FROM projects WHERE slug = %s",
+                (to_project_slug,),
+            )
+            to_proj = cur.fetchone()
+            if to_proj is None:
+                raise ValueError(f"Target project not found: {to_project_slug!r}")
+
+            to_project_id = to_proj["id"]
+            to_workspace_id = to_proj["workspace_id"]
+
+            from agent_notes.core.links import add_link
+
+            add_link(
+                from_kind="work_item",
+                from_workspace=workspace_id,
+                from_project=from_project_id,
+                from_identifier=from_identifier,
+                to_kind="work_item",
+                to_workspace=to_workspace_id,
+                to_project=to_project_id,
+                to_identifier=to_identifier,
+                relationship=relationship,
+            )
+
+            # Write a link op to the op_log for provenance.
+            payload = {
+                "from_project_id": from_project_id,
+                "from_identifier": from_identifier,
+                "to_project_id": to_project_id,
+                "to_identifier": to_identifier,
+                "relationship": relationship,
+                "cross_project": True,
+            }
+
+            entity_id = kernel._make_op_id(cls.entity_type, "add_link", payload, [])
+            op = kernel.commit_op(
+                conn,
+                entity_id=entity_id,
+                entity_type=cls.entity_type,
+                op_type="add_link",
+                payload=payload,
+                actor_id=actor_id,
+            )
+
+            kernel.emit_event(
+                conn,
+                op_id=op["op_id"],
+                event_type="link.added",
+                payload={
+                    "from_project_id": from_project_id,
+                    "from_identifier": from_identifier,
+                    "to_project_id": to_project_id,
+                    "to_identifier": to_identifier,
+                    "relationship": relationship,
+                },
+            )
+
+            conn.commit()
+            return {
+                "from_project_id": from_project_id,
+                "from_identifier": from_identifier,
+                "to_project_id": to_project_id,
+                "to_identifier": to_identifier,
+                "relationship": relationship,
+            }
+
+    @staticmethod
+    def parse_address(address: str) -> tuple[str, str]:
+        """Parse a ``project:identifier`` address (P3).
+
+        Returns ``(project_slug, identifier)``. Raises ValueError if malformed.
+        """
+        if ":" not in address:
+            raise ValueError(f"Invalid address: {address!r}. Expected format: project:identifier")
+        parts = address.split(":", 1)
+        return parts[0], parts[1]
