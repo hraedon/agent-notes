@@ -1,6 +1,6 @@
 """FastAPI application for the agent-notes web viewer (Plan 003, Phase 8a).
 
-Read-only routes for browsing breadcrumbs, memories, and workspaces/projects.
+Read-only routes for browsing work items, memories, and workspaces/projects.
 Server-rendered HTML via Jinja2 templates (decision 44).
 Bound to 127.0.0.1 only (decision 43).
 """
@@ -147,9 +147,9 @@ def _find_project(workspace_id: int, slug: str):
 
 
 def _query_breadcrumbs(project_id: int) -> list[dict]:
-    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
+    from agent_notes.core.work_item_model import WorkItemModel
 
-    rows = BreadcrumbModel.query_breadcrumbs(project_id=project_id, limit=200)
+    rows = WorkItemModel.query_work_items(project_id=project_id, limit=200)
     return [_strip_embedding(r) for r in rows]
 
 
@@ -160,10 +160,15 @@ def _query_memories(project_id: int, workspace_id: int) -> list[dict]:
 
 
 def _get_breadcrumb(project_id: int, identifier: str) -> dict | None:
-    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
+    from agent_notes.core.work_item_model import WorkItemModel
 
-    row = BreadcrumbModel.get_breadcrumb(project_id, identifier)
-    return _strip_embedding(row) if row else None
+    row = WorkItemModel.get_work_item(project_id, identifier)
+    if row is None:
+        return None
+    body = WorkItemModel.get_work_item_body(project_id, identifier) or ""
+    row = dict(row)
+    row["body"] = body
+    return _strip_embedding(row)
 
 
 def _get_memory(project_id: int, workspace_id: int, name: str) -> dict | None:
@@ -173,8 +178,8 @@ def _get_memory(project_id: int, workspace_id: int, name: str) -> dict | None:
 
 
 def _strip_embedding(row: dict) -> dict:
-    """Remove the embedding vector from a breadcrumb dict for display."""
-    return {k: v for k, v in row.items() if k != "embedding"}
+    """Remove the embedding vector from a work item dict for display."""
+    return {k: v for k, v in row.items() if k not in ("embedding", "body_hash")}
 
 
 def _search_all(query_vec: list[float], limit: int = 20) -> list[dict]:

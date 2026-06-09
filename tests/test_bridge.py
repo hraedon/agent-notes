@@ -1,7 +1,7 @@
 """Bridge integration tests (Plan 004 Phase 9c).
 
 Spins up a fake HTTP receiver, runs the bridge in a thread against the
-ephemeral Postgres, files a breadcrumb via the model layer, and asserts a
+ephemeral Postgres, files a work item via the model layer, and asserts a
 signed POST arrives with the expected wake-event shape.
 """
 
@@ -19,7 +19,9 @@ import pytest
 
 from agent_notes import bridge
 from agent_notes.core import db as coredb
-from agent_notes.core.breadcrumbs_model import BreadcrumbModel
+from agent_notes.core.http_transport import post_with_retry
+from agent_notes.core.http_transport import sign as http_sign
+from agent_notes.core.work_item_model import WorkItemModel
 from tests.conftest import ephemeral_db  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures("ephemeral_db")
@@ -61,7 +63,7 @@ def _start_receiver() -> tuple[HTTPServer, str]:
 
 
 def test_sign_format():
-    sig = bridge._sign(b"abc", "secret")
+    sig = http_sign(b"abc", "secret")
     assert sig.startswith("sha256=")
     expected = hmac.new(b"secret", b"abc", hashlib.sha256).hexdigest()
     assert sig == f"sha256={expected}"
@@ -91,7 +93,7 @@ def test_payload_to_wake_event_shape():
 def test_post_with_retry_succeeds():
     server, url = _start_receiver()
     try:
-        ok = bridge._post_with_retry(
+        ok = post_with_retry(
             url,
             SECRET,
             "agent-notes",
@@ -115,8 +117,7 @@ def test_post_with_retry_succeeds():
 
 
 def test_post_with_retry_eventually_drops():
-    # Point at a closed port; expect False after retries (use tiny delays).
-    ok = bridge._post_with_retry(
+    ok = post_with_retry(
         "http://127.0.0.1:1/",
         SECRET,
         "agent-notes",
@@ -136,7 +137,7 @@ def test_post_with_retry_eventually_drops():
 
 
 def test_bridge_end_to_end_delivers_post():
-    """File a breadcrumb → bridge LISTEN sees NOTIFY → POST hits fake server."""
+    """File a work item → bridge LISTEN sees NOTIFY → POST hits fake server."""
     server, url = _start_receiver()
 
     ws = coredb.get_or_create_workspace("default", "Default Workspace")
@@ -162,12 +163,11 @@ def test_bridge_end_to_end_delivers_post():
     bridge_thread = threading.Thread(target=_run_bridge, daemon=True)
     bridge_thread.start()
 
-    # Give LISTEN time to subscribe before we fire the NOTIFY.
     time.sleep(0.5)
 
-    BreadcrumbModel.file_breadcrumb(
+    WorkItemModel.file_work_item(
         project_id=proj.id,
-        identifier="BC-BRIDGE-1",
+        identifier="WI-BRIDGE-1",
         title="Bridge test",
         body="trigger NOTIFY",
         kind="observation",
@@ -185,11 +185,10 @@ def test_bridge_end_to_end_delivers_post():
     assert rx["signature_valid"] is True
     assert rx["body"]["v"] == 0
     assert rx["body"]["kind"] == "note-change"
-    # The change_log NOTIFY payload carries the kind/identifier of the row.
     meta = rx["body"]["meta"]
     assert (
-        meta.get("agent_notes_identifier") == "BC-BRIDGE-1"
-        or "BC-BRIDGE-1" in rx["body"]["content"]
+        meta.get("agent_notes_identifier") == "WI-BRIDGE-1"
+        or "WI-BRIDGE-1" in rx["body"]["content"]
     )
 
 
@@ -307,7 +306,7 @@ def test_bridge_to_agent_wake_ingest():
     url = f"http://127.0.0.1:{port}/"
 
     try:
-        ok = bridge._post_with_retry(
+        ok = post_with_retry(
             url,
             SECRET,
             "agent-notes",
@@ -316,11 +315,11 @@ def test_bridge_to_agent_wake_ingest():
                 "event_id": "integration-test-001",
                 "source": "agent-notes",
                 "kind": "note-change",
-                "content": "breadcrumb BC-INT-1 filed",
+                "content": "work item WI-INT-1 filed",
                 "meta": {
-                    "agent_notes_kind": "breadcrumb",
+                    "agent_notes_kind": "work_item",
                     "agent_notes_event": "filed",
-                    "agent_notes_identifier": "BC-INT-1",
+                    "agent_notes_identifier": "WI-INT-1",
                 },
                 "wake": False,
             },
@@ -333,7 +332,7 @@ def test_bridge_to_agent_wake_ingest():
         assert evt["source"] == "agent-notes"
         assert evt["kind"] == "note-change"
         assert evt["event_id"] == "integration-test-001"
-        assert evt["meta"]["agent_notes_identifier"] == "BC-INT-1"
+        assert evt["meta"]["agent_notes_identifier"] == "WI-INT-1"
         assert evt["wake"] is False
     finally:
         loop.call_soon_threadsafe(loop.stop)

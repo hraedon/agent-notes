@@ -91,10 +91,25 @@ def verify_signature(op: dict, public_key: bytes | None = None) -> Violation | N
 
     If the envelope is unsigned (``NullSigner``), returns ``None`` without
     checking (P1 enforcement is opt-in per key).
+
+    Migrated ops (actor_id == "migration") that lack an envelope are treated
+    as warnings rather than errors — the migration script did not produce
+    signing envelopes, but the hash-chain is verified separately by
+    ``verify_op_id`` and the cache-rebuild match.
     """
     stored_payload = op.get("payload") or {}
     envelope = stored_payload.get("envelope")
     if not envelope:
+        actor_id = op.get("actor_id")
+        if actor_id == "migration":
+            return Violation(
+                op_id=op["op_id"],
+                rule="signature",
+                message=(
+                    "Unsigned migration op (no signing envelope; hash-chain verified separately)"
+                ),
+                severity="warning",
+            )
         return Violation(
             op_id=op["op_id"],
             rule="signature",
@@ -291,7 +306,11 @@ def _verify_ops(
                 violations.append(v)
 
         if violations:
-            result.failed += 1
+            has_error = any(v.severity == "error" for v in violations)
+            if has_error:
+                result.failed += 1
+            else:
+                result.passed += 1
             result.violations.extend(violations)
         else:
             result.passed += 1

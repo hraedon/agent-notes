@@ -1,26 +1,32 @@
 -- Cross-kind search infrastructure (Phase 4 / §6).
 -- Run via: agent-notes-migrate --all  (decision 18).
 --
+-- Must run after 700_work_log_kernel.sql: all_notes_search_v reads work_items
+-- and content_blobs, which that file creates. (Numbered 750 for this reason —
+-- it was 400 until the Plan 008 work-item migration moved its dependencies.)
+--
 -- Design notes:
 -- - all_notes_search_v is explicitly search-only (Kimi D); kind-specific fields
 --   are fetched via kind tools.
--- - Uses updated_at consistently for the since filter (both breadcrumbs and
+-- - Uses updated_at consistently for the since filter (both work_items and
 --   memories have this column).
 -- - Memories filtered to active rows only.
--- - Breadcrumbs need a JOIN to projects for workspace_id.
+-- - Work items need a JOIN to projects for workspace_id and to content_blobs
+--   for the body text.
 
 CREATE OR REPLACE VIEW all_notes_search_v AS
 SELECT
-    'breadcrumb'::text   AS kind,
+    'work_item'::text   AS kind,
     p.workspace_id       AS workspace_id,
-    b.project_id         AS project_id,
-    b.identifier         AS identifier,
-    b.title              AS title,
-    b.body               AS body,
-    b.embedding          AS embedding,
-    b.updated_at         AS updated_at
-FROM breadcrumbs b
-JOIN projects p ON p.id = b.project_id
+    wi.project_id        AS project_id,
+    wi.identifier        AS identifier,
+    wi.title             AS title,
+    cb.content           AS body,
+    wi.embedding         AS embedding,
+    wi.updated_at        AS updated_at
+FROM work_items wi
+JOIN projects p ON p.id = wi.project_id
+JOIN content_blobs cb ON cb.hash = wi.body_hash
 
 UNION ALL
 

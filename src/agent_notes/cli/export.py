@@ -7,6 +7,8 @@ import json
 import sys
 from datetime import datetime
 
+import psycopg
+
 from agent_notes.cli.common import (
     EXIT_GENERIC,
     EXIT_NOT_CONFIGURED,
@@ -18,9 +20,9 @@ from agent_notes.cli.common import (
 
 def cmd_export(args: argparse.Namespace) -> int:
     """Export all data for a project (or entire workspace) as JSON."""
-    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
     from agent_notes.core.db import list_projects, list_workspaces
     from agent_notes.core.memory_model import get_memory, list_memories
+    from agent_notes.core.work_item_model import WorkItemModel
 
     if args.path or (args.workspace and args.project):
         try:
@@ -87,24 +89,25 @@ def cmd_export(args: argparse.Namespace) -> int:
         proj_data = {
             "workspace": entry["ws_slug"],
             "project": entry["proj_slug"],
-            "breadcrumbs": [],
+            "work_items": [],
             "memories": [],
         }
 
-        bc_rows = BreadcrumbModel.query_breadcrumbs(project_id=entry["proj_id"], limit=10000)
-        for bc in bc_rows:
-            proj_data["breadcrumbs"].append(
+        wi_rows = WorkItemModel.query_work_items(project_id=entry["proj_id"], limit=10000)
+        for wi in wi_rows:
+            body = WorkItemModel.get_work_item_body(entry["proj_id"], wi["identifier"]) or ""
+            proj_data["work_items"].append(
                 {
-                    "identifier": bc["identifier"],
-                    "title": bc["title"],
-                    "body": bc.get("body", ""),
-                    "kind": bc["kind"],
-                    "status": bc["status"],
-                    "severity": bc.get("severity", "medium"),
-                    "external_refs": bc.get("external_refs", {}),
-                    "diagnostic_keys": bc.get("diagnostic_keys", {}),
-                    "created_at": (bc["created_at"].isoformat() if bc.get("created_at") else None),
-                    "updated_at": (bc["updated_at"].isoformat() if bc.get("updated_at") else None),
+                    "identifier": wi["identifier"],
+                    "title": wi["title"],
+                    "body": body,
+                    "kind": wi["kind"],
+                    "status": wi["status"],
+                    "severity": wi.get("severity", "medium"),
+                    "external_refs": wi.get("external_refs", {}),
+                    "diagnostic_keys": wi.get("diagnostic_keys", {}),
+                    "created_at": (wi["created_at"].isoformat() if wi.get("created_at") else None),
+                    "updated_at": (wi["updated_at"].isoformat() if wi.get("updated_at") else None),
                 }
             )
 
@@ -140,10 +143,10 @@ def cmd_export(args: argparse.Namespace) -> int:
 
 def cmd_import(args: argparse.Namespace) -> int:
     """Import data from a JSON export file."""
-    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
     from agent_notes.core.db import get_or_create_project, get_or_create_workspace
     from agent_notes.core.embed import embed
     from agent_notes.core.memory_model import add_memory
+    from agent_notes.core.work_item_model import WorkItemModel
 
     try:
         with open(args.file, "r", encoding="utf-8") as f:
@@ -157,7 +160,7 @@ def cmd_import(args: argparse.Namespace) -> int:
         print("No projects found in export file.", file=sys.stderr)
         return EXIT_GENERIC
 
-    total_bc = 0
+    total_wi = 0
     total_mem = 0
 
     for proj_data in projects:
@@ -167,26 +170,31 @@ def cmd_import(args: argparse.Namespace) -> int:
         ws = get_or_create_workspace(ws_slug, ws_slug.replace("-", " ").title())
         proj = get_or_create_project(ws.id, proj_slug, proj_slug)
 
-        for bc in proj_data.get("breadcrumbs", []):
-            text = bc.get("title", "") + " " + bc.get("body", "")
+        for wi in proj_data.get("work_items", []) + proj_data.get("breadcrumbs", []):
+            text = wi.get("title", "") + " " + wi.get("body", "")
             vec = embed(text, task="document").tolist() if text.strip() else None
             try:
-                BreadcrumbModel.file_breadcrumb(
+                WorkItemModel.file_work_item(
                     project_id=proj.id,
-                    identifier=bc.get("identifier"),
-                    title=bc.get("title", ""),
-                    body=bc.get("body", ""),
-                    kind=bc.get("kind", "todo"),
-                    status=bc.get("status", "new"),
-                    severity=bc.get("severity", "medium"),
-                    external_refs=bc.get("external_refs"),
-                    diagnostic_keys=bc.get("diagnostic_keys"),
+                    identifier=wi.get("identifier"),
+                    title=wi.get("title", ""),
+                    body=wi.get("body", ""),
+                    kind=wi.get("kind", "todo"),
+                    status=wi.get("status", "open"),
+                    severity=wi.get("severity", "medium"),
+                    external_refs=wi.get("external_refs"),
+                    diagnostic_keys=wi.get("diagnostic_keys"),
                     embedding=vec,
                 )
-                total_bc += 1
+                total_wi += 1
             except ValueError as exc:
                 print(
-                    f"  Skipped breadcrumb {bc.get('identifier')}: {exc}",
+                    f"  Skipped work item {wi.get('identifier')}: {exc}",
+                    file=sys.stderr,
+                )
+            except psycopg.errors.UniqueViolation:
+                print(
+                    f"  Skipped work item {wi.get('identifier')}: already exists",
                     file=sys.stderr,
                 )
 
@@ -210,7 +218,7 @@ def cmd_import(args: argparse.Namespace) -> int:
                     file=sys.stderr,
                 )
 
-    print(f"Imported {total_bc} breadcrumb(s) and {total_mem} memory(ies).")
+    print(f"Imported {total_wi} work item(s) and {total_mem} memory(ies).")
     return EXIT_SUCCESS
 
 

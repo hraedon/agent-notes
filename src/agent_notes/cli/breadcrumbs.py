@@ -1,3 +1,11 @@
+"""Breadcrumb CLI — compatibility alias for work-item operations.
+
+The ``breadcrumbs`` table has been dropped (Plan 008 Tier A).  All data lives
+in ``work_items``.  This module keeps the ``agent-notes breadcrumb`` subcommands
+working as thin wrappers around :class:`WorkItemModel`, translating bc_status
+values to wi_status values so existing skills and scripts continue to work.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -14,11 +22,44 @@ from agent_notes.cli.common import (
     EXIT_NOT_FOUND,
     EXIT_SUCCESS,
     _add_common,
-    _bc_format,
     _print_sub_help,
     _resolve,
     report_resolution_failure,
 )
+
+_BC_STATUS_TO_WI = {
+    "new": "open",
+    "open": "open",
+    "active": "claimed",
+    "in_progress": "claimed",
+    "blocked": "open",
+    "under_review": "claimed",
+    "proposed": "open",
+    "decision-pending": "open",
+    "resolved": "closed",
+    "closed": "closed",
+    "implemented": "closed",
+    "accepted": "closed",
+    "wont_fix": "deferred",
+    "wontfix": "deferred",
+    "duplicate": "deferred",
+    "obsolete": "deferred",
+    "rejected": "deferred",
+    "deferred": "deferred",
+}
+
+
+def _map_status(status: str) -> str:
+    return _BC_STATUS_TO_WI.get(status, status)
+
+
+def _wi_to_bc_display(wi: dict, body: str | None = None) -> dict:
+    out = dict(wi)
+    out.pop("embedding", None)
+    out.pop("body_hash", None)
+    if body is not None:
+        out["body"] = body
+    return out
 
 
 def cmd_bc_file(args: argparse.Namespace) -> int:
@@ -30,20 +71,20 @@ def cmd_bc_file(args: argparse.Namespace) -> int:
         report_resolution_failure(args, code)
         return code
 
-    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
     from agent_notes.core.embed import embed
+    from agent_notes.core.work_item_model import WorkItemModel
 
     vec = embed(args.title + " " + (args.body or ""), task="document").tolist()
     external_refs = json.loads(args.external_refs) if args.external_refs else None
     diagnostic_keys = json.loads(args.diagnostic_keys) if args.diagnostic_keys else None
     try:
-        bc = BreadcrumbModel.file_breadcrumb(
+        wi = WorkItemModel.file_work_item(
             project_id=proj_id,
             identifier=args.identifier,
             title=args.title,
             body=args.body or "",
             kind=args.type,
-            status=args.status,
+            status=_map_status(args.status),
             severity=args.severity or "medium",
             external_refs=external_refs,
             diagnostic_keys=diagnostic_keys,
@@ -57,12 +98,13 @@ def cmd_bc_file(args: argparse.Namespace) -> int:
         return EXIT_CONFLICT
 
     if use_json:
-        print(json.dumps({"breadcrumb": bc}, indent=2, default=str))
+        body = WorkItemModel.get_work_item_body(proj_id, wi["identifier"]) or ""
+        print(json.dumps({"breadcrumb": _wi_to_bc_display(wi, body)}, indent=2, default=str))
     else:
-        ident = bc["identifier"]
-        kind = bc["kind"]
-        status = bc["status"]
-        print(f"Breadcrumb filed: **{ident}** ({kind} / {status}) in project {proj_slug}")
+        ident = wi["identifier"]
+        kind = wi["kind"]
+        status = wi["status"]
+        print(f"Work item filed: **{ident}** ({kind} / {status}) in project {proj_slug}")
     return EXIT_SUCCESS
 
 
@@ -75,8 +117,8 @@ def cmd_bc_update(args: argparse.Namespace) -> int:
         report_resolution_failure(args, code)
         return code
 
-    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
     from agent_notes.core.embed import embed
+    from agent_notes.core.work_item_model import WorkItemModel
 
     fields: dict[str, Any] = {}
     if args.title is not None:
@@ -91,40 +133,37 @@ def cmd_bc_update(args: argparse.Namespace) -> int:
     if args.body is not None:
         fields["body"] = args.body
     if args.append_body is not None:
-        old = BreadcrumbModel.get_breadcrumb(proj_id, args.identifier)
+        old = WorkItemModel.get_work_item(proj_id, args.identifier)
         if old is None:
             if use_json:
                 print(json.dumps({"error": "not found"}, indent=2))
             else:
-                print(f"Breadcrumb '{args.identifier}' not found.")
+                print(f"Work item '{args.identifier}' not found.")
             return EXIT_NOT_FOUND
-        existing = (old.get("body") or "").rstrip()
+        existing = (WorkItemModel.get_work_item_body(proj_id, args.identifier) or "").rstrip()
         sep = "\n\n" if existing else ""
         fields["body"] = f"{existing}{sep}{args.append_body}"
     if args.type is not None:
         fields["kind"] = args.type
     if args.status is not None:
-        fields["status"] = args.status
+        fields["status"] = _map_status(args.status)
     if args.severity is not None:
         fields["severity"] = args.severity
 
     if "body" in fields or "title" in fields:
-        old = BreadcrumbModel.get_breadcrumb(proj_id, args.identifier)
+        old = WorkItemModel.get_work_item(proj_id, args.identifier)
         if old is None:
             if use_json:
                 print(json.dumps({"error": "not found"}, indent=2))
             else:
-                print(f"Breadcrumb '{args.identifier}' not found.")
+                print(f"Work item '{args.identifier}' not found.")
             return EXIT_NOT_FOUND
-        text = (
-            fields.get("title", old.get("title", ""))
-            + " "
-            + fields.get("body", old.get("body", ""))
-        )
+        old_body = WorkItemModel.get_work_item_body(proj_id, args.identifier) or ""
+        text = fields.get("title", old.get("title", "")) + " " + fields.get("body", old_body)
         fields["embedding"] = embed(text, task="document").tolist()
 
     try:
-        bc = BreadcrumbModel.update_breadcrumb(
+        wi = WorkItemModel.update_work_item(
             project_id=proj_id,
             identifier=args.identifier,
             **fields,
@@ -137,9 +176,10 @@ def cmd_bc_update(args: argparse.Namespace) -> int:
         return EXIT_NOT_FOUND
 
     if use_json:
-        print(json.dumps({"breadcrumb": bc}, indent=2, default=str))
+        body = WorkItemModel.get_work_item_body(proj_id, args.identifier) or ""
+        print(json.dumps({"breadcrumb": _wi_to_bc_display(wi, body)}, indent=2, default=str))
     else:
-        print(f"Breadcrumb updated: **{bc['identifier']}** ({bc['kind']} / {bc['status']})")
+        print(f"Work item updated: **{wi['identifier']}** ({wi['kind']} / {wi['status']})")
     return EXIT_SUCCESS
 
 
@@ -152,21 +192,27 @@ def cmd_bc_get(args: argparse.Namespace) -> int:
         report_resolution_failure(args, code)
         return code
 
-    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
+    from agent_notes.core.work_item_model import WorkItemModel
 
-    bc = BreadcrumbModel.get_breadcrumb(proj_id, args.identifier)
-    if bc is None:
+    wi = WorkItemModel.get_work_item(proj_id, args.identifier)
+    if wi is None:
         if use_json:
             print(json.dumps({"error": "not found"}, indent=2))
         else:
-            print(f"Breadcrumb '{args.identifier}' not found.")
+            print(f"Work item '{args.identifier}' not found.")
         return EXIT_NOT_FOUND
 
+    body = WorkItemModel.get_work_item_body(proj_id, args.identifier) or ""
+
     if use_json:
-        bc.pop("embedding", None)
-        print(json.dumps({"breadcrumb": bc}, indent=2, default=str))
+        display = _wi_to_bc_display(wi)
+        display["body"] = body
+        print(json.dumps({"breadcrumb": display}, indent=2, default=str))
     else:
-        print(_bc_format(bc))
+        print(f"**{wi['identifier']}** — {wi['title']}")
+        print(f"Kind: {wi['kind']} | Status: {wi['status']} | Severity: {wi['severity']}")
+        if body:
+            print(f"\n{body}")
     return EXIT_SUCCESS
 
 
@@ -174,9 +220,9 @@ def cmd_bc_find(args: argparse.Namespace) -> int:
     use_json = getattr(args, "json", False)
     scope = getattr(args, "scope", None) or "project"
 
-    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
     from agent_notes.core.db import list_workspaces
     from agent_notes.core.embed import embed
+    from agent_notes.core.work_item_model import WorkItemModel
 
     proj_id: int | None = None
     ws_id: int | None = None
@@ -184,7 +230,6 @@ def cmd_bc_find(args: argparse.Namespace) -> int:
     if scope == "global":
         pass
     elif scope == "workspace":
-        # Resolve workspace from --workspace or --path; project is intentionally ignored.
         if args.workspace:
             ws = next((w for w in list_workspaces() if w.slug == args.workspace), None)
             if ws is None:
@@ -207,7 +252,7 @@ def cmd_bc_find(args: argparse.Namespace) -> int:
                 code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
                 report_resolution_failure(args, code)
                 return code
-    else:  # scope == "project" (default)
+    else:
         try:
             ws_id, proj_id, _ws_slug, _proj_slug = _resolve(args.workspace, args.project, args.path)
         except SystemExit as exc:
@@ -216,20 +261,18 @@ def cmd_bc_find(args: argparse.Namespace) -> int:
             return code
 
     if args.text:
-        # Quick-win: exact identifier lookup (e.g., "BC-001" or "001")
-        # If the text is a short identifier-like string, do a direct lookup
-        # to avoid the 270MB embedding model cold-load.
         text = args.text.strip()
-        if text.isdigit() or (text.startswith("BC-") and text[3:].isdigit()):
-            rows = BreadcrumbModel.query_breadcrumbs(
+        if text.isdigit() or (
+            (text.startswith("BC-") or text.startswith("WI-")) and text[3:].isdigit()
+        ):
+            rows = WorkItemModel.query_work_items(
                 project_id=proj_id,
                 workspace_id=ws_id,
                 identifier=text,
                 limit=1,
             )
             if not rows:
-                # Fall back to identifier partial match
-                rows = BreadcrumbModel.query_breadcrumbs(
+                rows = WorkItemModel.query_work_items(
                     project_id=proj_id,
                     workspace_id=ws_id,
                     limit=min(args.limit or 50, 200),
@@ -237,17 +280,17 @@ def cmd_bc_find(args: argparse.Namespace) -> int:
                 rows = [r for r in rows if text.lower() in r["identifier"].lower()]
         else:
             vec = embed(args.text, task="query").tolist()
-            rows = BreadcrumbModel.find_breadcrumbs(
+            rows = WorkItemModel.find_work_items(
                 query_vec=vec,
                 project_id=proj_id,
                 workspace_id=ws_id,
                 limit=min(args.limit or 10, 50),
             )
     else:
-        rows = BreadcrumbModel.query_breadcrumbs(
+        rows = WorkItemModel.query_work_items(
             project_id=proj_id,
             workspace_id=ws_id,
-            status=args.status,
+            status=_map_status(args.status) if args.status else None,
             kind=args.type,
             limit=min(args.limit or 50, 200),
         )
@@ -255,12 +298,13 @@ def cmd_bc_find(args: argparse.Namespace) -> int:
     if use_json:
         for r in rows:
             r.pop("embedding", None)
-        print(json.dumps({"breadcrumbs": rows}, indent=2, default=str))
+        display_rows = [_wi_to_bc_display(r) for r in rows]
+        print(json.dumps({"breadcrumbs": display_rows}, indent=2, default=str))
     else:
         if not rows:
-            print("No breadcrumbs found.")
+            print("No work items found.")
         else:
-            print(f"{len(rows)} breadcrumb(s) found:")
+            print(f"{len(rows)} work item(s) found:")
             for r in rows:
                 print(f"- **{r['identifier']}** ({r['kind']} / {r['status']}) — {r['title']}")
     return EXIT_SUCCESS
@@ -275,20 +319,20 @@ def cmd_bc_delete(args: argparse.Namespace) -> int:
         report_resolution_failure(args, code)
         return code
 
-    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
+    from agent_notes.core.work_item_model import WorkItemModel
 
-    deleted = BreadcrumbModel.delete_breadcrumb(proj_id, args.identifier)
+    deleted = WorkItemModel.delete_work_item(proj_id, args.identifier)
     if not deleted:
         if use_json:
             print(json.dumps({"error": "not found"}, indent=2))
         else:
-            print(f"Breadcrumb '{args.identifier}' not found.")
+            print(f"Work item '{args.identifier}' not found.")
         return EXIT_NOT_FOUND
 
     if use_json:
         print(json.dumps({"deleted": args.identifier}, indent=2))
     else:
-        print(f"Breadcrumb '{args.identifier}' deleted.")
+        print(f"Work item '{args.identifier}' deleted.")
     return EXIT_SUCCESS
 
 
@@ -336,11 +380,6 @@ def cmd_bc_sync(args: argparse.Namespace) -> int:
 
 
 def cmd_bc_export_index(args: argparse.Namespace) -> int:
-    """Write a plain-text fallback index of open breadcrumbs to the repo root.
-
-    This is the offline fallback: if the agent-notes CLI/DB is broken, an agent
-    can still read OPEN_BREADCRUMBS.txt to see what's open.
-    """
     use_json = getattr(args, "json", False)
     try:
         ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
@@ -349,22 +388,19 @@ def cmd_bc_export_index(args: argparse.Namespace) -> int:
         report_resolution_failure(args, code)
         return code
 
-    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
     from agent_notes.core.db import list_projects
+    from agent_notes.core.work_item_model import WorkItemModel
 
-    # Determine output path
     if args.output:
         out_path = Path(args.output)
     else:
-        # Find the project's repo_root
         proj = next((p for p in list_projects(workspace_id=ws_id) if p.id == proj_id), None)
         rr = proj.repo_root if proj else None
-        out_path = Path(rr or ".") / "OPEN_BREADCRUMBS.txt"
+        out_path = Path(rr or ".") / "OPEN_WORK_ITEMS.txt"
 
-    open_bcs = BreadcrumbModel.query_breadcrumbs(project_id=proj_id, is_open=True, limit=200)
-    # Sort by severity then recency
+    open_wis = WorkItemModel.query_work_items(project_id=proj_id, is_open=True, limit=200)
     severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-    open_bcs.sort(
+    open_wis.sort(
         key=lambda b: (
             severity_order.get(b.get("severity", "medium"), 2),
             b.get("updated_at", ""),
@@ -372,40 +408,34 @@ def cmd_bc_export_index(args: argparse.Namespace) -> int:
     )
 
     lines = [
-        f"# Open Breadcrumbs for {proj_slug}",
+        f"# Open Work Items for {proj_slug}",
         f"# Generated: {datetime.now().isoformat()}",
-        f"# Total: {len(open_bcs)}",
+        f"# Total: {len(open_wis)}",
         "#",
         "# This file is a plain-text fallback. If the agent-notes CLI is unavailable,",
-        "# agents can read this file to see open breadcrumbs.",
+        "# agents can read this file to see open work items.",
         "# Do not edit by hand; regenerate with: agent-notes breadcrumb export-index",
         "",
     ]
 
-    for bc in open_bcs:
-        ident = bc.get("identifier", "?")
-        kind = bc.get("kind", "?")
-        status = bc.get("status", "?")
-        severity = bc.get("severity", "medium")
-        title = bc.get("title", "(no title)")
+    for wi in open_wis:
+        ident = wi.get("identifier", "?")
+        kind = wi.get("kind", "?")
+        status = wi.get("status", "?")
+        severity = wi.get("severity", "medium")
+        title = wi.get("title", "(no title)")
         lines.append(f"[{severity}] {ident} ({kind} / {status}) — {title}")
 
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     if use_json:
-        print(json.dumps({"path": str(out_path), "count": len(open_bcs)}, indent=2))
+        print(json.dumps({"path": str(out_path), "count": len(open_wis)}, indent=2))
     else:
-        print(f"Exported {len(open_bcs)} open breadcrumb(s) to {out_path}")
+        print(f"Exported {len(open_wis)} open work item(s) to {out_path}")
     return EXIT_SUCCESS
 
 
 def cmd_bc_reconcile(args: argparse.Namespace) -> int:
-    """Reconcile open breadcrumbs against git history.
-
-    Surfaces (and, with ``--apply``, resolves) open breadcrumbs that a recent
-    commit already closed via its message — the silent-resolution drift that the
-    DB never hears about on its own.
-    """
     use_json = getattr(args, "json", False)
     try:
         ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
@@ -414,8 +444,9 @@ def cmd_bc_reconcile(args: argparse.Namespace) -> int:
         report_resolution_failure(args, code)
         return code
 
-    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
     from agent_notes.core.db import list_projects
+    from agent_notes.core.git_reconcile import scan_git_for_resolutions
+    from agent_notes.core.work_item_model import WorkItemModel
 
     proj = next((p for p in list_projects(workspace_id=ws_id) if p.id == proj_id), None)
     repo_root = proj.repo_root if proj else None
@@ -428,18 +459,40 @@ def cmd_bc_reconcile(args: argparse.Namespace) -> int:
             print(json.dumps({"error": msg, "results": []}))
         else:
             print(msg, file=sys.stderr)
-        return EXIT_SUCCESS  # advisory — absence of a repo isn't a hard failure
+        return EXIT_SUCCESS
 
-    results = BreadcrumbModel.reconcile_with_git(
-        proj_id, repo_root, apply=args.apply, lookback=args.lookback
-    )
+    open_wis = WorkItemModel.query_work_items(project_id=proj_id, is_open=True, limit=200)
+    by_id = {wi["identifier"]: wi for wi in open_wis}
+    hits = scan_git_for_resolutions(repo_root, list(by_id), lookback=args.lookback)
+
+    results: list[dict] = []
+    for ident, info in hits.items():
+        wi = by_id[ident]
+        applied = False
+        if args.apply:
+            refs = dict(wi.get("external_refs") or {})
+            refs["resolved_by_commit"] = info["commit"]
+            refs["resolved_by_subject"] = info["subject"]
+            WorkItemModel.update_work_item(proj_id, ident, status="closed", external_refs=refs)
+            applied = True
+        results.append(
+            {
+                "identifier": ident,
+                "current_status": wi.get("status"),
+                "suggested_status": "closed",
+                "commit": info["commit"],
+                "subject": info["subject"],
+                "applied": applied,
+            }
+        )
+    results.sort(key=lambda r: r["identifier"])
 
     if use_json:
         print(json.dumps({"results": results, "applied": args.apply}, indent=2, default=str))
         return EXIT_SUCCESS
 
     if not results:
-        print("No open breadcrumbs appear resolved in git history.")
+        print("No open work items appear resolved in git history.")
         return EXIT_SUCCESS
 
     verb = "Resolved" if args.apply else "Would resolve"
@@ -451,22 +504,22 @@ def cmd_bc_reconcile(args: argparse.Namespace) -> int:
 
 
 def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
-    bc = sub.add_parser("breadcrumb", help="Breadcrumb operations")
+    bc = sub.add_parser("breadcrumb", help="Breadcrumb operations (alias for work-item)")
     bc_sub = bc.add_subparsers(dest="bc_cmd")
 
-    bc_file = bc_sub.add_parser("file", help="File a breadcrumb")
+    bc_file = bc_sub.add_parser("file", help="File a breadcrumb (creates a work item)")
     bc_file.add_argument("--title", required=True)
     bc_file.add_argument("--body", default="")
     bc_file.add_argument("--identifier", default=None)
     bc_file.add_argument("--type", default="todo", dest="type")
-    bc_file.add_argument("--status", default="new")
+    bc_file.add_argument("--status", default="open")
     bc_file.add_argument("--severity", default="medium")
     bc_file.add_argument("--external-refs", default=None)
     bc_file.add_argument("--diagnostic-keys", default=None)
     _add_common(bc_file)
     bc_file.set_defaults(func=cmd_bc_file)
 
-    bc_update = bc_sub.add_parser("update", help="Update a breadcrumb")
+    bc_update = bc_sub.add_parser("update", help="Update a breadcrumb (updates a work item)")
     bc_update.add_argument("identifier")
     bc_update.add_argument("--title", default=None)
     bc_update.add_argument("--body", default=None, help="Replace body entirely")
@@ -482,12 +535,12 @@ def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
     _add_common(bc_update)
     bc_update.set_defaults(func=cmd_bc_update)
 
-    bc_get = bc_sub.add_parser("get", help="Get a breadcrumb")
+    bc_get = bc_sub.add_parser("get", help="Get a breadcrumb (work item)")
     bc_get.add_argument("identifier")
     _add_common(bc_get)
     bc_get.set_defaults(func=cmd_bc_get)
 
-    bc_find = bc_sub.add_parser("find", help="Find breadcrumbs by text or filters")
+    bc_find = bc_sub.add_parser("find", help="Find breadcrumbs (work items) by text or filters")
     bc_find.add_argument("--status", default=None)
     bc_find.add_argument("--type", default=None, dest="type")
     bc_find.add_argument("--text", default=None)
@@ -504,13 +557,13 @@ def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
     _add_common(bc_find)
     bc_find.set_defaults(func=cmd_bc_find)
 
-    bc_delete = bc_sub.add_parser("delete", help="Delete a breadcrumb")
+    bc_delete = bc_sub.add_parser("delete", help="Delete a breadcrumb (work item)")
     bc_delete.add_argument("identifier")
     _add_common(bc_delete)
     bc_delete.set_defaults(func=cmd_bc_delete)
 
     bc_sync = bc_sub.add_parser(
-        "sync", help="Import breadcrumbs from on-disk markdown files into the DB"
+        "sync", help="Import breadcrumb .md files as work items into the DB"
     )
     bc_sync.add_argument(
         "--from-files",
@@ -527,31 +580,31 @@ def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
     bc_sync.add_argument(
         "--prune",
         action="store_true",
-        help="Delete DB breadcrumbs not present in files (hard delete, destructive)",
+        help="Delete DB work items not present in files (hard delete, destructive)",
     )
     _add_common(bc_sync)
     bc_sync.set_defaults(func=cmd_bc_sync)
 
     bc_export_index = bc_sub.add_parser(
         "export-index",
-        help="Export open breadcrumbs to a plain-text fallback index in the repo root",
+        help="Export open work items to a plain-text fallback index in the repo root",
     )
     bc_export_index.add_argument(
         "--output",
         default=None,
-        help="Output path (default: <repo-root>/OPEN_BREADCRUMBS.txt)",
+        help="Output path (default: <repo-root>/OPEN_WORK_ITEMS.txt)",
     )
     _add_common(bc_export_index)
     bc_export_index.set_defaults(func=cmd_bc_export_index)
 
     bc_reconcile = bc_sub.add_parser(
         "reconcile",
-        help="Detect (and optionally resolve) open breadcrumbs already closed in git history",
+        help="Detect (and optionally resolve) open work items already closed in git history",
     )
     bc_reconcile.add_argument(
         "--apply",
         action="store_true",
-        help="Transition matched breadcrumbs to 'resolved' (default: dry-run/suggest only)",
+        help="Transition matched items to 'closed' (default: dry-run/suggest only)",
     )
     bc_reconcile.add_argument(
         "--lookback",

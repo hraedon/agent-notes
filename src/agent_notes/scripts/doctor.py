@@ -48,12 +48,10 @@ def _check_dsn() -> tuple[bool, str]:
 
 def _check_schema() -> tuple[bool, str]:
     expected = {
-        "breadcrumbs",
         "memories",
         "links",
         "change_log",
         "all_notes_search_v",
-        # Plan 008 kernel schema
         "op_log",
         "work_items",
         "content_blobs",
@@ -125,21 +123,21 @@ def _check_links_audit() -> tuple[bool, str]:
             cur.execute(
                 """
                 SELECT COUNT(*) AS cnt FROM links l
-                LEFT JOIN breadcrumbs b
-                  ON b.project_id = l.from_project
-                 AND b.identifier = l.from_identifier
-                WHERE l.from_kind = 'breadcrumb' AND b.project_id IS NULL
+                LEFT JOIN work_items wi
+                  ON wi.project_id = l.from_project
+                 AND wi.identifier = l.from_identifier
+                WHERE l.from_kind = 'work_item' AND wi.id IS NULL
                 """
             )
-            dangle_bc_from = cur.fetchone()["cnt"]
+            dangle_wi_from = cur.fetchone()["cnt"]
 
             cur.execute(
                 """
                 SELECT COUNT(*) AS cnt FROM links l
                 LEFT JOIN memories m
                   ON m.project_id = l.to_project
-                 AND m.name = l.to_identifier
-                 AND m.active = true
+                  AND m.name = l.to_identifier
+                  AND m.active = true
                 WHERE l.to_kind = 'memory' AND m.id IS NULL
                 """
             )
@@ -150,18 +148,18 @@ def _check_links_audit() -> tuple[bool, str]:
                 SELECT COUNT(*) AS cnt FROM links l
                 LEFT JOIN memories m
                   ON m.project_id = l.from_project
-                 AND m.name = l.from_identifier
-                 AND m.active = true
+                  AND m.name = l.from_identifier
+                  AND m.active = true
                 WHERE l.from_kind = 'memory' AND m.id IS NULL
                 """
             )
             dangle_mem_from = cur.fetchone()["cnt"]
 
-        total = dangle_bc_from + dangle_mem_to + dangle_mem_from
+        total = dangle_wi_from + dangle_mem_to + dangle_mem_from
         if total:
             return (
                 False,
-                f"Dangling links: breadcrumb-from={dangle_bc_from}, "
+                f"Dangling links: work_item-from={dangle_wi_from}, "
                 f"memory-to={dangle_mem_to}, memory-from={dangle_mem_from}",
             )
         return True, "No dangling links"
@@ -177,51 +175,51 @@ def _check_vocab_integrity() -> tuple[bool, str]:
             cur = conn.cursor()
             cur.execute(
                 """
-                SELECT DISTINCT kind FROM breadcrumbs b
+                SELECT DISTINCT kind FROM work_items wi
                 WHERE NOT EXISTS (
                     SELECT 1 FROM vocabularies v
-                    JOIN projects p ON p.id = b.project_id
+                    JOIN projects p ON p.id = wi.project_id
                     WHERE v.workspace_id = p.workspace_id
-                      AND v.kind_namespace = 'bc_kind' AND v.name = b.kind
+                      AND v.kind_namespace = 'wi_kind' AND v.name = wi.kind
                 )
                 LIMIT 1
                 """
             )
             row = cur.fetchone()
             if row:
-                return False, f"Orphan breadcrumb kind: {row[0]}"
+                return False, f"Orphan work_item kind: {row[0]}"
 
             cur.execute(
                 """
-                SELECT DISTINCT status FROM breadcrumbs b
+                SELECT DISTINCT status FROM work_items wi
                 WHERE NOT EXISTS (
                     SELECT 1 FROM vocabularies v
-                    JOIN projects p ON p.id = b.project_id
+                    JOIN projects p ON p.id = wi.project_id
                     WHERE v.workspace_id = p.workspace_id
-                      AND v.kind_namespace = 'bc_status' AND v.name = b.status
+                      AND v.kind_namespace = 'wi_status' AND v.name = wi.status
                 )
                 LIMIT 1
                 """
             )
             row = cur.fetchone()
             if row:
-                return False, f"Orphan breadcrumb status: {row[0]}"
+                return False, f"Orphan work_item status: {row[0]}"
 
             cur.execute(
                 """
-                SELECT DISTINCT severity FROM breadcrumbs b
+                SELECT DISTINCT severity FROM work_items wi
                 WHERE NOT EXISTS (
                     SELECT 1 FROM vocabularies v
-                    JOIN projects p ON p.id = b.project_id
+                    JOIN projects p ON p.id = wi.project_id
                     WHERE v.workspace_id = p.workspace_id
-                      AND v.kind_namespace = 'bc_severity' AND v.name = b.severity
+                      AND v.kind_namespace = 'wi_severity' AND v.name = wi.severity
                 )
                 LIMIT 1
                 """
             )
             row = cur.fetchone()
             if row:
-                return False, f"Orphan breadcrumb severity: {row[0]}"
+                return False, f"Orphan work_item severity: {row[0]}"
 
             cur.execute(
                 """

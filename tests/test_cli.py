@@ -211,9 +211,9 @@ def test_breadcrumb_file(default_project):
 
 
 def test_breadcrumb_get(default_project):
-    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
+    from agent_notes.core.work_item_model import WorkItemModel
 
-    BreadcrumbModel.file_breadcrumb(
+    WorkItemModel.file_work_item(
         default_project.id,
         identifier="BC-CLI-001",
         title="Get me",
@@ -238,9 +238,9 @@ def test_breadcrumb_get(default_project):
 
 
 def test_breadcrumb_find(default_project):
-    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
+    from agent_notes.core.work_item_model import WorkItemModel
 
-    BreadcrumbModel.file_breadcrumb(
+    WorkItemModel.file_work_item(
         default_project.id,
         identifier="BC-CLI-002",
         title="Findable BC",
@@ -319,12 +319,12 @@ def test_memory_get(default_project):
 def test_link_trace_all(default_project):
     """`link trace --all` should walk across kinds (breadcrumb + memory)."""
     from agent_notes.core import links as lnk
-    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
     from agent_notes.core.memory_model import add_memory
+    from agent_notes.core.work_item_model import WorkItemModel
 
     ws = coredb.get_or_create_workspace("default", "Default Workspace")
 
-    BreadcrumbModel.file_breadcrumb(
+    WorkItemModel.file_work_item(
         default_project.id,
         identifier="BC-TRACE-ALL-1",
         title="Trace start",
@@ -332,7 +332,7 @@ def test_link_trace_all(default_project):
         status="open",
         embedding=[0.0] * 768,
     )
-    BreadcrumbModel.file_breadcrumb(
+    WorkItemModel.file_work_item(
         default_project.id,
         identifier="BC-TRACE-ALL-2",
         title="Trace mid",
@@ -621,9 +621,9 @@ def test_install_skills_opencode_skips_opencode_subdir():
 
 
 def test_breadcrumb_update_append_body(default_project):
-    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
+    from agent_notes.core.work_item_model import WorkItemModel
 
-    BreadcrumbModel.file_breadcrumb(
+    WorkItemModel.file_work_item(
         default_project.id,
         identifier="BC-APPEND-1",
         title="Append target",
@@ -688,14 +688,14 @@ def test_breadcrumb_update_append_body(default_project):
 
 def test_breadcrumb_find_scopes(default_project):
     from agent_notes.core import db as _db
-    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
+    from agent_notes.core.work_item_model import WorkItemModel
 
     ws = _db.get_or_create_workspace("default", "Default Workspace")
     other_proj = _db.get_or_create_project(
         ws.id, slug="other", name="other", repo_root="/projects/other"
     )
 
-    BreadcrumbModel.file_breadcrumb(
+    WorkItemModel.file_work_item(
         default_project.id,
         identifier="BC-SCOPE-PROJ",
         title="Scope proj",
@@ -703,7 +703,7 @@ def test_breadcrumb_find_scopes(default_project):
         status="open",
         embedding=[0.0] * 768,
     )
-    BreadcrumbModel.file_breadcrumb(
+    WorkItemModel.file_work_item(
         other_proj.id,
         identifier="BC-SCOPE-OTHER",
         title="Scope other",
@@ -798,12 +798,12 @@ def test_changes_since(default_project):
 
 
 def test_search_all(default_project):
-    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
     from agent_notes.core.memory_model import add_memory
+    from agent_notes.core.work_item_model import WorkItemModel
 
     ws = coredb.get_or_create_workspace("default", "Default Workspace")
 
-    BreadcrumbModel.file_breadcrumb(
+    WorkItemModel.file_work_item(
         default_project.id,
         identifier="BC-SEARCH-CLI-1",
         title="PostgreSQL connection pooling",
@@ -839,12 +839,12 @@ def test_search_all(default_project):
 
 
 def test_search_breadcrumb_only(default_project):
-    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
     from agent_notes.core.memory_model import add_memory
+    from agent_notes.core.work_item_model import WorkItemModel
 
     ws = coredb.get_or_create_workspace("default", "Default Workspace")
 
-    BreadcrumbModel.file_breadcrumb(
+    WorkItemModel.file_work_item(
         default_project.id,
         identifier="BC-SEARCH-ONLY",
         title="Unique search term alpha",
@@ -914,12 +914,12 @@ def test_search_memory_only(default_project):
 
 
 def test_export_produces_valid_json(default_project):
-    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
     from agent_notes.core.memory_model import add_memory
+    from agent_notes.core.work_item_model import WorkItemModel
 
     ws = coredb.get_or_create_workspace("default", "Default Workspace")
 
-    BreadcrumbModel.file_breadcrumb(
+    WorkItemModel.file_work_item(
         default_project.id,
         identifier="BC-EXPORT-1",
         title="Exportable BC",
@@ -944,20 +944,20 @@ def test_export_produces_valid_json(default_project):
     assert len(data["projects"]) >= 1
 
     proj = data["projects"][0]
-    bc_ids = {b["identifier"] for b in proj["breadcrumbs"]}
+    wi_ids = {b["identifier"] for b in proj["work_items"]}
     mem_names = {m["name"] for m in proj["memories"]}
-    assert "BC-EXPORT-1" in bc_ids
+    assert "BC-EXPORT-1" in wi_ids
     assert "export-mem-1" in mem_names
 
 
 def test_import_round_trip(default_project):
     """Export, delete the original, re-import, verify data survives."""
-    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
     from agent_notes.core.memory_model import add_memory, delete_memory
+    from agent_notes.core.work_item_model import WorkItemModel
 
     ws = coredb.get_or_create_workspace("default", "Default Workspace")
 
-    BreadcrumbModel.file_breadcrumb(
+    WorkItemModel.file_work_item(
         default_project.id,
         identifier="BC-RT-1",
         title="Round trip BC",
@@ -985,10 +985,9 @@ def test_import_round_trip(default_project):
 
     try:
         # Soft-delete the originals so re-import creates new rows
-        BreadcrumbModel.update_breadcrumb(
+        WorkItemModel.delete_work_item(
             project_id=default_project.id,
             identifier="BC-RT-1",
-            status="resolved",
         )
         delete_memory(ws.id, default_project.id, "rt-mem-1")
 

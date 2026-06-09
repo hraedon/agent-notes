@@ -60,7 +60,7 @@ def cmd_orient(args: argparse.Namespace) -> int:
         "project": proj_slug,
         "workspace": ws_slug,
         "since_days": args.days,
-        "open_breadcrumbs": [
+        "open_work_items": [
             {
                 "identifier": wi["identifier"],
                 "title": wi["title"],

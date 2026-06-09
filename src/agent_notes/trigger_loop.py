@@ -33,73 +33,21 @@ Design notes:
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import logging
 import os
 import time
-import urllib.error
-import urllib.request
 import uuid
-from typing import Iterable
 
 import psycopg
 from psycopg.rows import dict_row
 
+from agent_notes.core.http_transport import DEFAULT_SOURCE, post_with_retry
+
 _log = logging.getLogger("agent_notes.trigger_loop")
 
-DEFAULT_SOURCE = "agent-notes"
 DEFAULT_BATCH_MS = 100
 DEFAULT_BATCH_N = 50
-RETRY_DELAYS = (0.1, 1.0, 10.0)
-
-
-def _sign(body: bytes, secret: str) -> str:
-    digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
-    return f"sha256={digest}"
-
-
-def _post_with_retry(
-    target: str,
-    secret: str,
-    source: str,
-    event: dict,
-    *,
-    delays: Iterable[float] = RETRY_DELAYS,
-    timeout: float = 5.0,
-) -> bool:
-    """POST one event with exponential backoff. Returns True on 2xx."""
-    body = json.dumps(event).encode("utf-8")
-    sig = _sign(body, secret)
-
-    attempts = [0.0] + list(delays)
-    last_error: str | None = None
-    for delay in attempts:
-        if delay:
-            time.sleep(delay)
-        req = urllib.request.Request(
-            target,
-            data=body,
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "X-AgentWake-Source": source,
-                "X-AgentWake-Signature": sig,
-                "X-AgentWake-Event-Id": event["event_id"],
-            },
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                if 200 <= resp.status < 300:
-                    return True
-                last_error = f"HTTP {resp.status}"
-        except urllib.error.HTTPError as exc:
-            last_error = f"HTTP {exc.code}"
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            last_error = f"transport: {exc}"
-    _log.warning("dropping event %s after retries: %s", event.get("event_id"), last_error)
-    return False
 
 
 def _build_wake_event(
@@ -350,9 +298,8 @@ def _flush(buffer: list[dict]) -> None:
         # For multiple events to the same target, batch them in a single POST
         # using agent-wake's batch shape if supported.
         if len(items) == 1:
-            _post_with_retry(target, secret, items[0]["event"]["source"], items[0]["event"])
+            post_with_retry(target, secret, items[0]["event"]["source"], items[0]["event"])
         else:
-            # Emit a batch event with all payloads.
             event = {
                 "v": 0,
                 "event_id": str(uuid.uuid4()),
@@ -369,7 +316,7 @@ def _flush(buffer: list[dict]) -> None:
                 },
                 "wake": True,
             }
-            _post_with_retry(target, secret, event["source"], event)
+            post_with_retry(target, secret, event["source"], event)
 
     buffer.clear()
 

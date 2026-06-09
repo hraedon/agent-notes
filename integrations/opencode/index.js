@@ -82,10 +82,10 @@ function formatOrientPayload(payload) {
     "## Session Orientation",
     `**Project:** ${payload.project} (workspace: ${payload.workspace})`,
     "",
-    `**Open breadcrumbs (${payload.open_breadcrumbs.length}):**`,
+    `**Open work items (${payload.open_work_items.length}):**`,
   ];
 
-  for (const b of payload.open_breadcrumbs) {
+  for (const b of payload.open_work_items) {
     lines.push(`- [${b.severity}] ${b.identifier} (${b.status}) — ${b.title}`);
   }
 
@@ -148,7 +148,7 @@ export default async function agentNotesPlugin(ctx) {
         }
         output.system.push(orientText);
         ctx.client?.app?.log?.(
-          `[agent-notes] oriented session ${sessionID} (${reply.data.open_breadcrumbs.length} open breadcrumbs)`
+          `[agent-notes] oriented session ${sessionID} (${reply.data.open_work_items.length} open work items)`
         );
       } else {
         ctx.client?.app?.log?.(

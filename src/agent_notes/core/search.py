@@ -141,9 +141,9 @@ def trace_graph_all(
             kd.title, kd.kind_status
         FROM graph g
         LEFT JOIN LATERAL (
-            SELECT b.title, b.status AS kind_status
-            FROM breadcrumbs b
-            WHERE b.project_id = g.node_project AND b.identifier = g.node_id
+            SELECT wi.title, wi.status AS kind_status
+            FROM work_items wi
+            WHERE wi.project_id = g.node_project AND wi.identifier = g.node_id
             UNION ALL
             SELECT m.name AS title, m.memory_type AS kind_status
             FROM memories m

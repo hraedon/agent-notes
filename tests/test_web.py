@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from agent_notes.core import db as coredb
+from agent_notes.core.work_item_model import WorkItemModel
 from tests.conftest import ephemeral_db  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures("ephemeral_db")
@@ -37,9 +38,9 @@ def _seed():
         name="Web Proj",
         repo_root="/tmp",
     )
-    coredb.add_vocabulary(ws.id, "bc_kind", "bug")
-    coredb.add_vocabulary(ws.id, "bc_status", "new")
-    coredb.add_vocabulary(ws.id, "bc_severity", "medium")
+    coredb.add_vocabulary(ws.id, "wi_kind", "bug")
+    coredb.add_vocabulary(ws.id, "wi_status", "open")
+    coredb.add_vocabulary(ws.id, "wi_severity", "medium")
     coredb.add_vocabulary(ws.id, "memory_type", "note")
 
 
@@ -77,7 +78,7 @@ class TestProjectRoute:
 
     def test_project_empty_state(self, client):
         resp = client.get("/workspaces/web-ws/web-proj")
-        assert "No breadcrumbs" in resp.text
+        assert "No work items" in resp.text
         assert "No memories" in resp.text
 
 
@@ -87,23 +88,21 @@ class TestBreadcrumbRoutes:
         projects = coredb.list_projects(workspace_id=ws.id)
         proj = next(p for p in projects if p.slug == "web-proj")
 
-        from agent_notes.core.breadcrumbs_model import BreadcrumbModel
-
-        BreadcrumbModel.file_breadcrumb(
+        WorkItemModel.file_work_item(
             project_id=proj.id,
-            identifier="BC-WEB-001",
-            title="Test BC for web",
+            identifier="WI-WEB-001",
+            title="Test WI for web",
             body="Some body text",
             kind="bug",
-            status="new",
+            status="open",
             severity="medium",
             embedding=[0.0] * 768,
         )
 
-        resp = client.get("/workspaces/web-ws/web-proj/breadcrumbs/BC-WEB-001")
+        resp = client.get("/workspaces/web-ws/web-proj/breadcrumbs/WI-WEB-001")
         assert resp.status_code == 200
-        assert "BC-WEB-001" in resp.text
-        assert "Test BC for web" in resp.text
+        assert "WI-WEB-001" in resp.text
+        assert "Test WI for web" in resp.text
 
     def test_breadcrumb_404(self, client):
         resp = client.get("/workspaces/web-ws/web-proj/breadcrumbs/NOSUCH")
@@ -114,19 +113,17 @@ class TestBreadcrumbRoutes:
         projects = coredb.list_projects(workspace_id=ws.id)
         proj = next(p for p in projects if p.slug == "web-proj")
 
-        from agent_notes.core.breadcrumbs_model import BreadcrumbModel
-
-        BreadcrumbModel.file_breadcrumb(
+        WorkItemModel.file_work_item(
             project_id=proj.id,
-            identifier="BC-WEB-002",
+            identifier="WI-WEB-002",
             title="List test",
             kind="bug",
-            status="new",
+            status="open",
             embedding=[0.0] * 768,
         )
 
         resp = client.get("/workspaces/web-ws/web-proj")
-        assert "BC-WEB-002" in resp.text
+        assert "WI-WEB-002" in resp.text
 
 
 class TestMemoryRoutes:

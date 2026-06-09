@@ -348,9 +348,9 @@ def _check_vocab_references(workspace_id: int, kind_namespace: str, name: str) -
     """Reference check across kind tables (decision 9)."""
     with _conn() as conn:
         cur = conn.cursor()
-        if kind_namespace == "bc_kind":
+        if kind_namespace == "wi_kind":
             cur.execute(
-                "SELECT 1 FROM breadcrumbs "
+                "SELECT 1 FROM work_items "
                 "WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = %s) "
                 "AND kind = %s LIMIT 1",
                 (workspace_id, name),
@@ -358,11 +358,11 @@ def _check_vocab_references(workspace_id: int, kind_namespace: str, name: str) -
             if cur.fetchone():
                 raise ValueError(
                     "Cannot delete vocabulary entry: "
-                    f"kind '{name}' is still referenced by breadcrumbs"
+                    f"kind '{name}' is still referenced by work_items"
                 )
-        elif kind_namespace == "bc_status":
+        elif kind_namespace == "wi_status":
             cur.execute(
-                "SELECT 1 FROM breadcrumbs "
+                "SELECT 1 FROM work_items "
                 "WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = %s) "
                 "AND status = %s LIMIT 1",
                 (workspace_id, name),
@@ -370,11 +370,11 @@ def _check_vocab_references(workspace_id: int, kind_namespace: str, name: str) -
             if cur.fetchone():
                 raise ValueError(
                     "Cannot delete vocabulary entry: "
-                    f"status '{name}' is still referenced by breadcrumbs"
+                    f"status '{name}' is still referenced by work_items"
                 )
-        elif kind_namespace == "bc_severity":
+        elif kind_namespace == "wi_severity":
             cur.execute(
-                "SELECT 1 FROM breadcrumbs "
+                "SELECT 1 FROM work_items "
                 "WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = %s) "
                 "AND severity = %s LIMIT 1",
                 (workspace_id, name),
@@ -382,7 +382,43 @@ def _check_vocab_references(workspace_id: int, kind_namespace: str, name: str) -
             if cur.fetchone():
                 raise ValueError(
                     "Cannot delete vocabulary entry: "
-                    f"severity '{name}' is still referenced by breadcrumbs"
+                    f"severity '{name}' is still referenced by work_items"
+                )
+        elif kind_namespace == "bc_kind":
+            cur.execute(
+                "SELECT 1 FROM work_items "
+                "WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = %s) "
+                "AND kind = %s LIMIT 1",
+                (workspace_id, name),
+            )
+            if cur.fetchone():
+                raise ValueError(
+                    "Cannot delete vocabulary entry: "
+                    f"kind '{name}' is still referenced by work_items (bc_kind namespace)"
+                )
+        elif kind_namespace == "bc_status":
+            cur.execute(
+                "SELECT 1 FROM work_items "
+                "WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = %s) "
+                "AND status = %s LIMIT 1",
+                (workspace_id, name),
+            )
+            if cur.fetchone():
+                raise ValueError(
+                    "Cannot delete vocabulary entry: "
+                    f"status '{name}' is still referenced by work_items (bc_status namespace)"
+                )
+        elif kind_namespace == "bc_severity":
+            cur.execute(
+                "SELECT 1 FROM work_items "
+                "WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = %s) "
+                "AND severity = %s LIMIT 1",
+                (workspace_id, name),
+            )
+            if cur.fetchone():
+                raise ValueError(
+                    "Cannot delete vocabulary entry: "
+                    f"severity '{name}' is still referenced by work_items (bc_severity namespace)"
                 )
         elif kind_namespace == "memory_type":
             cur.execute(

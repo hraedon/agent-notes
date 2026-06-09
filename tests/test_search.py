@@ -2,7 +2,7 @@
 
 Tests the model functions against ephemeral Postgres:
 - all_notes_search_v view exists and returns data
-- search_all_notes: UNION ALL across breadcrumbs + memories ranked by similarity
+- search_all_notes: UNION ALL across work_items + memories ranked by similarity
 - search_all_notes: filters (kinds, workspaces, projects, since)
 - trace_graph_all: cross-kind traversal with title enrichment
 """
@@ -15,9 +15,9 @@ from psycopg.rows import dict_row
 
 from agent_notes.core import db as coredb
 from agent_notes.core import links as lnk
-from agent_notes.core.breadcrumbs_model import BreadcrumbModel
 from agent_notes.core.memory_model import add_memory, delete_memory
 from agent_notes.core.search import search_all_notes, trace_graph_all
+from agent_notes.core.work_item_model import WorkItemModel
 
 
 def _fake_embed(text, task="document"):
@@ -46,33 +46,31 @@ def search_proj(search_ws):
 def seeded_vocab(search_ws):
     coredb.add_vocabulary(search_ws.id, "memory_type", "note")
     coredb.add_vocabulary(search_ws.id, "memory_type", "decision")
-    coredb.add_vocabulary(search_ws.id, "bc_kind", "decision")
-    coredb.add_vocabulary(search_ws.id, "bc_kind", "task")
-    coredb.add_vocabulary(search_ws.id, "bc_status", "open")
-    coredb.add_vocabulary(search_ws.id, "bc_status", "new")
-    coredb.add_vocabulary(search_ws.id, "bc_status", "resolved")
-    coredb.add_vocabulary(search_ws.id, "bc_severity", "medium")
+    coredb.add_vocabulary(search_ws.id, "wi_kind", "decision")
+    coredb.add_vocabulary(search_ws.id, "wi_kind", "task")
+    coredb.add_vocabulary(search_ws.id, "wi_status", "open")
+    coredb.add_vocabulary(search_ws.id, "wi_severity", "medium")
     return search_ws
 
 
 @pytest.fixture(scope="module")
 def seeded_data(search_ws, search_proj, seeded_vocab):
-    BreadcrumbModel.file_breadcrumb(
+    WorkItemModel.file_work_item(
         search_proj.id,
-        identifier="BC-SEARCH-001",
+        identifier="WI-SEARCH-001",
         title="PostgreSQL connection pooling best practices",
         body="Use pgbouncer or pgpool for connection pooling in production.",
         kind="decision",
         status="open",
         embedding=_fake_embed("connection pooling"),
     )
-    BreadcrumbModel.file_breadcrumb(
+    WorkItemModel.file_work_item(
         search_proj.id,
-        identifier="BC-SEARCH-002",
+        identifier="WI-SEARCH-002",
         title="Embedding model selection",
         body="Use nomic-embed-text for semantic search embeddings.",
         kind="task",
-        status="new",
+        status="open",
         embedding=_fake_embed("embedding"),
     )
     add_memory(
@@ -92,10 +90,10 @@ def seeded_data(search_ws, search_proj, seeded_vocab):
         embedding=_fake_embed("embedding"),
     )
     lnk.add_link(
-        from_kind="breadcrumb",
+        from_kind="work_item",
         from_workspace=search_ws.id,
         from_project=search_proj.id,
-        from_identifier="BC-SEARCH-001",
+        from_identifier="WI-SEARCH-001",
         to_kind="memory",
         to_workspace=search_ws.id,
         to_project=search_proj.id,
@@ -107,10 +105,10 @@ def seeded_data(search_ws, search_proj, seeded_vocab):
         from_workspace=search_ws.id,
         from_project=search_proj.id,
         from_identifier="embedding-memory",
-        to_kind="breadcrumb",
+        to_kind="work_item",
         to_workspace=search_ws.id,
         to_project=search_proj.id,
-        to_identifier="BC-SEARCH-002",
+        to_identifier="WI-SEARCH-002",
         relationship="relates_to",
     )
 
@@ -129,7 +127,7 @@ class TestAllNotesSearchView:
             )
             assert cur.fetchone() is not None
 
-    def test_view_returns_breadcrumbs_and_memories(
+    def test_view_returns_work_items_and_memories(
         self, pg, search_ws, search_proj, seeded_data
     ) -> None:
         with coredb._conn() as conn:
@@ -141,7 +139,7 @@ class TestAllNotesSearchView:
             )
             rows = cur.fetchall()
         kinds = {r["kind"] for r in rows}
-        assert "breadcrumb" in kinds
+        assert "work_item" in kinds
         assert "memory" in kinds
 
     def test_view_uses_updated_at(self, pg, search_ws, search_proj, seeded_data) -> None:
@@ -193,22 +191,22 @@ class TestSearchAllNotes:
             query_vec=_fake_embed("connection pooling database"),
         )
         identifiers = {r["identifier"] for r in rows}
-        assert "BC-SEARCH-001" in identifiers or "db-pooling-memory" in identifiers
+        assert "WI-SEARCH-001" in identifiers or "db-pooling-memory" in identifiers
 
     def test_search_returns_multiple_kinds(self, pg, search_ws, search_proj, seeded_data) -> None:
         rows = search_all_notes(
             query_vec=_fake_embed("embedding"),
         )
         kinds = {r["kind"] for r in rows}
-        assert "breadcrumb" in kinds or "memory" in kinds
+        assert "work_item" in kinds or "memory" in kinds
 
-    def test_filter_by_kind_breadcrumb(self, pg, search_ws, search_proj, seeded_data) -> None:
+    def test_filter_by_kind_work_item(self, pg, search_ws, search_proj, seeded_data) -> None:
         rows = search_all_notes(
             query_vec=_fake_embed("connection"),
-            kinds=["breadcrumb"],
+            kinds=["work_item"],
         )
         for r in rows:
-            assert r["kind"] == "breadcrumb"
+            assert r["kind"] == "work_item"
 
     def test_filter_by_kind_memory(self, pg, search_ws, search_proj, seeded_data) -> None:
         rows = search_all_notes(
@@ -234,10 +232,10 @@ class TestSearchAllNotes:
 class TestTraceGraphAll:
     def test_cross_kind_traversal(self, pg, search_ws, search_proj, seeded_data) -> None:
         nodes = trace_graph_all(
-            kind="breadcrumb",
+            kind="work_item",
             workspace=search_ws.id,
             project=search_proj.id,
-            identifier="BC-SEARCH-001",
+            identifier="WI-SEARCH-001",
             direction="dependencies",
             max_depth=2,
         )
@@ -248,10 +246,10 @@ class TestTraceGraphAll:
 
     def test_reverse_traversal(self, pg, search_ws, search_proj, seeded_data) -> None:
         nodes = trace_graph_all(
-            kind="breadcrumb",
+            kind="work_item",
             workspace=search_ws.id,
             project=search_proj.id,
-            identifier="BC-SEARCH-002",
+            identifier="WI-SEARCH-002",
             direction="dependents",
             max_depth=2,
         )
@@ -260,7 +258,7 @@ class TestTraceGraphAll:
 
     def test_empty_result(self, pg, search_ws, search_proj, seeded_data) -> None:
         nodes = trace_graph_all(
-            kind="breadcrumb",
+            kind="work_item",
             workspace=search_ws.id,
             project=search_proj.id,
             identifier="NONEXISTENT",

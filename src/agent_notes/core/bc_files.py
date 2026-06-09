@@ -85,6 +85,30 @@ def discover_breadcrumb_files(directory: Path, include_resolved: bool = True) ->
     return files
 
 
+def _map_bc_status_to_wi(bc_status: str) -> str:
+    mapping = {
+        "new": "open",
+        "open": "open",
+        "active": "claimed",
+        "in_progress": "claimed",
+        "blocked": "open",
+        "under_review": "claimed",
+        "proposed": "open",
+        "decision-pending": "open",
+        "resolved": "closed",
+        "closed": "closed",
+        "implemented": "closed",
+        "accepted": "closed",
+        "wont_fix": "deferred",
+        "wontfix": "deferred",
+        "duplicate": "deferred",
+        "obsolete": "deferred",
+        "rejected": "deferred",
+        "deferred": "deferred",
+    }
+    return mapping.get(bc_status, "open")
+
+
 def sync_breadcrumbs_from_dir(
     project_id: int,
     directory: str | Path,
@@ -106,7 +130,7 @@ def sync_breadcrumbs_from_dir(
     Returns a summary dict: imported, skipped, errors, pruned, missing_vocab.
     """
     from agent_notes.core import db
-    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
+    from agent_notes.core.work_item_model import WorkItemModel
 
     directory = Path(directory)
     proj = next((p for p in db.list_projects() if p.id == project_id), None)
@@ -159,13 +183,13 @@ def sync_breadcrumbs_from_dir(
     for f, bc in parsed:
         try:
             vec = embed_fn((bc["title"] + " " + bc["body"]).strip())
-            BreadcrumbModel.file_breadcrumb(
+            WorkItemModel.file_work_item(
                 project_id=project_id,
                 identifier=bc["identifier"],
                 title=bc["title"],
                 body=bc["body"],
                 kind=bc["kind"],
-                status=bc["status"],
+                status=_map_bc_status_to_wi(bc["status"]),
                 severity=bc["severity"],
                 external_refs={"tags": bc["tags"], "related": bc["related"]},
                 embedding=vec,
@@ -177,10 +201,10 @@ def sync_breadcrumbs_from_dir(
 
     pruned: list[str] = []
     if prune:
-        existing_rows = BreadcrumbModel.query_breadcrumbs(project_id=project_id, limit=100000)
+        existing_rows = WorkItemModel.query_work_items(project_id=project_id, limit=100000)
         for row in existing_rows:
             if row["identifier"] not in seen:
-                if BreadcrumbModel.delete_breadcrumb(project_id, row["identifier"]):
+                if WorkItemModel.delete_work_item(project_id, row["identifier"]):
                     pruned.append(row["identifier"])
 
     return {

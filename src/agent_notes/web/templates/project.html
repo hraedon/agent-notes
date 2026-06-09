@@ -4,30 +4,30 @@
 <h1>{{ project.name }}</h1>
 <p class="meta">Project {{ project.slug }} in workspace <a href="/workspaces/{{ workspace.slug }}">{{ workspace.slug }}</a></p>
 
-<h2>Breadcrumbs ({{ breadcrumbs|length }})</h2>
+<h2>Work Items ({{ breadcrumbs|length }})</h2>
 {% if breadcrumbs %}
 <table>
     <tr><th>ID</th><th>Title</th><th>Kind</th><th>Status</th><th>Updated</th></tr>
-    {% for bc in breadcrumbs %}
+    {% for wi in breadcrumbs %}
     <tr>
-        <td><a href="/workspaces/{{ workspace.slug }}/{{ project.slug }}/breadcrumbs/{{ bc.identifier }}">{{ bc.identifier }}</a></td>
-        <td>{{ bc.title }}</td>
-        <td>{{ bc.kind }}</td>
+        <td><a href="/workspaces/{{ workspace.slug }}/{{ project.slug }}/breadcrumbs/{{ wi.identifier }}">{{ wi.identifier }}</a></td>
+        <td>{{ wi.title }}</td>
+        <td>{{ wi.kind }}</td>
         <td>
-            {% if bc.status in ['resolved', 'closed', 'wont_fix', 'duplicate'] %}
-            <span class="tag tag-terminal">{{ bc.status }}</span>
-            {% elif bc.status in ['new', 'open'] %}
-            <span class="tag tag-open">{{ bc.status }}</span>
+            {% if wi.status in ['closed', 'deferred'] %}
+            <span class="tag tag-terminal">{{ wi.status }}</span>
+            {% elif wi.status in ['open'] %}
+            <span class="tag tag-open">{{ wi.status }}</span>
             {% else %}
-            <span class="tag">{{ bc.status }}</span>
+            <span class="tag">{{ wi.status }}</span>
             {% endif %}
         </td>
-        <td class="meta">{{ bc.updated_at.strftime('%Y-%m-%d %H:%M') if bc.updated_at else '' }}</td>
+        <td class="meta">{{ wi.updated_at.strftime('%Y-%m-%d %H:%M') if wi.updated_at else '' }}</td>
     </tr>
     {% endfor %}
 </table>
 {% else %}
-<p class="empty">No breadcrumbs in this project.</p>
+<p class="empty">No work items in this project.</p>
 {% endif %}
 
 <h2>Memories ({{ memories|length }})</h2>
