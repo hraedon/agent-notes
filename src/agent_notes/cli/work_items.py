@@ -273,33 +273,6 @@ def cmd_wi_find(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
-def cmd_wi_query(args: argparse.Namespace) -> int:
-    use_json = getattr(args, "json", False)
-    try:
-        ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
-    except SystemExit as exc:
-        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
-        report_resolution_failure(args, code)
-        return code
-
-    from agent_notes.core.work_item_model import WorkItemModel
-
-    rows = WorkItemModel.query_work_items(
-        project_id=proj_id,
-        workspace_id=ws_id,
-        limit=min(args.limit or 50, 200),
-    )
-    if use_json:
-        print(json.dumps({"work_items": rows}, indent=2, default=str))
-    else:
-        if not rows:
-            print("No work items found.")
-        else:
-            for r in rows:
-                print(f"- {r['identifier']} | {r['title']} | {r['kind']} | {r['status']}")
-    return EXIT_SUCCESS
-
-
 def cmd_wi_ready(args: argparse.Namespace) -> int:
     """Show work items that are ready (not blocked)."""
     use_json = getattr(args, "json", False)
@@ -788,12 +761,6 @@ def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
     )
     _add_common(wi_find)
     wi_find.set_defaults(func=cmd_wi_find)
-
-    wi_query = wi_sub.add_parser("query", help="Query work items")
-    wi_query.add_argument("filter", nargs="?", default=None)
-    wi_query.add_argument("--limit", type=int, default=50)
-    _add_common(wi_query)
-    wi_query.set_defaults(func=cmd_wi_query)
 
     wi_ready = wi_sub.add_parser("ready", help="Show work items that are ready (not blocked)")
     wi_ready.add_argument("--limit", type=int, default=50)

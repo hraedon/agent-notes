@@ -124,7 +124,6 @@ def test_resolve_reports_resolved_via():
     "subcmd",
     [
         ["breadcrumb", "find"],
-        ["breadcrumb", "query"],
         ["breadcrumb", "get", "X"],
         ["memory", "list"],
         ["memory", "get", "X"],

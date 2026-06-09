@@ -1,6 +1,6 @@
 # Plan 008 — Work-log coordination kernel (provenance-enforced, op-CRDT)
 
-**Status:** in-progress 2026-06-08 — **P0+P1 complete**, **P2 complete**, **P3 complete** (cross-project foundation + derived index + registry + export/ingest + cross-repo ready + reverse-edge map + trigger loop), **P4 foundation in progress** (local lease table + claim/heartbeat/release CLI + requeue sweep + degrade contract; regista coordinator integration and requeue daemon timer pending)
+**Status:** complete 2026-06-09 — **Tier A shipped** (P0–P4 complete, migration executed and verified, backlog triaged, docs truthful, v1.0.0 tagged). Tier B items (regista coordinator, requeue daemon timer, causal-stability watermark, keyless signer) are explicitly deferred per the Definition of Done.
 
 > **Switch-to-new-version bar is defined below** — see [Definition of Done](#definition-of-done-added-2026-06-08-opus-48). Adopting the kernel today requires only **Tier A** (degrade contract as default mode + migration + lived-in surface + backlog reconcile + green gates + tag). The regista coordinator and requeue daemon timer are **Tier B** — optional layers that attach later and are **not** blockers for the switch.
 

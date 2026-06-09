@@ -15,16 +15,25 @@ Design:
   is deterministic based on the payload, so the INSERT into ``op_log``
   does nothing on conflict).
 
-Status mapping:
-    new          → open
-    open         → open
-    in_progress  → claimed
-    blocked      → open
-    under_review → open
-    resolved     → closed
-    closed       → closed
-    wont_fix     → deferred
-    duplicate    → deferred
+Status mapping (bc_status → wi_status):
+    new              → open
+    open             → open
+    active           → claimed
+    in_progress      → claimed
+    blocked          → open
+    under_review     → claimed
+    proposed         → open
+    decision-pending → open
+    resolved         → closed
+    closed           → closed
+    implemented      → closed
+    accepted         → closed
+    wont_fix         → deferred
+    wontfix          → deferred
+    duplicate        → deferred
+    obsolete         → deferred
+    rejected         → deferred
+    deferred         → deferred
 
 **Run on a backed-up store.** This is a one-way migration that mutates the
 ``op_log`` and ``work_items`` tables. The ``breadcrumbs`` table is left intact
@@ -45,13 +54,22 @@ def _resolve_status(bc_status: str) -> str:
     mapping = {
         "new": "open",
         "open": "open",
+        "active": "claimed",
         "in_progress": "claimed",
         "blocked": "open",
-        "under_review": "open",
+        "under_review": "claimed",
+        "proposed": "open",
+        "decision-pending": "open",
         "resolved": "closed",
         "closed": "closed",
+        "implemented": "closed",
+        "accepted": "closed",
         "wont_fix": "deferred",
+        "wontfix": "deferred",
         "duplicate": "deferred",
+        "obsolete": "deferred",
+        "rejected": "deferred",
+        "deferred": "deferred",
     }
     return mapping.get(bc_status, "open")
 
@@ -211,24 +229,30 @@ def _migrate_breadcrumbs(conn: psycopg.Connection) -> int:
             ),
         )
 
-        # If the breadcrumb was closed, add a close op.
-        if closed_at is not None and wi_status == "closed":
+        if closed_at is not None and wi_status in ("closed", "deferred"):
             cur.execute("SELECT nextval('op_log_id_seq') AS lamport")
             close_lamport = cur.fetchone()["lamport"]
-            close_payload = {"reason": "migrated_from_breadcrumb"}
-            close_op_id = _make_op_id("work_item", "close", close_payload, [op_id])
+            if wi_status == "closed":
+                close_payload = {"reason": "migrated_from_breadcrumb"}
+                close_op_id = _make_op_id("work_item", "close", close_payload, [op_id])
+                terminal_op_type = "close"
+            else:
+                close_payload = {"status": "deferred", "reason": "migrated_from_breadcrumb"}
+                close_op_id = _make_op_id("work_item", "set_status", close_payload, [op_id])
+                terminal_op_type = "set_status"
             cur.execute(
                 """
                 INSERT INTO op_log
-                    (op_id, entity_type, op_type, lamport, actor_id, payload,
+                    (op_id, entity_id, entity_type, op_type, lamport, actor_id, payload,
                      parent_op_ids)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (op_id) DO NOTHING
                 """,
                 (
                     close_op_id,
+                    entity_id,
                     "work_item",
-                    "close",
+                    terminal_op_type,
                     close_lamport,
                     "migration",
                     psycopg.types.json.Jsonb(close_payload),

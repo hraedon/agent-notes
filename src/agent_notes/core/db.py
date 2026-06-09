@@ -23,6 +23,8 @@ _pool_lock = threading.Lock()
 def _reset_pool() -> None:
     """Reset the pool singleton. Called after fork to avoid sharing connections."""
     global _pool
+    if _pool is not None:
+        _pool.close()
     _pool = None
 
 
@@ -49,6 +51,15 @@ def _get_pool() -> ConnectionPool:
 
 def get_pool() -> ConnectionPool:
     return _get_pool()
+
+
+def close_pool() -> None:
+    """Gracefully close the connection pool (decision 22)."""
+    global _pool
+    with _pool_lock:
+        if _pool is not None:
+            _pool.close()
+            _pool = None
 
 
 def _conn():

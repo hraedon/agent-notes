@@ -1,6 +1,6 @@
 [project]
 name = "agent-notes"
-version = "0.1.0"
+version = "1.0.0"
 description = "Unified pgvector-backed CLI for agent notes (breadcrumbs, memories, reflections) shared across the sf2 constellation"
 requires-python = ">=3.11"
 dependencies = [

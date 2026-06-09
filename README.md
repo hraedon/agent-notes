@@ -8,7 +8,7 @@ Consolidates and supersedes the standalone `breadcrumb-mcp` and `memory-mcp` pro
 
 - **Plan 004** (MCP→CLI flattening): Phases 9a–9d complete. CLI is the primary sync surface; skills installed across Claude Code and opencode; MCP servers removed.
 - **Plan 007** (lifecycle enforcement spine): Piece 0 (error contract), Piece 1 (`init` + `orient` + Claude Code `SessionStart` hook), and Piece 2 (opencode plugin with `experimental.chat.system.transform` orientation + `experimental.session.compacting` reconciliation) complete. Both harnesses now enforce the lifecycle spine.
-- **Plan 008** (work-log coordination kernel): **P0–P2 complete, P3 complete, P4 foundation in progress.** The op-CRDT kernel (`op_log`, `work_items` cache, `content_blobs`, verifier), status lattice, merge/reconcile, cross-project derived index (registry, export/ingest, reverse-edge map), and cross-project trigger loop (`agent-notes-trigger-loop`) are shipped. P4 local lease table and claim/heartbeat/release CLI are landed. **Tier A degrade contract is now the default safe mode** — `doctor` reports `coordinator-absent / local-lease` mode; the `breadcrumb → work-item` migration script is available. The remaining regista coordinator integration (Tier B) and `requeue_expired` daemon timer are pending.
+- **Plan 008** (work-log coordination kernel): **P0–P4 complete; Tier A shipped.** The op-CRDT kernel (`op_log`, `work_items` cache, `content_blobs`, verifier), status lattice, merge/reconcile, cross-project derived index (registry, export/ingest, reverse-edge map), cross-project trigger loop, local lease table, and claim/heartbeat/release CLI are all shipped. **Tier A degrade contract is the default safe mode** — `doctor` reports `coordinator-absent / local-lease`; the `breadcrumb → work-item` migration has been executed and verified (cache rebuild from op-log matches). The **regista coordinator integration is an optional, not-yet-attached L3 layer** (Tier B) — the tool works correctly without it; it adds only race-free multi-writer claims at concurrent scale. The `requeue_expired` daemon timer is also Tier B.
 
 ## Quickstart
 
@@ -43,7 +43,6 @@ agent-notes breadcrumb file --title T --body B [--type ...] [--status ...] [--pa
 agent-notes breadcrumb update <id> [--status ...] [--body ...] [--append-body ...] [--json]
 agent-notes breadcrumb get <id> [--json]
 agent-notes breadcrumb find [--status ...] [--type ...] [--text ...] [--path PATH] [--json]
-agent-notes breadcrumb query "<filter>" [--json]
 agent-notes breadcrumb delete <id> [--path PATH] [--json]
 
 agent-notes memory add --name N --body B [--type ...] [--path PATH] [--json]

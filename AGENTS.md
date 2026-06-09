@@ -9,8 +9,8 @@ Conventions and quick reference for agents (and humans) working on agent-notes.
 1. **Read first:** `plans/001-architecture-and-implementation.md` — authoritative architecture, design decisions (numbered, peer-reviewed), and phased task tables.
 2. **Then:** `plans/003-drop-projection-add-web-frontend.md` for the projection-removal and web frontend changes (Phase 8a — complete).
 3. **Then:** `plans/004-flatten-cli-and-async-bridge.md` for the MCP->CLI flattening (Phase 9a–9d — complete).
-4. **Then:** `plans/007-lifecycle-enforcement-spine.md` for the lifecycle enforcement and cross-harness instantiation (Piece 0–1 complete; Piece 2 opencode hooks pending).
-5. **Then:** `plans/008-work-log-coordination-kernel.md` for the op-CRDT work log, provenance, and cross-project coordination (P0–P3 partial complete — the current phase).
+4. **Then:** `plans/007-lifecycle-enforcement-spine.md` for the lifecycle enforcement and cross-harness instantiation (Piece 0–2 complete).
+5. **Then:** `plans/008-work-log-coordination-kernel.md` for the op-CRDT work log, provenance, and cross-project coordination (P0–P4 complete; Tier A shipped — regista coordinator is an optional L3 layer, not yet attached).
 
 ## Build / test / lint
 
@@ -28,7 +28,7 @@ Tests for triggers, recursive CTEs, and `change_log` semantics must run against 
 
 One Postgres database (`agent_notes`), one Python package (`agent_notes`), one `Server` base class with composable kind registries. The **CLI (`agent-notes`) is the primary sync surface** (Plan 004 Phase 9a+). The shared `core/` library handles DB connection pooling, embedding, links, change_log, NOTIFY, and search. A read-only web frontend (`agent-notes-web`) provides browser-based browsing of breadcrumbs, memories, and semantic search.
 
-**Work-log coordination kernel** (Plan 008, P0–P3): the `op_log` is an append-only, attested operation log (op-CRDT model) with content-addressed blobs, a deterministic fold into the `work_items` cache, a fail-safe status lattice, and a standalone verifier CLI. Cross-project coordination (P3) adds `request`/`wait` ops, a derived index for foreign work items, and a reverse-edge map so the `ready` query spans projects.
+**Work-log coordination kernel** (Plan 008, P0–P4): the `op_log` is an append-only operation log (op-CRDT model) with content-addressed blobs, a deterministic fold into the `work_items` cache, a fail-safe status lattice, and a standalone verifier CLI. Cross-project coordination (P3) adds `request`/`wait` ops, a derived index for foreign work items, and a reverse-edge map so the `ready` query spans projects. The **regista coordinator is an optional, not-yet-attached L3 layer** — the degrade contract (`coordinator-absent / local-lease`) is the default and fully functional mode; the coordinator adds only race-free multi-writer claims when attached later.
 
 ## Schema conventions
 
