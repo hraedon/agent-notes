@@ -30,11 +30,11 @@ def cmd_orient(args: argparse.Namespace) -> int:
         report_resolution_failure(args, code)
         return code
 
-    from agent_notes.core.breadcrumbs_model import BreadcrumbModel
     from agent_notes.core.change_log import changes_since
     from agent_notes.core.memory_model import list_memories
+    from agent_notes.core.work_item_model import WorkItemModel
 
-    open_bcs = BreadcrumbModel.query_breadcrumbs(project_id=proj_id, is_open=True, limit=args.limit)
+    open_wis = WorkItemModel.query_work_items(project_id=proj_id, is_open=True, limit=args.limit)
     since = datetime.now(timezone.utc) - timedelta(days=args.days)
     changes = changes_since(since, workspace_id=ws_id, project_id=proj_id, limit=args.limit)
     memories = list_memories(workspace_id=ws_id, project_id=proj_id, limit=args.limit)
@@ -53,7 +53,7 @@ def cmd_orient(args: argparse.Namespace) -> int:
         _proj = next((p for p in list_projects(workspace_id=ws_id) if p.id == proj_id), None)
         _repo_root = _proj.repo_root if _proj else None
         drift = scan_git_for_resolutions(
-            _repo_root, [b["identifier"] for b in open_bcs], lookback=200
+            _repo_root, [wi["identifier"] for wi in open_wis], lookback=200
         )
 
     payload = {
@@ -62,12 +62,12 @@ def cmd_orient(args: argparse.Namespace) -> int:
         "since_days": args.days,
         "open_breadcrumbs": [
             {
-                "identifier": b["identifier"],
-                "title": b["title"],
-                "severity": b["severity"],
-                "status": b["status"],
+                "identifier": wi["identifier"],
+                "title": wi["title"],
+                "severity": wi["severity"],
+                "status": wi["status"],
             }
-            for b in open_bcs
+            for wi in open_wis
         ],
         "recent_changes": [
             {
@@ -89,9 +89,9 @@ def cmd_orient(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2, default=str))
     else:
         print(f"Orientation for {proj_slug} (workspace {ws_slug}):")
-        print(f"\nOpen breadcrumbs ({len(open_bcs)}):")
-        for b in open_bcs:
-            print(f"  - [{b['severity']}] {b['identifier']} ({b['status']}) — {b['title']}")
+        print(f"\nOpen work items ({len(open_wis)}):")
+        for wi in open_wis:
+            print(f"  - [{wi['severity']}] {wi['identifier']} ({wi['status']}) — {wi['title']}")
         if drift:
             print(
                 f"\n⚠ Resolved in git but still open in the DB ({len(drift)}) — "

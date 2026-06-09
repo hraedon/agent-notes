@@ -369,8 +369,9 @@ def test_sync_prune_removes_absent(tmp_path):
 
 def test_orient_digest(default_project, capsys):
     from agent_notes.cli.orient import cmd_orient
+    from agent_notes.core.work_item_model import WorkItemModel
 
-    BreadcrumbModel.file_breadcrumb(
+    WorkItemModel.file_work_item(
         project_id=default_project.id,
         identifier="OR-1",
         title="Open item",
@@ -379,12 +380,12 @@ def test_orient_digest(default_project, capsys):
         severity="high",
         embedding=_vec768(),
     )
-    BreadcrumbModel.file_breadcrumb(
+    WorkItemModel.file_work_item(
         project_id=default_project.id,
         identifier="OR-2",
         title="Done item",
         kind="bug",
-        status="resolved",
+        status="closed",
         severity="low",
         embedding=_vec768(),
     )
@@ -395,5 +396,5 @@ def test_orient_digest(default_project, capsys):
     data = json.loads(capsys.readouterr().out)
     assert data["project"] == "sf2"
     ids = {b["identifier"] for b in data["open_breadcrumbs"]}
-    assert "OR-1" in ids  # open surfaced
-    assert "OR-2" not in ids  # resolved (terminal) excluded
+    assert "OR-1" in ids
+    assert "OR-2" not in ids
