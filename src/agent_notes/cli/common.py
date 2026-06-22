@@ -50,6 +50,26 @@ def _resolve(
             raise SystemExit(EXIT_NOT_FOUND)
         return ws.id, proj.id, ws.slug, proj.slug
 
+    if ws_slug:
+        ws = next((w for w in list_workspaces() if w.slug == ws_slug), None)
+        if ws is None:
+            available = [w.slug for w in list_workspaces()]
+            hint = f" Available: {', '.join(available)}" if available else ""
+            suggestion = " Use --path for auto-resolution or run 'agent-notes workspace list'."
+            print(f"Workspace '{ws_slug}' not found.{hint}{suggestion}", file=sys.stderr)
+            raise SystemExit(EXIT_NOT_FOUND)
+        proj = next(
+            (p for p in list_projects(workspace_id=ws.id) if p.slug == "global"), None
+        )
+        if proj is None:
+            print(
+                f"Workspace '{ws_slug}' has no 'global' project for workspace-level "
+                f"operations; create one or pass --project/--path explicitly.",
+                file=sys.stderr,
+            )
+            raise SystemExit(EXIT_NOT_CONFIGURED)
+        return ws.id, proj.id, ws.slug, proj.slug
+
     raise SystemExit(EXIT_NOT_CONFIGURED)
 
 
@@ -119,6 +139,11 @@ def _print_sub_help(parser: argparse.ArgumentParser) -> None:
 
 def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--path", default=None, help="Filesystem path for project resolution")
-    p.add_argument("--workspace", default=None, help="Workspace slug (optional if --path given)")
+    p.add_argument(
+        "--workspace",
+        default=None,
+        help="Workspace slug (optional if --path given). With --workspace alone "
+        "(no --project/--path), resolves to the workspace's 'global' project.",
+    )
     p.add_argument("--project", default=None, help="Project slug (optional if --path given)")
     p.add_argument("--json", action="store_true", help="Emit JSON instead of human text")

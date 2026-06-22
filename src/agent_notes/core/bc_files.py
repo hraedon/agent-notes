@@ -183,17 +183,27 @@ def sync_breadcrumbs_from_dir(
     for f, bc in parsed:
         try:
             vec = embed_fn((bc["title"] + " " + bc["body"]).strip())
-            WorkItemModel.file_work_item(
-                project_id=project_id,
-                identifier=bc["identifier"],
-                title=bc["title"],
-                body=bc["body"],
-                kind=bc["kind"],
-                status=_map_bc_status_to_wi(bc["status"]),
-                severity=bc["severity"],
-                external_refs={"tags": bc["tags"], "related": bc["related"]},
-                embedding=vec,
-            )
+            fields = {
+                "title": bc["title"],
+                "body": bc["body"],
+                "kind": bc["kind"],
+                "status": _map_bc_status_to_wi(bc["status"]),
+                "severity": bc["severity"],
+                "external_refs": {"tags": bc["tags"], "related": bc["related"]},
+                "embedding": vec,
+            }
+            existing = WorkItemModel.get_work_item(project_id, bc["identifier"])
+            if existing is None:
+                WorkItemModel.file_work_item(
+                    project_id=project_id, identifier=bc["identifier"], **fields
+                )
+            else:
+                update_fields = dict(fields)
+                if existing["status"] in ("closed", "deferred"):
+                    update_fields.pop("status", None)
+                WorkItemModel.update_work_item(
+                    project_id=project_id, identifier=bc["identifier"], **update_fields
+                )
             imported.append(bc["identifier"])
             seen.add(bc["identifier"])
         except ValueError as exc:
