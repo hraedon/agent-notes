@@ -34,7 +34,9 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 print(f"Error: invalid --public-key: {exc}")
             return EXIT_GENERIC
 
-    from agent_notes.core.verifier import verify_all, verify_entity
+    from agent_notes.core.verifier import verify_all, verify_cache, verify_entity
+
+    check_cache = getattr(args, "check_cache", False)
 
     try:
         if args.entity_id:
@@ -49,6 +51,15 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 check_policy=not args.no_policy,
                 entity_type=args.entity_type,
             )
+
+        if check_cache:
+            # Verify the work_items cache matches the op-log fold, and merge
+            # into the op-level result so a single report covers both.
+            cache_result = verify_cache(entity_id=args.entity_id)
+            result.checked += cache_result.checked
+            result.passed += cache_result.passed
+            result.failed += cache_result.failed
+            result.violations.extend(cache_result.violations)
     except RuntimeError as exc:
         if use_json:
             print(json.dumps({"error": str(exc)}, indent=2))
@@ -118,6 +129,12 @@ def register_verify_parsers(sub: argparse._SubParsersAction) -> None:
         action="store_true",
         dest="no_policy",
         help="Skip built-in policy checks",
+    )
+    v_run.add_argument(
+        "--check-cache",
+        action="store_true",
+        dest="check_cache",
+        help="Also verify that the work_items cache matches the op-log fold",
     )
     _add_common(v_run)
     v_run.set_defaults(func=cmd_verify)

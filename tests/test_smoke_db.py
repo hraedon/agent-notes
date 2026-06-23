@@ -126,6 +126,74 @@ class TestVocabulary:
         assert v.sort_order == 200
 
 
+class TestVocabularyReferences:
+    """Reference-check semantics for delete_vocabulary (decision 9).
+
+    Covers the ``bc_*`` -> ``wi_*`` namespace mapping in
+    ``_check_vocab_references``: deleting a legacy ``bc_kind`` entry must be
+    blocked when a work_item references the mapped ``wi_kind``.
+    """
+
+    @staticmethod
+    def _seeded_ws(prefix: str):
+        ws = coredb.get_or_create_workspace(prefix, prefix)
+        # work_item vocabularies that file_work_item validates against
+        coredb.add_vocabulary(ws.id, "wi_kind", "bug", is_terminal=False, is_open=True)
+        coredb.add_vocabulary(ws.id, "wi_status", "open", is_terminal=False, is_open=True)
+        coredb.add_vocabulary(ws.id, "wi_severity", "medium", is_terminal=False, is_open=True)
+        proj = coredb.get_or_create_project(ws.id, f"{prefix}-proj", f"{prefix} Proj")
+        return ws, proj
+
+    def test_delete_wi_kind_referenced_raises(self, pg: str) -> None:
+        from agent_notes.core.work_item_model import WorkItemModel
+
+        ws, proj = self._seeded_ws("ref-wi-kind")
+        WorkItemModel.file_work_item(
+            project_id=proj.id,
+            identifier="WI-VOC-01",
+            title="Vocab ref",
+            kind="bug",
+            status="open",
+            severity="medium",
+        )
+        with pytest.raises(ValueError, match="referenced"):
+            coredb.delete_vocabulary(ws.id, "wi_kind", "bug")
+
+    def test_delete_bc_kind_referenced_raises(self, pg: str) -> None:
+        """bc_kind is a legacy alias mapped to wi_kind — deleting it must still
+        be blocked when a work_item references the kind (bc->wi mapping)."""
+        from agent_notes.core.work_item_model import WorkItemModel
+
+        ws, proj = self._seeded_ws("ref-bc-kind")
+        # add the legacy bc_kind entry so the delete target genuinely exists
+        coredb.add_vocabulary(ws.id, "bc_kind", "bug", is_terminal=False, is_open=True)
+        WorkItemModel.file_work_item(
+            project_id=proj.id,
+            identifier="WI-VOC-02",
+            title="Vocab ref bc",
+            kind="bug",
+            status="open",
+            severity="medium",
+        )
+        with pytest.raises(ValueError, match="referenced"):
+            coredb.delete_vocabulary(ws.id, "bc_kind", "bug")
+
+    def test_delete_wi_status_referenced_raises(self, pg: str) -> None:
+        from agent_notes.core.work_item_model import WorkItemModel
+
+        ws, proj = self._seeded_ws("ref-wi-status")
+        WorkItemModel.file_work_item(
+            project_id=proj.id,
+            identifier="WI-VOC-03",
+            title="Vocab ref status",
+            kind="bug",
+            status="open",
+            severity="medium",
+        )
+        with pytest.raises(ValueError, match="referenced"):
+            coredb.delete_vocabulary(ws.id, "wi_status", "open")
+
+
 class TestLinks:
     def test_add_and_remove_link(self, pg: str) -> None:
         from agent_notes.core import links

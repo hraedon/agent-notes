@@ -7,18 +7,67 @@ Bound to 127.0.0.1 only (decision 43).
 
 from __future__ import annotations
 
+import hmac
 import os
 from pathlib import Path
 
 import jinja2
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from agent_notes.core.db import list_projects, list_workspaces
+
+_WEB_TOKEN = os.environ.get("AGENT_NOTES_WEB_TOKEN", "").strip() or None
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
 app = FastAPI(title="agent-notes-web", docs_url=None, redoc_url=None)
+
+_UNAUTHORIZED_HTML = """<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>401 Unauthorized</title>
+</head>
+<body>
+    <h1>401 Unauthorized</h1>
+    <p>The agent-notes web viewer requires a bearer token. Set it via the
+    <code>AGENT_NOTES_WEB_TOKEN</code> environment variable and send
+    <code>Authorization: Bearer &lt;token&gt;</code> with each request.</p>
+</body>
+</html>
+"""
+
+
+@app.middleware("http")
+async def bearer_token_middleware(request: Request, call_next):
+    """Optional bearer-token gate for the read-only web viewer.
+
+    If ``AGENT_NOTES_WEB_TOKEN`` is unset, all requests pass through so the
+    localhost-only default remains backward compatible. When the token is set,
+    every request must include ``Authorization: Bearer <token>``. The token and
+    scheme comparison uses ``hmac.compare_digest`` to avoid timing side channels.
+    Browser requests without an Authorization header receive an HTML 401 page;
+    API requests receive a JSON 401.
+    """
+    if _WEB_TOKEN is None:
+        return await call_next(request)
+
+    auth_header = request.headers.get("authorization", "")
+    scheme, _, provided = auth_header.partition(" ")
+    valid = (
+        hmac.compare_digest(scheme.lower(), "bearer")
+        and hmac.compare_digest(provided, _WEB_TOKEN)
+    )
+    if valid:
+        return await call_next(request)
+
+    accepts = request.headers.get("accept", "")
+    wants_html = "text/html" in accepts
+    if wants_html:
+        return HTMLResponse(content=_UNAUTHORIZED_HTML, status_code=401)
+    return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+
 
 _jinja_env = jinja2.Environment(
     loader=jinja2.FileSystemLoader(str(TEMPLATES_DIR)),

@@ -3,6 +3,7 @@
 Public surface:
 - ``verify_entity`` — verify all ops for a single entity.
 - ``verify_all`` — verify every op in the log.
+- ``verify_cache`` — verify the ``work_items`` cache matches the op-log fold.
 - ``verify_op_id`` — check that ``op_id`` matches the canonical hash.
 - ``verify_signature`` — check DSSE envelope signature (if signed).
 - ``verify_hash_chain`` — check parent references and acyclicity.
@@ -28,7 +29,7 @@ from psycopg.rows import dict_row
 
 from agent_notes.core.db import _conn
 from agent_notes.core.envelope import verify_envelope
-from agent_notes.core.kernel import _make_op_id
+from agent_notes.core.kernel import _make_op_id, fold_work_item_state
 
 # ---------------------------------------------------------------------------
 # Result types
@@ -356,6 +357,142 @@ def verify_all(
             )
         ops = [dict(r) for r in cur.fetchall()]
         return _verify_ops(ops, public_key, check_policy)
+
+
+# ---------------------------------------------------------------------------
+# Cache verification
+# ---------------------------------------------------------------------------
+
+# Fields compared between the folded state and the live cache row.
+# ``embedding`` is excluded (it may be recomputed independently) and
+# ``updated_at`` is excluded (timestamp drift is expected).  ``created_at`` and
+# ``closed_at`` are maintained by triggers, not the fold, so they are excluded.
+_CACHE_COMPARE_FIELDS = (
+    "project_id",
+    "identifier",
+    "title",
+    "body_hash",
+    "kind",
+    "status",
+    "severity",
+    "external_refs",
+    "diagnostic_keys",
+    "frontmatter_version",
+)
+
+
+def verify_cache(
+    entity_id: str | None = None,
+    conn: psycopg.Connection | None = None,
+) -> VerificationResult:
+    """Verify that the ``work_items`` cache matches what the op-log fold produces.
+
+    For each work_item entity in ``op_log`` (or just ``entity_id`` when given),
+    fold the entity in-memory via :func:`fold_work_item_state` and compare the
+    result against the current ``work_items`` cache row.  Any difference is
+    reported as a ``cache``-rule violation.
+
+    ``embedding`` and ``updated_at`` are excluded from the comparison: the
+    embedding may be recomputed independently of the op-log, and timestamp drift
+    on ``updated_at`` is expected.
+
+    Returns a :class:`VerificationResult` with the count of checked / passed /
+    failed entities.
+    """
+    if conn is None:
+        with _conn() as conn:
+            return _verify_cache(conn, entity_id)
+    return _verify_cache(conn, entity_id)
+
+
+def _verify_cache(conn: psycopg.Connection, entity_id: str | None) -> VerificationResult:
+    result = VerificationResult()
+
+    cur = conn.cursor(row_factory=dict_row)
+    if entity_id is None:
+        # UNION of op_log and work_items entity_ids catches both:
+        # - entities with ops but no cache row (dangling)
+        # - entities with cache row but no ops (orphan/stale)
+        cur.execute(
+            """
+            SELECT entity_id FROM op_log WHERE entity_type = 'work_item'
+            UNION
+            SELECT entity_id FROM work_items
+            ORDER BY entity_id
+            """
+        )
+    else:
+        cur.execute(
+            "SELECT entity_id FROM op_log "
+            "WHERE entity_type = 'work_item' AND entity_id = %s "
+            "UNION "
+            "SELECT entity_id FROM work_items WHERE entity_id = %s "
+            "ORDER BY entity_id",
+            (entity_id, entity_id),
+        )
+    entity_ids = [r["entity_id"] for r in cur.fetchall()]
+
+    for eid in entity_ids:
+        result.checked += 1
+
+        folded = fold_work_item_state(conn, eid)
+
+        # Fetch the live cache row (if any).
+        ccur = conn.cursor(row_factory=dict_row)
+        ccur.execute("SELECT * FROM work_items WHERE entity_id = %s", (eid,))
+        row = ccur.fetchone()
+
+        if folded is None:
+            # Dangling entity (no create op) — no cache row should exist.
+            if row is not None:
+                result.failed += 1
+                result.violations.append(
+                    Violation(
+                        op_id=eid,
+                        rule="cache",
+                        message="Dangling entity (no create op) has a stale cache row",
+                    )
+                )
+            else:
+                result.passed += 1
+            continue
+
+        if row is None:
+            result.failed += 1
+            result.violations.append(
+                Violation(
+                    op_id=eid,
+                    rule="cache",
+                    message="Entity has ops but no cache row in work_items",
+                )
+            )
+            continue
+
+        # Compare each comparable field.
+        diffs: list[tuple[str, object, object]] = []
+        for field_name in _CACHE_COMPARE_FIELDS:
+            folded_val = folded.get(field_name)
+            cache_val = row.get(field_name)
+            if folded_val != cache_val:
+                diffs.append((field_name, folded_val, cache_val))
+
+        if diffs:
+            result.failed += 1
+            for field_name, folded_val, cache_val in diffs:
+                result.violations.append(
+                    Violation(
+                        op_id=eid,
+                        rule="cache",
+                        message=(
+                            f"Cache mismatch for field {field_name!r}: "
+                            f"folded={folded_val!r} cache={cache_val!r}"
+                        ),
+                    )
+                )
+        else:
+            result.passed += 1
+
+    return result
 
 
 # ---------------------------------------------------------------------------

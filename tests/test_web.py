@@ -165,3 +165,36 @@ class TestSearchRoute:
             resp = client.get("/search?q=test")
         assert resp.status_code == 200
         assert "test" in resp.text
+
+
+class TestAuth:
+    """Bearer token auth for the web viewer."""
+
+    def test_open_when_no_token_configured(self, client):
+        resp = client.get("/")
+        assert resp.status_code == 200
+
+    def test_missing_token_returns_401_json(self, client, monkeypatch):
+        monkeypatch.setattr("agent_notes.web.app._WEB_TOKEN", "secret-token")
+        resp = client.get("/")
+        assert resp.status_code == 401
+        assert resp.headers["content-type"] == "application/json"
+        assert resp.json()["detail"] == "Unauthorized"
+
+    def test_wrong_token_returns_401_json(self, client, monkeypatch):
+        monkeypatch.setattr("agent_notes.web.app._WEB_TOKEN", "secret-token")
+        resp = client.get("/", headers={"Authorization": "Bearer wrong-token"})
+        assert resp.status_code == 401
+        assert resp.headers["content-type"] == "application/json"
+
+    def test_valid_token_allows_request(self, client, monkeypatch):
+        monkeypatch.setattr("agent_notes.web.app._WEB_TOKEN", "secret-token")
+        resp = client.get("/", headers={"Authorization": "Bearer secret-token"})
+        assert resp.status_code == 200
+
+    def test_browser_without_auth_gets_html_401(self, client, monkeypatch):
+        monkeypatch.setattr("agent_notes.web.app._WEB_TOKEN", "secret-token")
+        resp = client.get("/", headers={"Accept": "text/html"})
+        assert resp.status_code == 401
+        assert "text/html" in resp.headers["content-type"]
+        assert "bearer token" in resp.text.lower()

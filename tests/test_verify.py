@@ -13,6 +13,7 @@ from agent_notes.core.envelope import LocalKeySigner, NullSigner, make_envelope
 from agent_notes.core.verifier import (
     apply_policy,
     verify_all,
+    verify_cache,
     verify_entity,
     verify_hash_chain,
     verify_op_id,
@@ -268,6 +269,87 @@ class TestVerifyAll:
 
 
 # ---------------------------------------------------------------------------
+# Cache verification
+# ---------------------------------------------------------------------------
+
+
+class TestVerifyCache:
+    def test_verify_cache_matches(self, default_project):
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-CACHE-01",
+            title="Cache match",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+        result = verify_cache()
+        assert result.ok()
+        assert result.checked >= 1
+        # The item we just filed must be among those checked and passing.
+        assert any(v.op_id == entity_id for v in result.violations) is False
+
+    def test_verify_cache_scoped_to_entity(self, default_project):
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-CACHE-02",
+            title="Scoped cache",
+            embedding=_vec768(),
+        )
+        result = verify_cache(entity_id=wi["entity_id"])
+        assert result.checked == 1
+        assert result.passed == 1
+        assert result.failed == 0
+
+    def test_verify_cache_detects_drift(self, default_project):
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-CACHE-03",
+            title="Original title",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+        # Tamper with the cache row directly (bypass the op-log).
+        with kernel._conn() as conn:
+            conn.execute(
+                "UPDATE work_items SET title = %s WHERE entity_id = %s",
+                ("Drifted title", entity_id),
+            )
+            conn.commit()
+
+        result = verify_cache(entity_id=entity_id)
+        assert not result.ok()
+        assert result.failed == 1
+        cache_violations = [v for v in result.violations if v.rule == "cache"]
+        assert len(cache_violations) == 1
+        assert "title" in cache_violations[0].message
+
+        # Restore cache consistency for tests sharing this session DB.
+        with kernel._conn() as conn:
+            kernel.fold_work_item(conn, entity_id)
+            conn.commit()
+
+    def test_verify_cache_ignores_embedding_drift(self, default_project):
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-CACHE-04",
+            title="Embedding drift",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+        # Recompute / replace the embedding in the cache only.
+        with kernel._conn() as conn:
+            conn.execute(
+                "UPDATE work_items SET embedding = %s WHERE entity_id = %s",
+                ([0.1] * 768, entity_id),
+            )
+            conn.commit()
+
+        result = verify_cache(entity_id=entity_id)
+        assert result.ok(), result.violations
+        assert result.passed == 1
+
+
+# ---------------------------------------------------------------------------
 # CLI smoke
 # ---------------------------------------------------------------------------
 
@@ -337,3 +419,63 @@ class TestVerifyCli:
         data = json.loads(capsys.readouterr().out)
         assert data["ok"] is False
         assert any(v["rule"] == "signature" for v in data["violations"])
+
+    def test_cli_verify_check_cache_passes(self, default_project, capsys):
+        from agent_notes.cli.verify import cmd_verify
+
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-V-CLI-CACHE",
+            title="Cache CLI",
+            embedding=_vec768(),
+        )
+
+        ns = argparse.Namespace(
+            json=True,
+            entity_id=None,
+            entity_type=None,
+            public_key=None,
+            no_policy=False,
+            check_cache=True,
+        )
+        assert cmd_verify(ns) == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["ok"] is True
+        # Cache entities are folded in addition to the op-level checks, so the
+        # checked count must exceed the op-only count (>= 1 cache check ran).
+        assert data["checked"] >= 1
+
+    def test_cli_verify_check_cache_detects_drift(self, default_project, capsys):
+        from agent_notes.cli.verify import cmd_verify
+
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-V-CLI-CACHE-DRIFT",
+            title="Cache drift CLI",
+            embedding=_vec768(),
+        )
+        # Tamper with the cache row directly.
+        with kernel._conn() as conn:
+            conn.execute(
+                "UPDATE work_items SET status = %s WHERE entity_id = %s",
+                ("closed", wi["entity_id"]),
+            )
+            conn.commit()
+
+        ns = argparse.Namespace(
+            json=True,
+            entity_id=None,
+            entity_type=None,
+            public_key=None,
+            no_policy=False,
+            check_cache=True,
+        )
+        assert cmd_verify(ns) == 1
+        data = json.loads(capsys.readouterr().out)
+        assert data["ok"] is False
+        assert any(v["rule"] == "cache" for v in data["violations"])
+
+        # Restore cache consistency for tests sharing this session DB.
+        with kernel._conn() as conn:
+            kernel.fold_work_item(conn, wi["entity_id"])
+            conn.commit()

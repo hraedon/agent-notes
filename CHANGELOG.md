@@ -26,9 +26,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - BC-022: breadcrumb get no longer returns `?` for missing title/status fields.
-- BC-025: reflection filename collisions handled with `-2`, `-3` suffixes; DB uses `supersedes` chain.
+- BC-025: reflection filename collisions handled by skip-with-message + `ON CONFLICT DO NOTHING` (previously raised UniqueViolation).
 - BC-026: `--json` output is clean JSON; human-readable messages go to stderr.
 - BC-003: bulk import available via `agent-notes import`.
+- `heartbeat_work_item` now writes a `heartbeat` op to `op_log` and emits an `item.heartbeat` event, matching every other mutation's provenance contract.
+- `claim_work_item`'s `set_status` op is now a proper child of the `claim` op in the hash chain (was incorrectly chained to the entity root).
+- `release_work_item`'s `set_status` op is now a proper child of the `release` op in the hash chain (same bug as claim).
+- Lease interval SQL used `interval '%s seconds'` which bound the positional parameter index instead of the value — fixed to `make_interval(secs => %s)`.
+- `_check_vocab_references` collapsed duplicate `bc_*`/`wi_*` branches into a single namespace-mapped code path.
+- `verify --check-cache` added: compares `work_items` cache against op-log fold to detect cache drift.
+- Web viewer: optional bearer-token auth via `AGENT_NOTES_WEB_TOKEN` env var (backward compatible — unset means open).
 
 ### Deferred (Tier B — not required for v1.0.0)
 

@@ -12,6 +12,7 @@ dependencies = [
     "fastapi>=0.100",
     "uvicorn>=0.20",
     "cryptography>=42.0",
+    "regista>=0.4.0",
 ]
 
 [project.optional-dependencies]
@@ -47,3 +48,6 @@ select = ["E", "F", "I", "N", "W"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "postgres: requires a real Postgres instance (set AGENT_NOTES_DSN)",
+]

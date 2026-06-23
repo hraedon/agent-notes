@@ -214,7 +214,59 @@ agent-notes-web
 # Port configurable via AGENT_NOTES_WEB_PORT env var
 ```
 
-Browse breadcrumbs, memories, and run semantic search from a browser. No auth; localhost-only.
+Browse breadcrumbs, memories, and run semantic search from a browser. Localhost-only by default.
+
+Optional bearer-token auth is available via the `AGENT_NOTES_WEB_TOKEN` env var:
+
+```bash
+export AGENT_NOTES_WEB_TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe())")
+agent-notes-web
+```
+
+When `AGENT_NOTES_WEB_TOKEN` is set, every request must include
+`Authorization: Bearer <token>`. If the env var is unset, the viewer remains
+open (backward compatible).
+
+### Migration & Rollback
+
+The v1.0.0 migration (`schema/800_drop_breadcrumbs.sql`) drops the legacy
+`breadcrumbs` table. **Before upgrading**, back up your database:
+
+```bash
+pg_dump -h host -U user agent_notes > backup_pre_1.0.0.sql
+```
+
+To roll back to the pre-1.0.0 version:
+
+1. Stop all agent-notes processes (web, bridge, trigger-loop).
+2. Restore from backup: `psql -h host -U user agent_notes < backup_pre_1.0.0.sql`
+3. Check out the pre-kernel commit: `git checkout b366c5f` (the last commit before the Plan 008 kernel work).
+4. Re-run migrations: `agent-notes-setup`
+
+The `op_log` table is never dropped by any migration. `800_drop_breadcrumbs.sql`
+drops the now-unused legacy `breadcrumbs` table that the `op_log` has already
+superseded. All other schema files use `IF NOT EXISTS` and are safe to re-run.
+
+### Breadcrumb → Work-item alias
+
+The `breadcrumb` CLI subcommand is a **partial alias** for `work-item` — the
+shared verbs (`file`, `update`, `get`, `find`, `delete`) delegate to the same
+`WorkItemModel` backend. The `breadcrumb` name is kept for backward
+compatibility with existing skills and agent muscle memory. New code should
+use `work-item`.
+
+Three `breadcrumb`-only verbs have **no** `work-item` equivalent:
+
+- `breadcrumb sync --from-files ...` — syncs breadcrumbs from a files directory
+- `breadcrumb export-index` — writes a plain-text fallback index
+- `breadcrumb reconcile [--apply]` — scans git for silent-resolution drift
+
+These are legacy/transition helpers. The `reconcile` functionality is also
+available via `agent-notes orient --reconcile`.
+
+The vocabulary namespaces (`bc_kind` → `wi_kind`, `bc_status` → `wi_status`,
+`bc_severity` → `wi_severity`) are similarly aliased. Pre-existing `bc_*`
+vocabulary entries continue to work; new entries should use `wi_*`.
 
 ## Entry points
 

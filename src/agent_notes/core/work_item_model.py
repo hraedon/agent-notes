@@ -25,7 +25,7 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
-from agent_notes.core import kernel
+from agent_notes.core import face_factory, kernel, projection
 from agent_notes.core.change_log import write_change
 from agent_notes.core.db import _conn
 
@@ -35,6 +35,271 @@ class WorkItemModel:
 
     kind = "work_item"
     entity_type = "work_item"
+
+    @staticmethod
+    def _transition_for_status_change(old_status: str, new_status: str) -> str | None:
+        if old_status == new_status:
+            return None
+        known = {
+            ("open", "claimed"): "claim",
+            ("claimed", "open"): "release",
+            ("open", "closed"): "close_open",
+            ("claimed", "closed"): "close_claimed",
+            ("deferred", "closed"): "close_deferred",
+            ("open", "deferred"): "defer_open",
+            ("claimed", "deferred"): "defer_claimed",
+            ("closed", "open"): "reopen",
+            ("deferred", "open"): "undefer",
+        }
+        if (old_status, new_status) in known:
+            return known[(old_status, new_status)]
+        if new_status == "closed":
+            return f"close_{old_status}"
+        if new_status == "deferred":
+            return f"defer_{old_status}"
+        raise ValueError(f"Unsupported status transition: {old_status!r} -> {new_status!r}")
+
+    @staticmethod
+    def _entity_id_for_regista_create(identifier: str, regista_work_item_id: Any) -> str:
+        return kernel._make_op_id(
+            "work_item",
+            "create",
+            {"identifier": identifier, "regista_work_item_id": str(regista_work_item_id)},
+            [],
+        )
+
+    @staticmethod
+    def _mirror_regista_snapshot(
+        conn: psycopg.Connection,
+        local: dict,
+        regista_work_item: Any,
+        embed: Any | None = None,
+        pending_sync: bool = False,
+        actor_id: str | None = None,
+    ) -> dict:
+        def embed_fn(_text: str) -> list[float]:
+            return embed
+
+        return projection.mirror_from_regista(
+            conn,
+            project_id=local["project_id"],
+            identifier=local["identifier"],
+            entity_id=local["entity_id"],
+            regista_work_item_id=regista_work_item.work_item_id,
+            state=regista_work_item.current_state,
+            custom_fields=dict(regista_work_item.custom_fields),
+            embed=embed_fn if embed is not None else None,
+            pending_sync=pending_sync,
+            actor_id=actor_id,
+        )
+
+    @staticmethod
+    def _file_work_item_regista(
+        face: Any,
+        project_id: int,
+        identifier: str | None,
+        title: str,
+        body: str,
+        kind: str,
+        status: str,
+        severity: str,
+        external_refs: dict | None,
+        diagnostic_keys: dict | None,
+        embedding: Any | None,
+    ) -> dict:
+        with _conn() as conn:
+            workspace_id = WorkItemModel._resolve_workspace_for_project(conn, project_id)
+            WorkItemModel._validate_vocab(conn, workspace_id, "wi_kind", kind)
+            WorkItemModel._validate_vocab(conn, workspace_id, "wi_status", status)
+            WorkItemModel._validate_vocab(conn, workspace_id, "wi_severity", severity)
+
+            if identifier is None:
+                cur = conn.cursor(row_factory=psycopg.rows.tuple_row)
+                cur.execute("SELECT allocate_work_item_identifier(%s)", (project_id,))
+                identifier = cur.fetchone()[0]
+
+        effective_title = title or identifier
+        actor = face_factory.default_actor()
+        wid, state = face.create_breadcrumb(
+            actor,
+            title=effective_title,
+            description=body or "",
+            severity=severity,
+            kind=kind,
+            external_refs=external_refs or {},
+            diagnostic_keys=diagnostic_keys or {},
+            source_identifier=identifier,
+        )
+        if status != "open":
+            close_transition = WorkItemModel._transition_for_status_change("open", status)
+            if close_transition is not None:
+                state = face.transition_breadcrumb(actor, wid, close_transition)
+        entity_id = WorkItemModel._entity_id_for_regista_create(identifier, wid)
+        custom_fields = {
+            "title": effective_title,
+            "description": body or "",
+            "severity": severity,
+            "kind": kind,
+            "external_refs": external_refs or {},
+            "diagnostic_keys": diagnostic_keys or {},
+            "source_identifier": identifier,
+        }
+        with _conn() as conn:
+            mirrored = projection.mirror_from_regista(
+                conn,
+                project_id=project_id,
+                identifier=identifier,
+                entity_id=entity_id,
+                regista_work_item_id=wid,
+                state=state,
+                custom_fields=custom_fields,
+                embed=(lambda _text: embedding) if embedding is not None else None,
+                actor_id=actor.actor_id,
+            )
+            write_change(
+                conn,
+                kind=WorkItemModel.kind,
+                workspace_id=workspace_id,
+                project_id=project_id,
+                identifier=identifier,
+                event="filed",
+                payload={"title": effective_title, "kind": kind, "status": mirrored["status"]},
+                actor=actor.actor_id,
+            )
+            conn.commit()
+        return dict(mirrored)
+
+    @staticmethod
+    def _load_work_item_row(
+        conn: psycopg.Connection, project_id: int, identifier: str
+    ) -> dict:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
+            (project_id, identifier),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError(f"Work item not found: {identifier!r} in project {project_id}")
+        return dict(row)
+
+    @staticmethod
+    def _update_change_log_payload(
+        old: dict,
+        old_body: str,
+        mirrored: dict,
+        new_body: str,
+        external_refs: dict | None,
+        diagnostic_keys: dict | None,
+    ) -> dict:
+        payload: dict = {}
+        for field in ("title", "kind", "status", "severity"):
+            old_val = old.get(field)
+            new_val = mirrored.get(field)
+            if old_val != new_val:
+                payload[field] = {"from": old_val, "to": new_val}
+        if old_body != new_body:
+            payload["body"] = {"from": old_body, "to": new_body}
+        if external_refs is not None and old.get("external_refs") != external_refs:
+            payload["external_refs"] = external_refs
+        if diagnostic_keys is not None and old.get("diagnostic_keys") != diagnostic_keys:
+            payload["diagnostic_keys"] = diagnostic_keys
+        return payload
+
+    @staticmethod
+    def _update_work_item_regista(
+        face: Any,
+        project_id: int,
+        identifier: str,
+        title: str | None,
+        body: str | None,
+        kind: str | None,
+        status: str | None,
+        severity: str | None,
+        external_refs: dict | None,
+        diagnostic_keys: dict | None,
+        embedding: Any | None,
+    ) -> dict:
+        with _conn() as conn:
+            workspace_id = WorkItemModel._resolve_workspace_for_project(conn, project_id)
+            old = WorkItemModel._load_work_item_row(conn, project_id, identifier)
+            if old.get("regista_work_item_id") is None:
+                raise ValueError(
+                    f"Work item {identifier!r} has no regista mapping; run migrate-to-regista first"
+                )
+            if kind is not None:
+                WorkItemModel._validate_vocab(conn, workspace_id, "wi_kind", kind)
+            if status is not None:
+                WorkItemModel._validate_vocab(conn, workspace_id, "wi_status", status)
+            if severity is not None:
+                WorkItemModel._validate_vocab(conn, workspace_id, "wi_severity", severity)
+            old_body = kernel.get_blob(conn, old["body_hash"]) or ""
+            wid = old["regista_work_item_id"]
+
+        actor = face_factory.default_actor()
+        custom_fields: dict[str, Any] = {}
+        if title is not None:
+            custom_fields["title"] = title or identifier
+        if body is not None:
+            custom_fields["description"] = body
+        if kind is not None:
+            custom_fields["kind"] = kind
+        if severity is not None:
+            custom_fields["severity"] = severity
+        if external_refs is not None:
+            custom_fields["external_refs"] = external_refs
+        if diagnostic_keys is not None:
+            custom_fields["diagnostic_keys"] = diagnostic_keys
+
+        old_status = old["status"]
+        new_status = status if status is not None else old_status
+        transition_name = WorkItemModel._transition_for_status_change(old_status, new_status)
+        if transition_name is not None:
+            face.transition_breadcrumb(
+                actor,
+                wid,
+                transition_name,
+                custom_fields=custom_fields or None,
+            )
+        else:
+            face.amend_breadcrumb(
+                actor,
+                wid,
+                current_state=old_status,
+                title=custom_fields.get("title"),
+                description=custom_fields.get("description"),
+                severity=custom_fields.get("severity"),
+                kind=custom_fields.get("kind"),
+                external_refs=custom_fields.get("external_refs"),
+                diagnostic_keys=custom_fields.get("diagnostic_keys"),
+            )
+
+        regista_work_item = face.get(wid)
+        with _conn() as conn:
+            mirrored = WorkItemModel._mirror_regista_snapshot(
+                conn,
+                old,
+                regista_work_item,
+                embed=embedding,
+                actor_id=actor.actor_id,
+            )
+            new_body = kernel.get_blob(conn, mirrored["body_hash"]) or ""
+            payload = WorkItemModel._update_change_log_payload(
+                old, old_body, mirrored, new_body, external_refs, diagnostic_keys
+            )
+            if payload:
+                write_change(
+                    conn,
+                    kind=WorkItemModel.kind,
+                    workspace_id=workspace_id,
+                    project_id=project_id,
+                    identifier=identifier,
+                    event="updated",
+                    payload=payload,
+                    actor=actor.actor_id,
+                )
+            conn.commit()
+        return dict(mirrored)
 
     @staticmethod
     def _resolve_workspace_for_project(conn: psycopg.Connection, project_id: int) -> int:
@@ -94,6 +359,21 @@ class WorkItemModel:
         frontmatter_version: int = 1,
         actor_id: str | None = None,
     ) -> dict:
+        face = face_factory.get_face()
+        if face is not None:
+            return cls._file_work_item_regista(
+                face,
+                project_id,
+                identifier,
+                title,
+                body,
+                kind,
+                status,
+                severity,
+                external_refs,
+                diagnostic_keys,
+                embedding,
+            )
         with _conn() as conn:
             workspace_id = cls._resolve_workspace_for_project(conn, project_id)
             cls._validate_vocab(conn, workspace_id, "wi_kind", kind)
@@ -183,6 +463,21 @@ class WorkItemModel:
         frontmatter_version: int | None = None,
         actor_id: str | None = None,
     ) -> dict:
+        face = face_factory.get_face()
+        if face is not None:
+            return cls._update_work_item_regista(
+                face,
+                project_id,
+                identifier,
+                title,
+                body,
+                kind,
+                status,
+                severity,
+                external_refs,
+                diagnostic_keys,
+                embedding,
+            )
         with _conn() as conn:
             workspace_id = cls._resolve_workspace_for_project(conn, project_id)
             cur = conn.cursor(row_factory=dict_row)
@@ -301,6 +596,41 @@ class WorkItemModel:
             conn.commit()
             return dict(folded)
 
+    @staticmethod
+    def _close_work_item_regista(face: Any, project_id: int, identifier: str) -> dict:
+        with _conn() as conn:
+            workspace_id = WorkItemModel._resolve_workspace_for_project(conn, project_id)
+            old = WorkItemModel._load_work_item_row(conn, project_id, identifier)
+            if old.get("regista_work_item_id") is None:
+                raise ValueError(
+                    f"Work item {identifier!r} has no regista mapping; run migrate-to-regista first"
+                )
+            wid = old["regista_work_item_id"]
+
+        actor = face_factory.default_actor()
+        transition_name = f"close_{old['status']}"
+        face.transition_breadcrumb(actor, wid, transition_name)
+        regista_work_item = face.get(wid)
+        with _conn() as conn:
+            mirrored = WorkItemModel._mirror_regista_snapshot(
+                conn,
+                old,
+                regista_work_item,
+                actor_id=actor.actor_id,
+            )
+            write_change(
+                conn,
+                kind=WorkItemModel.kind,
+                workspace_id=workspace_id,
+                project_id=project_id,
+                identifier=identifier,
+                event="status_changed",
+                payload={"old_status": old["status"], "new_status": mirrored["status"]},
+                actor=actor.actor_id,
+            )
+            conn.commit()
+        return dict(mirrored)
+
     @classmethod
     def set_status(
         cls,
@@ -325,6 +655,9 @@ class WorkItemModel:
         actor_id: str | None = None,
     ) -> dict:
         """Close a work item (writes a close op)."""
+        face = face_factory.get_face()
+        if face is not None:
+            return cls._close_work_item_regista(face, project_id, identifier)
         with _conn() as conn:
             workspace_id = cls._resolve_workspace_for_project(conn, project_id)
             cur = conn.cursor(row_factory=dict_row)
@@ -385,6 +718,38 @@ class WorkItemModel:
     @classmethod
     def delete_work_item(cls, project_id: int, identifier: str) -> bool:
         """Soft-delete via snapshot op with tombstone. Removes from cache."""
+        face = face_factory.get_face()
+        if face is not None:
+            with _conn() as conn:
+                workspace_id = cls._resolve_workspace_for_project(conn, project_id)
+                cur = conn.cursor(row_factory=dict_row)
+                cur.execute(
+                    "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
+                    (project_id, identifier),
+                )
+                old = cur.fetchone()
+                if old is None:
+                    return False
+                cur.execute(
+                    "DELETE FROM work_item_leases WHERE entity_id = %s",
+                    (old["entity_id"],),
+                )
+                cur.execute(
+                    "DELETE FROM work_items WHERE project_id = %s AND identifier = %s",
+                    (project_id, identifier),
+                )
+                write_change(
+                    conn,
+                    kind=cls.kind,
+                    workspace_id=workspace_id,
+                    project_id=project_id,
+                    identifier=identifier,
+                    event="deleted",
+                    payload={"title": old["title"], "regista_retained": True},
+                    actor=face_factory.default_actor().actor_id,
+                )
+                conn.commit()
+            return True
         with _conn() as conn:
             workspace_id = cls._resolve_workspace_for_project(conn, project_id)
             cur = conn.cursor(row_factory=dict_row)
@@ -637,6 +1002,58 @@ class WorkItemModel:
     ) -> list[dict]:
         return kernel.claimable_work_items(project_id, workspace_id, limit)
 
+    @staticmethod
+    def _claim_work_item_regista(
+        face: Any,
+        project_id: int,
+        identifier: str,
+        ttl_seconds: int,
+    ) -> dict:
+        with _conn() as conn:
+            WorkItemModel._resolve_workspace_for_project(conn, project_id)
+            old = WorkItemModel._load_work_item_row(conn, project_id, identifier)
+            if old.get("regista_work_item_id") is None:
+                raise ValueError(
+                    f"Work item {identifier!r} has no regista mapping; run migrate-to-regista first"
+                )
+            if old["status"] != "open":
+                raise ValueError(f"Cannot claim: status is {old['status']!r} (must be 'open')")
+            cur = conn.cursor(row_factory=dict_row)
+            cur.execute(
+                "SELECT 1 FROM work_item_leases WHERE entity_id = %s AND expires_at > now()",
+                (old["entity_id"],),
+            )
+            if cur.fetchone() is not None:
+                raise ValueError(f"Work item {identifier!r} is already claimed")
+            wid = old["regista_work_item_id"]
+            entity_id = old["entity_id"]
+
+        actor = face_factory.default_actor()
+        face.transition_breadcrumb(actor, wid, "claim")
+        regista_work_item = face.get(wid)
+        with _conn() as conn:
+            mirrored = WorkItemModel._mirror_regista_snapshot(
+                conn,
+                old,
+                regista_work_item,
+                actor_id=actor.actor_id,
+            )
+            cur = conn.cursor(row_factory=dict_row)
+            cur.execute(
+                """
+                INSERT INTO work_item_leases (entity_id, actor_id, expires_at)
+                VALUES (%s, %s, now() + make_interval(secs => %s))
+                ON CONFLICT (entity_id) DO UPDATE SET
+                    actor_id = EXCLUDED.actor_id,
+                    acquired_at = now(),
+                    expires_at = EXCLUDED.expires_at,
+                    heartbeat_count = work_item_leases.heartbeat_count + 1
+                """,
+                (entity_id, actor.actor_id, ttl_seconds),
+            )
+            conn.commit()
+        return dict(mirrored)
+
     @classmethod
     def claim_work_item(
         cls,
@@ -650,6 +1067,9 @@ class WorkItemModel:
         Writes a ``claim`` op to the op_log and inserts a row into
         ``work_item_leases``.  Returns the folded work_item.
         """
+        face = face_factory.get_face()
+        if face is not None:
+            return cls._claim_work_item_regista(face, project_id, identifier, ttl_seconds)
         with _conn() as conn:
             cls._resolve_workspace_for_project(conn, project_id)
             cur = conn.cursor(row_factory=dict_row)
@@ -687,11 +1107,10 @@ class WorkItemModel:
                 actor_id=actor_id,
             )
 
-            # Insert lease
             cur.execute(
                 """
                 INSERT INTO work_item_leases (entity_id, actor_id, expires_at)
-                VALUES (%s, %s, now() + interval '%s seconds')
+                VALUES (%s, %s, now() + make_interval(secs => %s))
                 ON CONFLICT (entity_id) DO UPDATE SET
                     actor_id = EXCLUDED.actor_id,
                     acquired_at = now(),
@@ -708,7 +1127,7 @@ class WorkItemModel:
                 entity_type=cls.entity_type,
                 op_type="set_status",
                 payload={"status": "claimed"},
-                parent_op_ids=[entity_id],
+                parent_op_ids=[op["op_id"]],
                 actor_id=actor_id,
             )
 
@@ -727,6 +1146,36 @@ class WorkItemModel:
             conn.commit()
             return dict(folded)
 
+    @staticmethod
+    def _release_work_item_regista(face: Any, project_id: int, identifier: str) -> dict:
+        with _conn() as conn:
+            WorkItemModel._resolve_workspace_for_project(conn, project_id)
+            old = WorkItemModel._load_work_item_row(conn, project_id, identifier)
+            if old.get("regista_work_item_id") is None:
+                raise ValueError(
+                    f"Work item {identifier!r} has no regista mapping; run migrate-to-regista first"
+                )
+            wid = old["regista_work_item_id"]
+            entity_id = old["entity_id"]
+
+        actor = face_factory.default_actor()
+        face.transition_breadcrumb(actor, wid, "release")
+        regista_work_item = face.get(wid)
+        with _conn() as conn:
+            mirrored = WorkItemModel._mirror_regista_snapshot(
+                conn,
+                old,
+                regista_work_item,
+                actor_id=actor.actor_id,
+            )
+            cur = conn.cursor(row_factory=dict_row)
+            cur.execute(
+                "DELETE FROM work_item_leases WHERE entity_id = %s",
+                (entity_id,),
+            )
+            conn.commit()
+        return dict(mirrored)
+
     @classmethod
     def release_work_item(
         cls,
@@ -738,6 +1187,9 @@ class WorkItemModel:
 
         Writes a ``release`` op and deletes the lease row.
         """
+        face = face_factory.get_face()
+        if face is not None:
+            return cls._release_work_item_regista(face, project_id, identifier)
         with _conn() as conn:
             cls._resolve_workspace_for_project(conn, project_id)
             cur = conn.cursor(row_factory=dict_row)
@@ -768,14 +1220,13 @@ class WorkItemModel:
                 (entity_id,),
             )
 
-            # Write set_status op to move back to 'open'
             kernel.commit_op(
                 conn,
                 entity_id=entity_id,
                 entity_type=cls.entity_type,
                 op_type="set_status",
                 payload={"status": "open"},
-                parent_op_ids=[entity_id],
+                parent_op_ids=[op["op_id"]],
                 actor_id=actor_id,
             )
 
@@ -793,6 +1244,32 @@ class WorkItemModel:
             conn.commit()
             return dict(folded)
 
+    @staticmethod
+    def _heartbeat_work_item_regista(
+        project_id: int,
+        identifier: str,
+        ttl_seconds: int,
+    ) -> dict:
+        with _conn() as conn:
+            old = WorkItemModel._load_work_item_row(conn, project_id, identifier)
+            entity_id = old["entity_id"]
+            cur = conn.cursor(row_factory=dict_row)
+            cur.execute(
+                """
+                UPDATE work_item_leases
+                SET expires_at = now() + make_interval(secs => %s),
+                    heartbeat_count = heartbeat_count + 1
+                WHERE entity_id = %s
+                RETURNING *
+                """,
+                (ttl_seconds, entity_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError(f"Work item {identifier!r} is not claimed — cannot heartbeat")
+            conn.commit()
+        return dict(row)
+
     @classmethod
     def heartbeat_work_item(
         cls,
@@ -802,6 +1279,9 @@ class WorkItemModel:
         ttl_seconds: int = 300,
     ) -> dict:
         """Heartbeat a claimed work item to extend its lease (P4)."""
+        face = face_factory.get_face()
+        if face is not None:
+            return cls._heartbeat_work_item_regista(project_id, identifier, ttl_seconds)
         with _conn() as conn:
             cur = conn.cursor(row_factory=dict_row)
             cur.execute(
@@ -817,7 +1297,7 @@ class WorkItemModel:
             cur.execute(
                 """
                 UPDATE work_item_leases
-                SET expires_at = now() + interval '%s seconds',
+                SET expires_at = now() + make_interval(secs => %s),
                     heartbeat_count = heartbeat_count + 1
                 WHERE entity_id = %s
                 RETURNING *
@@ -827,6 +1307,23 @@ class WorkItemModel:
             row = cur.fetchone()
             if row is None:
                 raise ValueError(f"Work item {identifier!r} is not claimed — cannot heartbeat")
+
+            op = kernel.commit_op(
+                conn,
+                entity_id=entity_id,
+                entity_type=cls.entity_type,
+                op_type="heartbeat",
+                payload={"actor_id": actor_id, "ttl_seconds": ttl_seconds},
+                parent_op_ids=[entity_id],
+                actor_id=actor_id,
+            )
+
+            kernel.emit_event(
+                conn,
+                op_id=op["op_id"],
+                event_type="item.heartbeat",
+                payload={"entity_id": entity_id, "identifier": identifier, "actor_id": actor_id},
+            )
 
             conn.commit()
             return dict(row)

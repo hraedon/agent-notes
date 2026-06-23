@@ -121,6 +121,9 @@ class LocalKeySigner:
     def key_id(self) -> str:
         return hashlib.sha256(self._public_key).hexdigest()[:16]
 
+    def public_key(self) -> bytes:
+        return self._public_key
+
 
 # ---------------------------------------------------------------------------
 # Null signer (P0 default — envelopes emitted but not signed)

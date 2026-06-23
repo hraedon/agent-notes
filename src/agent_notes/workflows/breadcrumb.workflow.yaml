@@ -1,0 +1,121 @@
+# The agent-notes breadcrumb lifecycle, as a regista workflow (Plan 009).
+# agent-notes becomes a face of regista; this workflow is registered in the
+# agent-notes regista project (default schema `agent_notes`). States mirror the
+# op_log status lattice (core/kernel.py _STATUS_LATTICE: open > claimed >
+# deferred > closed). One work_item_type, `breadcrumb`; field amendments use
+# self-transitions (`amend_*`) via regista transition()'s custom_fields param.
+name: breadcrumb
+version: 1
+regista_version: "0.4.0"
+
+states:
+  - name: open
+    initial: true
+  - name: claimed
+  - name: deferred
+  - name: closed
+    terminal: true
+
+roles:
+  - name: agent
+  - name: human
+  - name: system
+
+transitions:
+  - name: claim
+    from: open
+    to: claimed
+    allowed_roles: [agent, human, system]
+  - name: release
+    from: claimed
+    to: open
+    allowed_roles: [agent, human, system]
+  - name: close_open
+    from: open
+    to: closed
+    allowed_roles: [agent, human, system]
+  - name: close_claimed
+    from: claimed
+    to: closed
+    allowed_roles: [agent, human, system]
+  - name: close_deferred
+    from: deferred
+    to: closed
+    allowed_roles: [agent, human, system]
+  - name: defer_open
+    from: open
+    to: deferred
+    allowed_roles: [agent, human, system]
+  - name: defer_claimed
+    from: claimed
+    to: deferred
+    allowed_roles: [agent, human, system]
+  - name: reopen
+    from: closed
+    to: open
+    allowed_roles: [agent, human, system]
+  - name: undefer
+    from: deferred
+    to: open
+    allowed_roles: [agent, human, system]
+  - name: amend_open
+    from: open
+    to: open
+    allowed_roles: [agent, human, system]
+  - name: amend_claimed
+    from: claimed
+    to: claimed
+    allowed_roles: [agent, human, system]
+  - name: amend_deferred
+    from: deferred
+    to: deferred
+    allowed_roles: [agent, human, system]
+
+work_item_types:
+  - name: breadcrumb
+    custom_fields:
+      - name: title
+        type: string
+        required: true
+        ui_visible: true
+      - name: description
+        type: string
+        required: false
+        ui_visible: true
+      - name: severity
+        type: enum
+        enum_values: [low, medium, high, urgent]
+        default: medium
+        ui_visible: true
+      - name: kind
+        type: enum
+        enum_values:
+          - todo
+          - observation
+          - decision
+          - risk
+          - task
+          - bug
+          - feature
+          - improvement
+          - question
+          - experiment
+          - spike
+          - refactor
+          - docs
+          - ci
+          - job
+        default: todo
+        ui_visible: true
+      - name: external_refs
+        type: json
+        required: false
+        ui_visible: true
+      - name: diagnostic_keys
+        type: json
+        required: false
+        ui_visible: true
+      - name: source_identifier
+        type: string
+        required: false
+        ui_visible: true

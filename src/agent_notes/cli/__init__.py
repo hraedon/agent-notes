@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 
+from agent_notes.cli.admin import register_admin_parsers
 from agent_notes.cli.breadcrumbs import register_breadcrumb_parsers
 from agent_notes.cli.changes import register_changes_parsers
 from agent_notes.cli.common import EXIT_GENERIC, EXIT_NOT_CONFIGURED, EXIT_SUCCESS
@@ -19,6 +20,7 @@ from agent_notes.cli.export import register_export_parsers
 from agent_notes.cli.links import register_link_parsers
 from agent_notes.cli.memory import register_memory_parsers
 from agent_notes.cli.orient import register_orient_parser
+from agent_notes.cli.outbox import register_outbox_parsers
 from agent_notes.cli.search import register_search_parsers
 from agent_notes.cli.skills import register_skills_parser
 from agent_notes.cli.verify import register_verify_parsers
@@ -181,6 +183,8 @@ def main() -> int:
     register_export_parsers(sub)
     register_orient_parser(sub)
     register_verify_parsers(sub)
+    register_outbox_parsers(sub)
+    register_admin_parsers(sub)
 
     args = parser.parse_args()
 

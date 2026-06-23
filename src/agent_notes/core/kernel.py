@@ -2,7 +2,9 @@
 
 Public surface:
 - `create_op` / `commit_op` — write an op to the op-log and fold into cache.
-- `fold_entity` — rebuild current state for an entity from its op chain.
+- `fold_work_item_state` — pure in-memory fold of a work_item's state (no DB write).
+- `fold_work_item` — fold and upsert into the `work_items` cache.
+- `fold_all_work_items` — rebuild the entire cache (useful for recovery).
 - `fold_all` — rebuild the entire cache (useful for recovery).
 - `merge_entity` — deterministic merge of two divergent chains (P2).
 - `reconcile_entity` — merge remote ops into local, write a `merge` op (P2).
@@ -297,15 +299,18 @@ def _apply_op_to_state(state: dict[str, Any], op: dict) -> None:
         state.update(merged)
 
 
-def fold_work_item(conn: psycopg.Connection, entity_id: str) -> dict | None:
-    """Rebuild a work_item from its op chain and write to the cache.
+def fold_work_item_state(conn: psycopg.Connection, entity_id: str) -> dict | None:
+    """Rebuild a work_item's state from its op chain, in-memory (no DB write).
 
-    P2 changes:
+    P2 semantics:
     - Ops are grouped by ``lamport``; concurrent ops (same lamport) have their
       status changes resolved by the fail-safe lattice (open > claimed > closed).
     - ``merge`` ops replace state with the merged payload.
 
-    Returns the folded work_item dict, or None if the entity has no ops.
+    Returns the folded state dict, or ``None`` if the entity has no ops or is a
+    dangling entity (no create op).  This is the pure fold;
+    :func:`fold_work_item` wraps it to also upsert into the ``work_items``
+    cache, and the verifier uses it to compare the fold against the live cache.
     """
     ops = _get_entity_ops(conn, entity_id)
     if not ops:
@@ -355,6 +360,21 @@ def fold_work_item(conn: psycopg.Connection, entity_id: str) -> dict | None:
 
     # If we never got a create op, this is a dangling entity.
     if state["project_id"] is None or state["identifier"] is None:
+        return None
+
+    return state
+
+
+def fold_work_item(conn: psycopg.Connection, entity_id: str) -> dict | None:
+    """Rebuild a work_item from its op chain and write to the cache.
+
+    Wraps :func:`fold_work_item_state` (the pure in-memory fold) and upserts
+    the result into the ``work_items`` cache.
+
+    Returns the cached work_item dict, or ``None`` if the entity has no ops.
+    """
+    state = fold_work_item_state(conn, entity_id)
+    if state is None:
         return None
 
     # Upsert into work_items cache.

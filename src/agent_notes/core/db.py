@@ -346,9 +346,12 @@ def delete_vocabulary(workspace_id: int, kind_namespace: str, name: str) -> None
 
 def _check_vocab_references(workspace_id: int, kind_namespace: str, name: str) -> None:
     """Reference check across kind tables (decision 9)."""
+    # bc_* namespaces are legacy aliases for wi_*
+    namespace_map = {"bc_kind": "wi_kind", "bc_status": "wi_status", "bc_severity": "wi_severity"}
+    effective = namespace_map.get(kind_namespace, kind_namespace)
     with _conn() as conn:
         cur = conn.cursor()
-        if kind_namespace == "wi_kind":
+        if effective == "wi_kind":
             cur.execute(
                 "SELECT 1 FROM work_items "
                 "WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = %s) "
@@ -360,7 +363,7 @@ def _check_vocab_references(workspace_id: int, kind_namespace: str, name: str) -
                     "Cannot delete vocabulary entry: "
                     f"kind '{name}' is still referenced by work_items"
                 )
-        elif kind_namespace == "wi_status":
+        elif effective == "wi_status":
             cur.execute(
                 "SELECT 1 FROM work_items "
                 "WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = %s) "
@@ -372,7 +375,7 @@ def _check_vocab_references(workspace_id: int, kind_namespace: str, name: str) -
                     "Cannot delete vocabulary entry: "
                     f"status '{name}' is still referenced by work_items"
                 )
-        elif kind_namespace == "wi_severity":
+        elif effective == "wi_severity":
             cur.execute(
                 "SELECT 1 FROM work_items "
                 "WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = %s) "
@@ -383,42 +386,6 @@ def _check_vocab_references(workspace_id: int, kind_namespace: str, name: str) -
                 raise ValueError(
                     "Cannot delete vocabulary entry: "
                     f"severity '{name}' is still referenced by work_items"
-                )
-        elif kind_namespace == "bc_kind":
-            cur.execute(
-                "SELECT 1 FROM work_items "
-                "WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = %s) "
-                "AND kind = %s LIMIT 1",
-                (workspace_id, name),
-            )
-            if cur.fetchone():
-                raise ValueError(
-                    "Cannot delete vocabulary entry: "
-                    f"kind '{name}' is still referenced by work_items (bc_kind namespace)"
-                )
-        elif kind_namespace == "bc_status":
-            cur.execute(
-                "SELECT 1 FROM work_items "
-                "WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = %s) "
-                "AND status = %s LIMIT 1",
-                (workspace_id, name),
-            )
-            if cur.fetchone():
-                raise ValueError(
-                    "Cannot delete vocabulary entry: "
-                    f"status '{name}' is still referenced by work_items (bc_status namespace)"
-                )
-        elif kind_namespace == "bc_severity":
-            cur.execute(
-                "SELECT 1 FROM work_items "
-                "WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = %s) "
-                "AND severity = %s LIMIT 1",
-                (workspace_id, name),
-            )
-            if cur.fetchone():
-                raise ValueError(
-                    "Cannot delete vocabulary entry: "
-                    f"severity '{name}' is still referenced by work_items (bc_severity namespace)"
                 )
         elif kind_namespace == "memory_type":
             cur.execute(
