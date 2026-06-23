@@ -21,6 +21,7 @@ from agent_notes.cli.links import register_link_parsers
 from agent_notes.cli.memory import register_memory_parsers
 from agent_notes.cli.orient import register_orient_parser
 from agent_notes.cli.outbox import register_outbox_parsers
+from agent_notes.cli.projection import register_projection_parsers
 from agent_notes.cli.search import register_search_parsers
 from agent_notes.cli.skills import register_skills_parser
 from agent_notes.cli.verify import register_verify_parsers
@@ -63,6 +64,39 @@ def _install_claude_session_hook(repo_root: str) -> tuple[str, bool]:
     return settings_path, not already
 
 
+def _install_claude_stop_hook(repo_root: str) -> tuple[str, bool]:
+    """Wire a Stop hook into <repo>/.claude/settings.json that replays the
+    regista outbox (Plan 009 §12.4). Non-optional reconcile on session end; if
+    regista is unreachable the reconcile is a no-op and `orient`/`outbox status`
+    surface the stale count next session. Idempotent. Returns (path, changed).
+    """
+    settings_path = os.path.join(repo_root, ".claude", "settings.json")
+    os.makedirs(os.path.dirname(settings_path), exist_ok=True)
+    settings: dict = {}
+    if os.path.exists(settings_path):
+        try:
+            settings = json.loads(open(settings_path, encoding="utf-8").read()) or {}
+        except (json.JSONDecodeError, OSError):
+            settings = {}
+    hooks = settings.setdefault("hooks", {})
+    stop = hooks.setdefault("Stop", [])
+    command = "agent-notes outbox reconcile >/dev/null || true"
+    already = any(
+        isinstance(entry, dict)
+        and any(
+            h.get("command", "").startswith("agent-notes outbox reconcile")
+            for h in entry.get("hooks", [])
+            if isinstance(h, dict)
+        )
+        for entry in stop
+    )
+    if not already:
+        stop.append({"hooks": [{"type": "command", "command": command}]})
+    with open(settings_path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(settings, indent=2) + "\n")
+    return settings_path, not already
+
+
 def cmd_init(
     path: str | None,
     workspace_slug: str | None = None,
@@ -98,6 +132,9 @@ def cmd_init(
         settings_path, changed = _install_claude_session_hook(repo_root)
         verb = "wired" if changed else "already present"
         print(f"Claude Code SessionStart -> `agent-notes orient` {verb} in {settings_path}.")
+        stop_path, stop_changed = _install_claude_stop_hook(repo_root)
+        stop_verb = "wired" if stop_changed else "already present"
+        print(f"Claude Code Stop -> `agent-notes outbox reconcile` {stop_verb} in {stop_path}.")
 
     print(
         "Next: `agent-notes install-skills --target claude` and `--target opencode` "
@@ -184,6 +221,7 @@ def main() -> int:
     register_orient_parser(sub)
     register_verify_parsers(sub)
     register_outbox_parsers(sub)
+    register_projection_parsers(sub)
     register_admin_parsers(sub)
 
     args = parser.parse_args()

@@ -20,8 +20,12 @@ const ORIENT_TIMEOUT_MS = parseInt(
   process.env.AGENT_NOTES_ORIENT_TIMEOUT_MS ?? "15000",
   10
 );
+const RECONCILE_TIMEOUT_MS = parseInt(
+  process.env.AGENT_NOTES_RECONCILE_TIMEOUT_MS ?? "60000",
+  10
+);
 
-function invokeAgentNotes(args, client) {
+function invokeAgentNotes(args, client, timeoutMs = ORIENT_TIMEOUT_MS) {
   return new Promise((resolve) => {
     const proc = spawn("agent-notes", args, {
       stdio: ["pipe", "pipe", "pipe"],
@@ -52,27 +56,25 @@ function invokeAgentNotes(args, client) {
     proc.stdin.end();
 
     proc.on("close", (exitCode) => {
-      if (exitCode !== 0) {
+      // Reconcile exits non-zero on conflicts/rejected but still prints a JSON
+      // report on stdout, so parse stdout regardless of exit code.
+      let data = null;
+      if (stdout.trim()) {
+        try {
+          data = JSON.parse(stdout);
+        } catch {
+          data = stdout.trim();
+        }
+      }
+      if (exitCode !== 0 && data === null) {
         const msg = `[agent-notes] failed (exit ${exitCode}): ${stderr.trim().slice(0, 200)}`;
         if (client?.app?.log) {
           client.app.log(msg);
         } else {
           console.error(msg);
         }
-        resolve({ status: "error", stderr: stderr.trim() });
-        return;
       }
-
-      if (!stdout.trim()) {
-        resolve({ status: "error", reason: "empty stdout" });
-        return;
-      }
-
-      try {
-        resolve({ status: "ok", data: JSON.parse(stdout) });
-      } catch {
-        resolve({ status: "ok", data: stdout.trim() });
-      }
+      resolve({ status: exitCode === 0 ? "ok" : "exit", code: exitCode, data, stderr: stderr.trim() });
     });
   });
 }
@@ -110,6 +112,73 @@ function formatOrientPayload(payload) {
   return lines.join("\n");
 }
 
+async function buildRegistaSyncBlock(client) {
+  // dossier-006 §6: Stop/PreCompact must reconcile and loudly report pending
+  // ops. Reconcile is best-effort — if regista is unreachable it replays nothing
+  // and the ops stay in the outbox; we then surface the stale count loudly.
+  const lines = ["", "## Regista Sync"];
+
+  let recData = null;
+  try {
+    const rec = await invokeAgentNotes(
+      ["outbox", "reconcile", "--json"],
+      client,
+      RECONCILE_TIMEOUT_MS
+    );
+    // Reconcile exits non-zero on conflicts/rejected but still prints a JSON
+    // report, so parse the data regardless of status.
+    if (rec.data && typeof rec.data === "object") {
+      recData = rec.data;
+    }
+  } catch {
+    recData = null;
+  }
+  if (recData && (recData.replayed !== undefined || recData.error)) {
+    if (recData.error) {
+      lines.push(`Reconcile: not run — ${recData.error}`);
+    } else {
+      lines.push(
+        `Reconcile: replayed ${recData.replayed ?? 0}, rejected ${recData.rejected ?? 0}, ` +
+          `conflicts ${recData.conflicts ?? 0}.`
+      );
+    }
+  } else {
+    lines.push("Reconcile: unavailable (see logs).");
+  }
+
+  let totalPending = 0;
+  let detail = "";
+  try {
+    const status = await invokeAgentNotes(["outbox", "status", "--json"], client);
+    if (status.data && Array.isArray(status.data.projects)) {
+      for (const p of status.data.projects) {
+        totalPending += p.pending ?? 0;
+      }
+      if (status.data.projects.length > 0) {
+        detail = status.data.projects
+          .map((p) => `${p.project}: ${p.pending} pending/${p.conflicts} conflicts`)
+          .join("; ");
+      }
+    }
+  } catch {
+    totalPending = -1;
+  }
+  if (totalPending > 0) {
+    lines.push(
+      `⚠ STALE — ${totalPending} op(s) still pending sync. ` +
+        `Resolve before relying on work-item state. ` +
+        (detail ? `(${detail}) ` : "") +
+        `Run: agent-notes outbox reconcile`
+    );
+  } else if (totalPending === 0) {
+    lines.push("No ops pending sync.");
+  } else {
+    lines.push("Outbox status unavailable (see logs).");
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
 export default async function agentNotesPlugin(ctx) {
   const sessionDirs = new Map();
 
@@ -140,7 +209,7 @@ export default async function agentNotesPlugin(ctx) {
         ctx.client
       );
 
-      if (reply.status === "ok" && typeof reply.data === "object") {
+      if (reply.status === "ok" && reply.data && typeof reply.data === "object") {
         const orientText = formatOrientPayload(reply.data);
         output.system = output.system ?? [];
         if (!Array.isArray(output.system)) {
@@ -161,6 +230,8 @@ export default async function agentNotesPlugin(ctx) {
       const sessionID = input.sessionID;
       const dir = sessionDirs.get(sessionID);
 
+      const syncBlock = await buildRegistaSyncBlock(ctx.client);
+
       const reconcilePrompt = [
         "",
         "## Reconciliation Checklist",
@@ -176,7 +247,7 @@ export default async function agentNotesPlugin(ctx) {
       ].join("\n");
 
       output.context = output.context ?? [];
-      output.context.push(reconcilePrompt);
+      output.context.push(syncBlock + reconcilePrompt);
 
       if (dir) {
         ctx.client?.app?.log?.(

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from agent_notes.cli.common import (
     EXIT_NOT_CONFIGURED,
@@ -19,6 +20,9 @@ from agent_notes.cli.common import (
     _resolve,
     report_resolution_failure,
 )
+from agent_notes.core import config as reg_config
+from agent_notes.core import outbox, projection
+from agent_notes.core.db import _conn
 
 
 def cmd_orient(args: argparse.Namespace) -> int:
@@ -56,6 +60,22 @@ def cmd_orient(args: argparse.Namespace) -> int:
             _repo_root, [wi["identifier"] for wi in open_wis], lookback=200
         )
 
+    cfg = reg_config.regista_config()
+    regista_sync: dict[str, Any] = {
+        "enabled": cfg.enabled,
+        "project": cfg.project,
+        "outbox_pending": 0,
+        "outbox_conflicts": 0,
+        "outbox_rejected": 0,
+        "pending_sync_rows": 0,
+    }
+    if cfg.enabled:
+        regista_sync["outbox_pending"] = outbox.count_ops(cfg.project)
+        regista_sync["outbox_conflicts"] = outbox.count_sidecar(cfg.project, "conflicts.jsonl")
+        regista_sync["outbox_rejected"] = outbox.count_sidecar(cfg.project, "rejected.jsonl")
+        with _conn() as conn:
+            regista_sync["pending_sync_rows"] = projection.count_pending(conn, proj_id)
+
     payload = {
         "project": proj_slug,
         "workspace": ws_slug,
@@ -83,6 +103,7 @@ def cmd_orient(args: argparse.Namespace) -> int:
             {"identifier": ident, "commit": info["commit"], "subject": info["subject"]}
             for ident, info in sorted(drift.items())
         ],
+        "regista_sync": regista_sync,
     }
 
     if use_json:
@@ -99,6 +120,16 @@ def cmd_orient(args: argparse.Namespace) -> int:
             )
             for ident, info in sorted(drift.items()):
                 print(f"  - {ident} — {info['commit']} {info['subject']!r}")
+        pending = regista_sync["outbox_pending"]
+        if cfg.enabled and (pending or regista_sync["outbox_conflicts"]
+                or regista_sync["outbox_rejected"] or regista_sync["pending_sync_rows"]):
+            print(
+                f"\n⚠ STALE — {pending} op(s) pending sync"
+                f" (+{regista_sync['outbox_conflicts']} conflicts, "
+                f"{regista_sync['outbox_rejected']} rejected, "
+                f"{regista_sync['pending_sync_rows']} stale projection rows); "
+                "run 'agent-notes outbox reconcile'"
+            )
         print(f"\nChanges in last {args.days}d ({len(changes)}):")
         for c in changes:
             print(f"  - [{c.kind}] {c.identifier} {c.event} @ {c.changed_at}")

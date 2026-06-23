@@ -334,3 +334,63 @@ P1 (kimi); kimi on P2 (glm). Findings applied (suite 324→381, lint clean):
   rebuildable). D4. A `rebuild_projection_from_regista` recovery command is the
   follow-up if this bites in practice.
 
+## 12. P3 — projection + enforcement hooks (dossier-006 §8.3, §3, §6)
+
+P1/P2 made regista authoritative and the write path offline-tolerant. P3 makes
+**staleness honest and drift non-optional**: the agent always sees sync state,
+and the harness reconciles on lifecycle boundaries. (Shipped 2026-06-23.)
+
+### 12.1 Staleness surfacing (§3, §6.3-6.4)
+- `orient` gains a **regista_sync** section: pending outbox ops
+  (`outbox.count_ops`), unresolved conflicts/rejected sidecars, and
+  `pending_sync` projection rows. Cheap and DB-only (no embedding load); the
+  human STALE line reports the components (pending / conflicts / rejected /
+  stale-rows) rather than summing heterogeneous counts. Surfaced in `--json`
+  (for hooks) and human output.
+- `doctor._check_regista_face` reports regista face health (enabled? project?)
+  + outbox counts; wrapped to **warn**, never fail the whole doctor.
+
+### 12.2 Projection rebuild (closes the §11 accepted-tradeoff gap)
+- `agent-notes projection rebuild-from-regista [--project <slug>]`: pages
+  through every regista `breadcrumb` work-item (the face `list()` now paginates
+  via cursor) and re-mirrors the local projection (match by
+  `regista_work_item_id` / `source_identifier`), clearing `pending_sync`. The
+  recovery path when a crash left the projection stale. Idempotent; per-item
+  commit so a mid-rebuild failure is resumable.
+
+### 12.3 Generated md view with staleness banner (§3)
+- `breadcrumb export-index` prepends a prominent `⚠ STALE — N ops pending sync`
+  banner when the outbox is non-empty. md stays a generated view, not a record.
+
+### 12.4 Enforcement hooks (§6) — non-optionality
+- **SessionStart** → `orient` (already wired on Claude + opencode); with §12.1
+  it surfaces sync state every session.
+- **Stop / PreCompact** → reconcile; must accept "no change"; if regista is
+  unreachable, leave the outbox and surface "N ops pending sync."
+  - opencode `experimental.session.compacting`: runs `agent-notes outbox
+    reconcile` + `outbox status` and injects the real sync block (parses the
+    report regardless of exit code — conflicts exit non-zero but still print
+    JSON; independent try/catch so a reconcile timeout doesn't hide the status).
+  - Claude Code `init` now also wires a `Stop` hook → `agent-notes outbox
+    reconcile` (suppresses verbose stdout, lets stderr through, `|| true` so
+    session-end never blocks).
+
+### 12.5 P3 review outcomes (2026-06-23)
+Cross-lineage review (nemotron on kimi+glm P3 work). Applied: `RegistaFace.list`
+cursor pagination (was one page → missed items >100, broke rebuild); doctor
+warn-not-fail; orient component-wise STALE line; opencode JS null-guard +
+status-agnostic report parsing + independent try/catch; Stop hook stderr
+surfacing.
+
+Not bugs (verified): reconcile ordering (apply→remove→clear) is the **safe**
+order — the op leaves the outbox only after regista accepted it, so a
+`pending_sync` clear failure is a recoverable cosmetic flag (the reviewer's
+proposed clear-then-remove swap would risk duplicate creates); outbox keyed by
+`cfg.project` is correct under D1.
+
+Follow-ups (non-blocking): the optional `TestE2EPostgres` skips because regista
+migrations target pg15 while the agent-notes testcontainer is pg17 — point that
+test at regista's pg15 test DSN (as dossier's e2e does); add `export-index`
+git-`check-ignore` confirmation per dossier-006 §4.2.
+
+

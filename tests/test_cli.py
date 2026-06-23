@@ -68,6 +68,14 @@ def _session_orient_cmds(settings: dict) -> list[str]:
     ]
 
 
+def _stop_reconcile_cmds(settings: dict) -> list[str]:
+    return [
+        h["command"]
+        for entry in settings.get("hooks", {}).get("Stop", [])
+        for h in entry.get("hooks", [])
+    ]
+
+
 def test_init_wires_session_hook_and_preserves_settings():
     with tempfile.TemporaryDirectory() as td:
         repo = Path(td) / "repo"
@@ -79,10 +87,20 @@ def test_init_wires_session_hook_and_preserves_settings():
         settings = json.loads((repo / ".claude" / "settings.json").read_text())
         assert settings["model"] == "x"
         assert any(c.startswith("agent-notes orient") for c in _session_orient_cmds(settings))
-        # Idempotent: re-running does not duplicate the hook.
+        assert any(
+            c.startswith("agent-notes outbox reconcile") for c in _stop_reconcile_cmds(settings)
+        )
+        # Idempotent: re-running does not duplicate either hook.
         _run("init", str(repo), check=False)
         settings2 = json.loads((repo / ".claude" / "settings.json").read_text())
         assert sum(c.startswith("agent-notes orient") for c in _session_orient_cmds(settings2)) == 1
+        assert (
+            sum(
+                c.startswith("agent-notes outbox reconcile")
+                for c in _stop_reconcile_cmds(settings2)
+            )
+            == 1
+        )
 
 
 def test_init_no_hooks_skips_settings():

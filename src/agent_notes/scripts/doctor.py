@@ -21,6 +21,10 @@ import sys
 import time
 from pathlib import Path
 
+from agent_notes.core import config as reg_config
+from agent_notes.core import outbox, projection
+from agent_notes.core.db import _conn
+
 
 def _print_section(title: str) -> None:
     print(f"\n{'─' * 60}")
@@ -269,6 +273,26 @@ def _check_bridge_target() -> tuple[bool, str]:
         return False, str(exc)
 
 
+def _check_regista_face() -> tuple[bool, str]:
+    try:
+        cfg = reg_config.regista_config()
+        if not cfg.enabled:
+            return True, "regista writes disabled (legacy op_log path)"
+        pending = outbox.count_ops(cfg.project)
+        conflicts = outbox.count_sidecar(cfg.project, "conflicts.jsonl")
+        rejected = outbox.count_sidecar(cfg.project, "rejected.jsonl")
+        with _conn() as conn:
+            pending_rows = projection.count_pending(conn)
+        return (
+            True,
+            f"enabled (project={cfg.project}); outbox pending={pending}, "
+            f"conflicts={conflicts}, rejected={rejected}, "
+            f"pending_sync rows={pending_rows}",
+        )
+    except Exception as exc:
+        return True, f"regista face check skipped (informational): {exc}"
+
+
 # Known console scripts shipped by this package (from pyproject.toml).
 _KNOWN_SCRIPTS = {
     "agent-notes",
@@ -407,6 +431,11 @@ def run(skip_embed: bool = False, check_embed: bool = False) -> int:
 
     ok, msg = _check_harness_configs()
     _print_section("8. Harness Configs")
+    _print_result(ok, msg)
+    all_ok = all_ok and ok
+
+    ok, msg = _check_regista_face()
+    _print_section("9. Regista Face")
     _print_result(ok, msg)
     all_ok = all_ok and ok
 

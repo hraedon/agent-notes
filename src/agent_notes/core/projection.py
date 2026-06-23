@@ -12,9 +12,11 @@ depend on it without editing each other.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
 import psycopg
+import psycopg.rows
 import psycopg.types.json
 
 from agent_notes.core import kernel
@@ -37,6 +39,108 @@ def state_to_status(state: str) -> str:
     if state not in _STATUS_FROM_STATE:
         raise ValueError(f"unknown regista breadcrumb state: {state!r}")
     return _STATUS_FROM_STATE[state]
+
+
+@dataclass(frozen=True, slots=True)
+class RebuildReport:
+    mirrored: int
+    created: int
+    skipped: int
+    failed: int
+
+
+def rebuild_from_regista(
+    conn: _ConnLike,
+    face: Any,
+    *,
+    project_id: int,
+) -> RebuildReport:
+    mirrored = 0
+    created = 0
+    skipped = 0
+    failed = 0
+    page_size = 100
+
+    try:
+        items = face.list(page_size=page_size)
+    except Exception:
+        return RebuildReport(mirrored=0, created=0, skipped=0, failed=1)
+
+    for wi in items:
+        try:
+            state = getattr(wi, "current_state", "")
+            _ = state_to_status(state)
+            regista_id = getattr(wi, "work_item_id", None)
+            if regista_id is None:
+                skipped += 1
+                continue
+            custom_fields = dict(getattr(wi, "custom_fields") or {})
+            local = find_local_for_regista(conn, regista_id)
+            if local:
+                identifier = local["identifier"]
+                entity_id = local["entity_id"]
+                mirrored += 1
+            else:
+                identifier = str(custom_fields.get("source_identifier") or "")
+                if identifier and _identifier_in_use(conn, project_id, identifier):
+                    identifier = ""
+                if not identifier:
+                    identifier = _allocate_identifier(conn, project_id)
+                entity_id = _entity_id_for_create(identifier, regista_id)
+                created += 1
+            mirror_from_regista(
+                conn,
+                project_id=project_id,
+                identifier=identifier,
+                entity_id=entity_id,
+                regista_work_item_id=regista_id,
+                state=state,
+                custom_fields=custom_fields,
+                pending_sync=False,
+                actor_id=None,
+            )
+            conn.commit()
+        except ValueError:
+            skipped += 1
+            conn.rollback()
+        except Exception:
+            failed += 1
+            conn.rollback()
+
+    return RebuildReport(
+        mirrored=mirrored,
+        created=created,
+        skipped=skipped,
+        failed=failed,
+    )
+
+
+def _allocate_identifier(conn: _ConnLike, project_id: int) -> str:
+    cur = conn.cursor(row_factory=psycopg.rows.tuple_row)
+    cur.execute("SELECT allocate_work_item_identifier(%s)", (project_id,))
+    row = cur.fetchone()
+    return row[0]
+
+
+def _identifier_in_use(conn: _ConnLike, project_id: int, identifier: str) -> bool:
+    cur = conn.cursor(row_factory=psycopg.rows.tuple_row)
+    cur.execute(
+        "SELECT 1 FROM work_items WHERE project_id = %s AND identifier = %s LIMIT 1",
+        (project_id, identifier),
+    )
+    return cur.fetchone() is not None
+
+
+def _entity_id_for_create(identifier: str, regista_work_item_id: Any) -> str:
+    return kernel._make_op_id(
+        "work_item",
+        "create",
+        {
+            "identifier": identifier,
+            "regista_work_item_id": str(regista_work_item_id),
+        },
+        [],
+    )
 
 
 def mirror_from_regista(

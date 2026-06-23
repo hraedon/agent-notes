@@ -26,6 +26,8 @@ from agent_notes.cli.common import (
     _resolve,
     report_resolution_failure,
 )
+from agent_notes.core import config as reg_config
+from agent_notes.core import outbox
 
 _BC_STATUS_TO_WI = {
     "new": "open",
@@ -417,6 +419,15 @@ def cmd_bc_export_index(args: argparse.Namespace) -> int:
         "# Do not edit by hand; regenerate with: agent-notes breadcrumb export-index",
         "",
     ]
+
+    cfg = reg_config.regista_config()
+    if cfg.enabled:
+        n = outbox.count_ops(cfg.project)
+        if n:
+            lines.insert(
+                0,
+                f"> ⚠ STALE — {n} ops pending sync; run `agent-notes outbox reconcile`",
+            )
 
     for wi in open_wis:
         ident = wi.get("identifier", "?")

@@ -190,12 +190,22 @@ class RegistaFace:
         return self._reg.get_work_item(work_item_id)
 
     def list(self, *, current_states: list[str] | None = None, page_size: int = 100) -> list[Any]:
-        page = self._reg.query_work_items(
-            workflow_name=WORKFLOW_NAME,
-            current_states=current_states,
-            page_size=page_size,
-        )
-        return list(page.items)
+        items: list[Any] = []
+        cursor: Any = None
+        while True:
+            page = self._reg.query_work_items(
+                workflow_name=WORKFLOW_NAME,
+                current_states=current_states,
+                page_size=page_size,
+                cursor=cursor,
+            )
+            items.extend(page.items)
+            if not getattr(page, "has_more", False):
+                break
+            cursor = getattr(page, "cursor", None)
+            if cursor is None:
+                break
+        return items
 
     def history(self, work_item_id: Any) -> list[Any]:
         return list(self._reg.read_events(work_item_id=work_item_id, limit=10_000))
