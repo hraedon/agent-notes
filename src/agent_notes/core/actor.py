@@ -18,6 +18,7 @@ _ACTOR_ID_ENV = "AGENT_NOTES_ACTOR_ID"
 _PRINCIPAL_ID_ENV = "AGENT_NOTES_PRINCIPAL_ID"
 _PRINCIPAL_KIND_ENV = "AGENT_NOTES_PRINCIPAL_KIND"
 _PRINCIPAL_DISPLAY_ENV = "AGENT_NOTES_PRINCIPAL_DISPLAY_NAME"
+_MODEL_LINEAGE_ENV = "AGENT_NOTES_MODEL_LINEAGE"
 _DEFAULT_ACTOR_ID = "agent-notes"
 
 
@@ -43,9 +44,13 @@ class Actor:
     display_name: str = ""
     on_behalf_of: dict | None = None
     role: str = "agent"
+    model_lineage: str | None = None
 
     def actor_metadata(self) -> dict:
-        return {"display_name": self.display_name or self.actor_id, "role": self.role}
+        meta = {"display_name": self.display_name or self.actor_id, "role": self.role}
+        if self.model_lineage:
+            meta["model_lineage"] = self.model_lineage
+        return meta
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +59,7 @@ class ActorConfig:
     principal_id: str | None = None
     principal_kind: str = "human"
     principal_display_name: str | None = None
+    model_lineage: str | None = None
     signer_overrides: dict = field(default_factory=dict)
 
 
@@ -63,6 +69,7 @@ def load_actor_config() -> ActorConfig:
         principal_id=os.environ.get(_PRINCIPAL_ID_ENV),
         principal_kind=os.environ.get(_PRINCIPAL_KIND_ENV) or "human",
         principal_display_name=os.environ.get(_PRINCIPAL_DISPLAY_ENV),
+        model_lineage=os.environ.get(_MODEL_LINEAGE_ENV) or None,
     )
     if cfg.principal_id is None:
         email = _git_config("user.email")
@@ -89,6 +96,7 @@ def resolve_actor(config: ActorConfig | None = None) -> Actor:
         actor_kind="agent",
         display_name=cfg.principal_display_name or cfg.actor_id,
         on_behalf_of=on_behalf_of,
+        model_lineage=cfg.model_lineage,
     )
 
 
