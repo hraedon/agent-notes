@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      # The test suite embeds with sentence-transformers (nomic-embed-text-v1.5).
+      # Cache the downloaded model so only the first run pays the ~500MB cost.
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ runner.os }}-nomic-embed-text-v1.5
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # regista is a public sibling repo, not on PyPI — install from git.
+          pip install "regista @ git+https://github.com/hraedon/regista.git@main"
+          # ruff is not in the [test] extra; install it for the lint step.
+          pip install ruff
+          pip install -e ".[test]"
+
+      - name: Lint
+        run: ruff check src/ tests/
+
+      # Postgres comes from testcontainers (Docker is preinstalled on ubuntu runners),
+      # so no service block is needed here.
+      - name: Test
+        run: pytest tests/ -v
