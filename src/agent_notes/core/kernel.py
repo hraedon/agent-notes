@@ -32,6 +32,7 @@ from psycopg.rows import dict_row
 
 from agent_notes.core.db import _conn
 from agent_notes.core.envelope import NullSigner, make_envelope
+from agent_notes.core.lifecycle import rank as _lifecycle_rank
 
 # ---------------------------------------------------------------------------
 # Content-addressed blobs
@@ -191,20 +192,20 @@ def _get_entity_ops(conn: psycopg.Connection, entity_id: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Status lattice (P2)
+# Status lattice (P2 / Plan 013)
 # ---------------------------------------------------------------------------
 
-# Fail-safe direction: open dominates closed (surface unfinished work).
-_STATUS_LATTICE = {
-    "open": 3,
-    "claimed": 2,
-    "closed": 1,
-    "deferred": 0,
-}
+# The lattice rank now lives in ``lifecycle.STATUS_RANK`` (single source).
+# Plan 013 WI-3: the old ``_STATUS_LATTICE`` only covered legacy states
+# (open/claimed/closed/deferred), so every canonical state resolved to
+# rank -1, silently breaking concurrent-op resolution. Routing through
+# ``lifecycle.rank`` covers all nine states.
 
 
 def _status_rank(status: str | None) -> int:
-    return _STATUS_LATTICE.get(status, -1) if status is not None else -1
+    if status is None:
+        return -1
+    return _lifecycle_rank(status)
 
 
 def _resolve_status_lattice(

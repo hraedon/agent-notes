@@ -183,6 +183,152 @@ class TestWorkItemClose:
             WorkItemModel.close_work_item(default_project.id, "WI-NONEXISTENT")
 
 
+# ---------------------------------------------------------------------------
+# Transition pre-flight (Plan 013 WI-5)
+# ---------------------------------------------------------------------------
+
+
+class TestTransitionPreFlight:
+    """Tests for the native-path transition pre-flight (Plan 013 WI-5).
+
+    Before WI-5, the native ``update_work_item`` path wrote any vocab-valid
+    status with no transition check — so an illegal state was creatable from
+    the native path (merely spelled consistently). The regista path already
+    enforced transitions. WI-5 makes both paths reject the same illegal
+    transitions, with an explicit ``force=True`` escape hatch.
+    """
+
+    def test_legal_transition_allowed(self, default_project):
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-PF-01",
+            title="Pre-flight",
+            status="open",
+            embedding=_vec768(),
+        )
+        updated = WorkItemModel.update_work_item(
+            project_id=default_project.id,
+            identifier="WI-PF-01",
+            status="in_progress",
+        )
+        assert updated["status"] == "in_progress"
+
+    def test_illegal_transition_rejected(self, default_project):
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-PF-02",
+            title="Pre-flight",
+            status="open",
+            embedding=_vec768(),
+        )
+        # open → in_review is not a valid transition (must go through in_progress)
+        with pytest.raises(ValueError, match="Unsupported status transition"):
+            WorkItemModel.update_work_item(
+                project_id=default_project.id,
+                identifier="WI-PF-02",
+                status="in_review",
+            )
+
+    def test_illegal_transition_force_bypasses(self, default_project):
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-PF-03",
+            title="Force override",
+            status="open",
+            embedding=_vec768(),
+        )
+        # force=True bypasses the transition check (admin/repair escape hatch)
+        updated = WorkItemModel.update_work_item(
+            project_id=default_project.id,
+            identifier="WI-PF-03",
+            status="in_review",
+            force=True,
+        )
+        assert updated["status"] == "in_review"
+
+    def test_same_status_no_transition_check(self, default_project):
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-PF-04",
+            title="Same status",
+            status="open",
+            embedding=_vec768(),
+        )
+        # Setting the same status should not trigger the transition check.
+        updated = WorkItemModel.update_work_item(
+            project_id=default_project.id,
+            identifier="WI-PF-04",
+            status="open",
+            title="Updated title",
+        )
+        assert updated["title"] == "Updated title"
+        assert updated["status"] == "open"
+
+    def test_no_status_no_transition_check(self, default_project):
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-PF-05",
+            title="No status",
+            status="open",
+            embedding=_vec768(),
+        )
+        # No status change → no transition check.
+        updated = WorkItemModel.update_work_item(
+            project_id=default_project.id,
+            identifier="WI-PF-05",
+            title="Updated title",
+        )
+        assert updated["title"] == "Updated title"
+
+    def test_set_status_rejects_illegal(self, default_project):
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-PF-06",
+            title="Set status",
+            status="in_progress",
+            embedding=_vec768(),
+        )
+        # in_progress → done is illegal (must go through review gate).
+        with pytest.raises(ValueError, match="Unsupported status transition"):
+            WorkItemModel.set_status(
+                project_id=default_project.id,
+                identifier="WI-PF-06",
+                status="done",
+            )
+
+    def test_set_status_force_bypasses(self, default_project):
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-PF-07",
+            title="Force set",
+            status="open",
+            embedding=_vec768(),
+        )
+        updated = WorkItemModel.set_status(
+            project_id=default_project.id,
+            identifier="WI-PF-07",
+            status="done",
+            force=True,
+        )
+        assert updated["status"] == "done"
+
+    def test_closed_alias_transition_allowed(self, default_project):
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-PF-08",
+            title="Closed alias",
+            status="open",
+            embedding=_vec768(),
+        )
+        # open → closed is an alias for open → done (close_from_open).
+        updated = WorkItemModel.update_work_item(
+            project_id=default_project.id,
+            identifier="WI-PF-08",
+            status="closed",
+        )
+        assert updated["status"] == "closed"
+
+
 class TestWorkItemDelete:
     def test_delete_work_item(self, default_project):
         WorkItemModel.file_work_item(
@@ -518,7 +664,11 @@ class TestStatusLattice:
         assert folded is not None
         assert folded["status"] == "open"
 
-    def test_closed_dominates_deferred_concurrent(self, default_project):
+    def test_deferred_dominates_closed_concurrent(self, default_project):
+        # Plan 013 §5: deferred (rank 2) dominates closed (rank 0) — deferred
+        # is a non-terminal idle state (unfinished), closed is a legacy
+        # terminal. The old _STATUS_LATTICE had closed > deferred (rank 1 vs
+        # 0), which violated the fail-safe principle (more-unfinished wins).
         wi = WorkItemModel.file_work_item(
             project_id=default_project.id,
             identifier="WI-LAT-02",
@@ -538,7 +688,7 @@ class TestStatusLattice:
         with kernel._conn() as conn:
             folded = kernel.fold_work_item(conn, entity_id)
         assert folded is not None
-        assert folded["status"] == "closed"
+        assert folded["status"] == "deferred"
 
     def test_tie_break_by_op_id(self, default_project):
         wi = WorkItemModel.file_work_item(
@@ -655,6 +805,337 @@ class TestStatusLattice:
         assert folded is not None
         assert folded["title"] == "New title"
         assert folded["status"] == "closed"
+
+
+# ---------------------------------------------------------------------------
+# Canonical-state lattice resolution (Plan 013 WI-3 — the P0 fix)
+# ---------------------------------------------------------------------------
+
+
+class TestCanonicalLatticeResolution:
+    """Tests that canonical states resolve correctly in concurrent conflicts.
+
+    Before Plan 013, ``_STATUS_LATTICE`` only covered legacy states
+    (open/claimed/closed/deferred), so every canonical state resolved to
+    rank -1. This meant concurrent canonical-vs-canonical ties were broken
+    purely by lexicographic op_id — a ``done`` with a smaller op_id would
+    silently beat ``in_progress``, violating the fail-safe principle.
+    """
+
+    def test_in_progress_dominates_done_concurrent(self, default_project):
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-CLAT-01",
+            title="Canonical lattice",
+            status="open",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+
+        with kernel._conn() as conn:
+            _insert_op_direct(
+                conn, entity_id, "work_item", "set_status", 999, {"status": "done"}
+            )
+            _insert_op_direct(
+                conn, entity_id, "work_item", "set_status", 999, {"status": "in_progress"}
+            )
+            conn.commit()
+
+        with kernel._conn() as conn:
+            folded = kernel.fold_work_item(conn, entity_id)
+        assert folded is not None
+        assert folded["status"] == "in_progress"
+
+    def test_open_dominates_in_progress_concurrent(self, default_project):
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-CLAT-02",
+            title="Open vs in_progress",
+            status="open",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+
+        with kernel._conn() as conn:
+            _insert_op_direct(
+                conn, entity_id, "work_item", "set_status", 999, {"status": "in_progress"}
+            )
+            _insert_op_direct(
+                conn, entity_id, "work_item", "set_status", 999, {"status": "open"}
+            )
+            conn.commit()
+
+        with kernel._conn() as conn:
+            folded = kernel.fold_work_item(conn, entity_id)
+        assert folded is not None
+        assert folded["status"] == "open"
+
+    def test_in_review_dominates_done_concurrent(self, default_project):
+        # The dangerous case from Plan 013 §0.3: a concurrent done must NOT
+        # silently beat in_review. Before the fix, both resolved to rank -1
+        # and the tie was broken by op_id (done could win).
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-CLAT-03",
+            title="Review vs done",
+            status="open",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+
+        with kernel._conn() as conn:
+            _insert_op_direct(
+                conn, entity_id, "work_item", "set_status", 999, {"status": "in_review"}
+            )
+            _insert_op_direct(
+                conn, entity_id, "work_item", "set_status", 999, {"status": "done"}
+            )
+            conn.commit()
+
+        with kernel._conn() as conn:
+            folded = kernel.fold_work_item(conn, entity_id)
+        assert folded is not None
+        assert folded["status"] == "in_review"
+
+    def test_in_progress_ties_with_blocked_by_op_id(self, default_project):
+        # in_progress and blocked have the same rank (7); tie breaks by op_id.
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-CLAT-04",
+            title="Tie break",
+            status="open",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+
+        with kernel._conn() as conn:
+            _insert_op_direct(
+                conn, entity_id, "work_item", "set_status", 999, {"status": "in_progress"}
+            )
+            _insert_op_direct(
+                conn, entity_id, "work_item", "set_status", 999, {"status": "blocked"}
+            )
+            conn.commit()
+
+        with kernel._conn() as conn:
+            folded = kernel.fold_work_item(conn, entity_id)
+        assert folded is not None
+        # Both have rank 7; the result is one of the two (tie-break by op_id).
+        assert folded["status"] in ("in_progress", "blocked")
+
+    def test_claimed_dominates_done_concurrent(self, default_project):
+        # Cross-axis (Plan 013 §0.4): claimed (rank 4) should beat done (rank 0).
+        # A lease should not be silently completed.
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-CLAT-05",
+            title="Claimed vs done",
+            status="open",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+
+        with kernel._conn() as conn:
+            _insert_op_direct(
+                conn, entity_id, "work_item", "set_status", 999, {"status": "done"}
+            )
+            _insert_op_direct(
+                conn, entity_id, "work_item", "set_status", 999, {"status": "claimed"}
+            )
+            conn.commit()
+
+        with kernel._conn() as conn:
+            folded = kernel.fold_work_item(conn, entity_id)
+        assert folded is not None
+        assert folded["status"] == "claimed"
+
+    def test_in_review_dominates_claimed_concurrent(self, default_project):
+        # Cross-axis: in_review (rank 6) should beat claimed (rank 4).
+        # Real lifecycle progress overrides a lease.
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-CLAT-06",
+            title="Review vs claimed",
+            status="open",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+
+        with kernel._conn() as conn:
+            _insert_op_direct(
+                conn, entity_id, "work_item", "set_status", 999, {"status": "claimed"}
+            )
+            _insert_op_direct(
+                conn, entity_id, "work_item", "set_status", 999, {"status": "in_review"}
+            )
+            conn.commit()
+
+        with kernel._conn() as conn:
+            folded = kernel.fold_work_item(conn, entity_id)
+        assert folded is not None
+        assert folded["status"] == "in_review"
+
+    def test_all_canonical_states_have_nonzero_rank_in_fold(self, default_project):
+        # Regression: every canonical state must resolve to a real rank (not -1)
+        # so concurrent resolution works. Verify each canonical state can win
+        # against a concurrent done.
+        from agent_notes.core.lifecycle import CANONICAL_STATES
+
+        non_terminal = CANONICAL_STATES - {"done"}
+        for i, status in enumerate(sorted(non_terminal)):
+            wi = WorkItemModel.file_work_item(
+                project_id=default_project.id,
+                identifier=f"WI-CLAT-REG-{i:02d}",
+                title=f"Regression {status}",
+                status="open",
+                embedding=_vec768(),
+            )
+            entity_id = wi["entity_id"]
+
+            with kernel._conn() as conn:
+                _insert_op_direct(
+                    conn, entity_id, "work_item", "set_status", 999, {"status": "done"}
+                )
+                _insert_op_direct(
+                    conn, entity_id, "work_item", "set_status", 999, {"status": status}
+                )
+                conn.commit()
+
+            with kernel._conn() as conn:
+                folded = kernel.fold_work_item(conn, entity_id)
+            assert folded is not None
+            assert folded["status"] == status, (
+                f"canonical state {status!r} did not dominate concurrent done "
+                f"(got {folded['status']!r}) — rank may be -1 (P0 regression)"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for _resolve_status_lattice (no DB — pure function)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveStatusLatticeUnit:
+    """Pure unit tests for the status lattice resolver (no DB needed).
+
+    These verify the resolution logic directly, without going through the
+    op-log fold. Each test constructs synthetic status ops and checks the
+    winning status.
+    """
+
+    @staticmethod
+    def _status_op(status: str, op_id: str) -> dict:
+        return {"op_type": "set_status", "op_id": op_id, "payload": {"status": status}}
+
+    @staticmethod
+    def _close_op(op_id: str) -> dict:
+        return {"op_type": "close", "op_id": op_id, "payload": {"reason": "test"}}
+
+    def test_single_canonical_status_applied_directly(self):
+        # Single op: sequential, applied directly.
+        result = kernel._resolve_status_lattice(
+            [self._status_op("in_progress", "aaa")], None
+        )
+        assert result == "in_progress"
+
+    def test_in_progress_beats_done(self):
+        ops = [
+            self._status_op("done", "aaa"),
+            self._status_op("in_progress", "bbb"),
+        ]
+        assert kernel._resolve_status_lattice(ops, None) == "in_progress"
+
+    def test_done_does_not_silently_complete(self):
+        # The core P0 bug: done with a smaller op_id must NOT beat in_progress.
+        ops = [
+            self._status_op("in_progress", "zzz"),
+            self._status_op("done", "aaa"),
+        ]
+        assert kernel._resolve_status_lattice(ops, None) == "in_progress"
+
+    def test_open_beats_all_canonical(self):
+        for status in ("in_progress", "blocked", "in_review", "in_human_review", "done"):
+            ops = [
+                self._status_op(status, "aaa"),
+                self._status_op("open", "bbb"),
+            ]
+            assert kernel._resolve_status_lattice(ops, None) == "open"
+
+    def test_canonical_tie_break_by_op_id(self):
+        # Same rank (in_progress == blocked, both 7): tie breaks by op_id.
+        ops = [
+            self._status_op("in_progress", "zzz"),
+            self._status_op("blocked", "aaa"),
+        ]
+        assert kernel._resolve_status_lattice(ops, None) == "blocked"
+
+    def test_close_op_resolves_to_closed(self):
+        ops = [self._close_op("aaa")]
+        assert kernel._resolve_status_lattice(ops, None) == "closed"
+
+    def test_close_vs_done_tie_by_op_id(self):
+        # close -> "closed" (rank 0), done (rank 0): tie, break by op_id.
+        ops = [
+            self._close_op("zzz"),
+            self._status_op("done", "aaa"),
+        ]
+        assert kernel._resolve_status_lattice(ops, None) == "done"
+
+    def test_empty_ops_returns_current(self):
+        assert kernel._resolve_status_lattice([], "in_progress") == "in_progress"
+
+    # --- Cross-axis tests (Plan 013 §0.4 — the adversarial review scope) ---
+
+    def test_claimed_beats_close_op(self):
+        # close -> "closed" (rank 0); claimed (rank 4) wins.
+        ops = [
+            self._close_op("aaa"),
+            self._status_op("claimed", "bbb"),
+        ]
+        assert kernel._resolve_status_lattice(ops, None) == "claimed"
+
+    def test_in_review_beats_close_op(self):
+        # close -> "closed" (rank 0); in_review (rank 6) wins.
+        ops = [
+            self._close_op("aaa"),
+            self._status_op("in_review", "bbb"),
+        ]
+        assert kernel._resolve_status_lattice(ops, None) == "in_review"
+
+    def test_deferred_beats_close_op(self):
+        # close -> "closed" (rank 0); deferred (rank 2) wins.
+        ops = [
+            self._close_op("aaa"),
+            self._status_op("deferred", "bbb"),
+        ]
+        assert kernel._resolve_status_lattice(ops, None) == "deferred"
+
+    def test_claimed_vs_deferred_concurrent(self):
+        # Cross-axis: claimed (rank 4) beats deferred (rank 2).
+        # A lease (potentially active) is more unfinished than a deliberate park.
+        ops = [
+            self._status_op("deferred", "aaa"),
+            self._status_op("claimed", "bbb"),
+        ]
+        assert kernel._resolve_status_lattice(ops, None) == "claimed"
+
+    def test_three_way_open_wins(self):
+        # Three concurrent ops: open, closed, done → open (rank 8).
+        ops = [
+            self._status_op("done", "aaa"),
+            self._close_op("bbb"),
+            self._status_op("open", "ccc"),
+        ]
+        assert kernel._resolve_status_lattice(ops, None) == "open"
+
+    def test_three_way_in_progress_wins(self):
+        # Three concurrent: done, close, in_progress → in_progress (rank 7).
+        ops = [
+            self._status_op("done", "aaa"),
+            self._close_op("bbb"),
+            self._status_op("in_progress", "ccc"),
+        ]
+        assert kernel._resolve_status_lattice(ops, None) == "in_progress"
 
 
 # ---------------------------------------------------------------------------

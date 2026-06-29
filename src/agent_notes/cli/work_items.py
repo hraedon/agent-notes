@@ -132,6 +132,7 @@ def cmd_wi_update(args: argparse.Namespace) -> int:
         wi = WorkItemModel.update_work_item(
             project_id=proj_id,
             identifier=args.identifier,
+            force=getattr(args, "force", False),
             **fields,
         )
     except ValueError as exc:
@@ -736,6 +737,12 @@ def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
     wi_update.add_argument("--type", default=None, dest="type")
     wi_update.add_argument("--status", default=None)
     wi_update.add_argument("--severity", default=None)
+    wi_update.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="Bypass the transition pre-flight check (Plan 013 WI-5; admin/repair only)",
+    )
     _add_common(wi_update)
     wi_update.set_defaults(func=cmd_wi_update)
 

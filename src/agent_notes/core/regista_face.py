@@ -252,6 +252,11 @@ class RegistaFace:
 
 
 # Terminal canonical states cannot be amended directly (reopen first).
+# Plan 013: this is intentionally a subset of lifecycle.IS_TERMINAL (which
+# also includes ``closed``). On the regista path, items should only be in
+# canonical states — ``closed`` is a legacy state that should not appear.
+# If this set diverges from lifecycle.IS_TERMINAL, the consistency guard in
+# test_lifecycle_consistency.py will flag it.
 _TERMINAL_STATES = frozenset({"done"})
 
 

@@ -71,3 +71,21 @@ def test_legacy_synonyms_map_to_canonical_equivalent():
     for legacy, canonical in cases.items():
         assert _map_status(legacy) == canonical
         assert _map_bc_status_to_wi(legacy) == canonical
+
+
+def test_bc_files_unknown_status_defaults_to_open():
+    # C1 fix: unknown statuses (not canonical, not a known legacy synonym)
+    # must default to "open" in the file-import path, preserving v1 ingest
+    # semantics. Without this, an on-disk status like "stabilized" would
+    # pass through and fail wi_status vocab validation.
+    assert _map_bc_status_to_wi("stabilized") == "open"
+    assert _map_bc_status_to_wi("unknown_status") == "open"
+    assert _map_bc_status_to_wi("") == "open"
+
+
+def test_cli_unknown_status_passes_through():
+    # The CLI path (--status) passes unknown statuses through unchanged
+    # (different from the file-import path which defaults to "open").
+    # This is intentional: the CLI validates against wi_status vocab, so an
+    # invalid status will be caught by _validate_vocab.
+    assert _map_status("stabilized") == "stabilized"

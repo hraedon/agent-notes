@@ -1,6 +1,6 @@
 # Plan 013 — Single-source status vocabulary (close the Plan-010 drift category)
 
-**Status:** Proposed 2026-06-29.
+**Status:** Implemented 2026-06-29 (WI-1 through WI-5 complete; adversarial-reviewed).
 **Author:** glm-5.2
 **Reviewed:** 2026-06-29 (opus-4.8) — approved with the refinements in §0. P0
 lattice bug verified live in `kernel._STATUS_LATTICE` on current main.

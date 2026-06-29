@@ -7,11 +7,11 @@
     execute. The status mapping here reflects the **legacy breadcrumb vocabulary
     that predated the canonical lifecycle (Plan 010)**: it maps ``in_progress`` →
     ``claimed`` and ``blocked`` → ``open`` because those canonical states did not
-    exist in the breadcrumb workflow yet. The *current* canonical lifecycle
+    exist in the breadcrumb workflow yet.     The *current* canonical lifecycle
     states (open/in_progress/blocked/deferred/in_review/in_human_review/done) and
     the correct legacy→canonical mapping live in
-    ``agent_notes.cli.breadcrumbs._BC_STATUS_TO_WI`` and
-    ``agent_notes.core.bc_files._map_bc_status_to_wi``.
+    ``agent_notes.core.lifecycle`` (``LEGACY_TO_CANONICAL`` /
+    ``map_legacy_to_canonical``).
 
 Usage (historical):
     AGENT_NOTES_DSN=postgresql://... \

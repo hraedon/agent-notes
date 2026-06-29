@@ -28,6 +28,7 @@ from psycopg.rows import dict_row
 from agent_notes.core import face_factory, kernel, projection
 from agent_notes.core.change_log import write_change
 from agent_notes.core.db import _conn
+from agent_notes.core.lifecycle import transition_for as _lifecycle_transition_for
 
 
 class WorkItemModel:
@@ -36,38 +37,14 @@ class WorkItemModel:
     kind = "work_item"
     entity_type = "work_item"
 
-    # Plan 010 WI-3: canonical transition table. Maps (old, new) canonical
-    # states to the workflow transition name. `closed` is accepted as a target
-    # alias for `done` (the canonical terminal) for backward compatibility with
-    # callers that pass the legacy breadcrumb vocabulary.
-    _CANONICAL_TRANSITIONS = {
-        ("open", "in_progress"): "start",
-        ("in_progress", "blocked"): "block",
-        ("blocked", "in_progress"): "unblock",
-        ("open", "deferred"): "defer",
-        ("in_progress", "deferred"): "defer",
-        ("deferred", "open"): "resume",
-        ("deferred", "in_progress"): "start",
-        ("in_progress", "in_review"): "submit_for_review",
-        ("in_review", "in_human_review"): "adversarial_pass",
-        ("in_review", "in_progress"): "request_changes",
-        ("in_human_review", "done"): "accept",
-        ("in_human_review", "in_progress"): "reject",
-        ("done", "open"): "reopen",
-        ("open", "done"): "close_from_open",
-    }
+    # Plan 013: the transition table and resolution logic now live in
+    # ``lifecycle`` (single source). ``_CANONICAL_TRANSITIONS`` is deleted;
+    # callers use ``lifecycle.transition_for`` via the thin wrapper below.
+    # ``closed`` (legacy terminal) is accepted as an alias for ``done``.
 
     @staticmethod
     def _transition_for_status_change(old_status: str, new_status: str) -> str | None:
-        if old_status == new_status:
-            return None
-        # `closed` (legacy breadcrumb terminal) is an alias for `done`.
-        old = "done" if old_status == "closed" else old_status
-        new = "done" if new_status == "closed" else new_status
-        transition = WorkItemModel._CANONICAL_TRANSITIONS.get((old, new))
-        if transition is not None:
-            return transition
-        raise ValueError(f"Unsupported status transition: {old_status!r} -> {new_status!r}")
+        return _lifecycle_transition_for(old_status, new_status)
 
     @staticmethod
     def _entity_id_for_regista_create(identifier: str, regista_work_item_id: Any) -> str:
@@ -470,6 +447,7 @@ class WorkItemModel:
         embedding: Any | None = None,
         frontmatter_version: int | None = None,
         actor_id: str | None = None,
+        force: bool = False,
     ) -> dict:
         face = face_factory.get_face()
         if face is not None:
@@ -529,6 +507,11 @@ class WorkItemModel:
 
             # If status changed, write a separate set_status op.
             if status is not None and status != old["status"]:
+                # Plan 013 WI-5: pre-flight transition check on the native path.
+                # Both paths (regista + native) now reject the same illegal
+                # transitions. ``force=True`` is the explicit admin escape hatch.
+                if not force:
+                    _lifecycle_transition_for(old["status"], status)
                 status_op = kernel.commit_op(
                     conn,
                     entity_id=entity_id,
@@ -666,13 +649,20 @@ class WorkItemModel:
         identifier: str,
         status: str,
         actor_id: str | None = None,
+        force: bool = False,
     ) -> dict:
-        """Dedicated status transition (writes a set_status op)."""
+        """Dedicated status transition (writes a set_status op).
+
+        Plan 013 WI-5: validates the transition via ``lifecycle.transition_for``
+        on the native path (same check as the regista path). Pass ``force=True``
+        to bypass the check for admin/repair overrides.
+        """
         return cls.update_work_item(
             project_id=project_id,
             identifier=identifier,
             status=status,
             actor_id=actor_id,
+            force=force,
         )
 
     @classmethod

@@ -17,6 +17,8 @@ from typing import Any, Callable
 
 import yaml
 
+from agent_notes.core.lifecycle import ALL_VALID_STATES, map_legacy_to_canonical
+
 # Sensible open/terminal flags for statuses commonly seen in file corpora.
 # Unknown statuses default to open / non-terminal; the operator can refine vocab.
 _STATUS_FLAGS: dict[str, tuple[bool, bool]] = {
@@ -86,36 +88,20 @@ def discover_breadcrumb_files(directory: Path, include_resolved: bool = True) ->
 
 
 def _map_bc_status_to_wi(bc_status: str) -> str:
-    # See cli/breadcrumbs.py: canonical lifecycle states pass through; legacy
-    # bc_status synonyms map to their canonical equivalent. `claimed` is a
-    # liveness axis, not a workflow state — never emit it here.
-    mapping = {
-        # Canonical lifecycle states — pass through.
-        "open": "open",
-        "in_progress": "in_progress",
-        "blocked": "blocked",
-        "deferred": "deferred",
-        "in_review": "in_review",
-        "in_human_review": "in_human_review",
-        "done": "done",
-        # Legacy breadcrumb synonyms → canonical equivalent.
-        "new": "open",
-        "active": "in_progress",
-        "under_review": "in_review",
-        "proposed": "open",
-        "decision-pending": "open",
-        # Legacy terminals → canonical terminal (`done`).
-        "resolved": "done",
-        "closed": "done",
-        "implemented": "done",
-        "accepted": "done",
-        "wont_fix": "deferred",
-        "wontfix": "deferred",
-        "duplicate": "deferred",
-        "obsolete": "deferred",
-        "rejected": "deferred",
-    }
-    return mapping.get(bc_status, "open")
+    # Plan 013: delegates to ``lifecycle.map_legacy_to_canonical`` (single
+    # source). Canonical states pass through; legacy bc_status synonyms map
+    # to their canonical equivalent. ``claimed`` is a liveness axis, not a
+    # workflow state — never emitted here.
+    #
+    # Unknown statuses (not canonical, not a known legacy synonym) default to
+    # ``open`` — preserving the v1 ingest semantics. Without this fallback,
+    # an on-disk status like ``stabilized`` would pass through unchanged and
+    # then fail ``wi_status`` vocab validation (a different namespace from
+    # ``bc_status`` which ``create_missing_vocab`` reconciles).
+    mapped = map_legacy_to_canonical(bc_status)
+    if mapped not in ALL_VALID_STATES:
+        return "open"
+    return mapped
 
 
 def sync_breadcrumbs_from_dir(

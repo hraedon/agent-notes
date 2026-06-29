@@ -28,43 +28,13 @@ from agent_notes.cli.common import (
 )
 from agent_notes.core import config as reg_config
 from agent_notes.core import outbox
+from agent_notes.core.lifecycle import map_legacy_to_canonical as _map_status
 
-# Legacy bc_status synonyms → canonical lifecycle (wi_status) states. Canonical
-# states MUST pass through unchanged: previously `in_progress`/`blocked` were
-# remapped to `claimed`/`open`, which made the canonical lifecycle unreachable
-# (an item could never enter `in_progress`, so `submit_for_review` was blocked).
-# `claimed` is a liveness/lease axis, NOT a workflow state (canonical.workflow.yaml
-# lines 30-31, Plan 010 WI-2) — no --status value may produce it.
-_BC_STATUS_TO_WI = {
-    # Canonical lifecycle states — pass through.
-    "open": "open",
-    "in_progress": "in_progress",
-    "blocked": "blocked",
-    "deferred": "deferred",
-    "in_review": "in_review",
-    "in_human_review": "in_human_review",
-    "done": "done",
-    # Legacy breadcrumb synonyms → canonical equivalent.
-    "new": "open",
-    "active": "in_progress",
-    "under_review": "in_review",
-    "proposed": "open",
-    "decision-pending": "open",
-    # Legacy terminals → canonical terminal (`done`; `closed` aliases it).
-    "resolved": "done",
-    "closed": "done",
-    "implemented": "done",
-    "accepted": "done",
-    "wont_fix": "deferred",
-    "wontfix": "deferred",
-    "duplicate": "deferred",
-    "obsolete": "deferred",
-    "rejected": "deferred",
-}
-
-
-def _map_status(status: str) -> str:
-    return _BC_STATUS_TO_WI.get(status, status)
+# Plan 013: the legacy bc_status → wi_status mapping now lives in
+# ``lifecycle.LEGACY_TO_CANONICAL`` (single source). The ``_map_status`` alias
+# is imported above from ``lifecycle.map_legacy_to_canonical``. Canonical
+# states pass through; ``claimed`` is never emitted (liveness axis, not a
+# workflow state).
 
 
 def _wi_to_bc_display(wi: dict, body: str | None = None) -> dict:
@@ -180,6 +150,7 @@ def cmd_bc_update(args: argparse.Namespace) -> int:
         wi = WorkItemModel.update_work_item(
             project_id=proj_id,
             identifier=args.identifier,
+            force=getattr(args, "force", False),
             **fields,
         )
     except ValueError as exc:
@@ -496,7 +467,9 @@ def cmd_bc_reconcile(args: argparse.Namespace) -> int:
             refs = dict(wi.get("external_refs") or {})
             refs["resolved_by_commit"] = info["commit"]
             refs["resolved_by_subject"] = info["subject"]
-            WorkItemModel.update_work_item(proj_id, ident, status="closed", external_refs=refs)
+            WorkItemModel.update_work_item(
+                proj_id, ident, status="closed", external_refs=refs, force=True
+            )
             applied = True
         results.append(
             {
@@ -555,6 +528,12 @@ def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
     bc_update.add_argument("--type", default=None, dest="type")
     bc_update.add_argument("--status", default=None)
     bc_update.add_argument("--severity", default=None)
+    bc_update.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="Bypass the transition pre-flight check (Plan 013 WI-5; admin/repair only)",
+    )
     _add_common(bc_update)
     bc_update.set_defaults(func=cmd_bc_update)
 
