@@ -190,7 +190,25 @@ _VALID_OP_TYPES = frozenset(
 
 _VALID_ENTITY_TYPES = frozenset(["work_item", "memory", "link"])
 
-_VALID_STATUS = frozenset(["open", "claimed", "closed", "deferred"])
+# Plan 010: canonical lifecycle states (in_progress/blocked/in_review/
+# in_human_review/done) are first-class; legacy breadcrumb states
+# (claimed/closed) remain valid for pre-migration items. Mirrors the
+# work_items_status CHECK constraint in 820_canonical_lifecycle.sql.
+_VALID_STATUS = frozenset(
+    [
+        # canonical lifecycle (v2)
+        "open",
+        "in_progress",
+        "blocked",
+        "deferred",
+        "in_review",
+        "in_human_review",
+        "done",
+        # legacy breadcrumb (v1)
+        "claimed",
+        "closed",
+    ]
+)
 
 
 def apply_policy(op: dict) -> Violation | None:

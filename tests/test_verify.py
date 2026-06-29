@@ -206,6 +206,38 @@ class TestApplyPolicy:
         assert v.rule == "policy"
         assert "Invalid status" in v.message
 
+    def test_canonical_lifecycle_statuses_accepted(self):
+        # Plan 010: the canonical lifecycle states must pass the policy check.
+        # Regression: _VALID_STATUS previously listed only legacy breadcrumb
+        # states (open/claimed/closed/deferred), so every native-path canonical
+        # set_status op was flagged as a violation.
+        for status in (
+            "in_progress",
+            "blocked",
+            "in_review",
+            "in_human_review",
+            "done",
+        ):
+            op = {
+                "op_id": "abc",
+                "op_type": "set_status",
+                "entity_type": "work_item",
+                "actor_id": "actor-1",
+                "payload": {"status": status},
+            }
+            assert apply_policy(op) is None, f"canonical status {status!r} rejected"
+
+    def test_legacy_statuses_still_accepted(self):
+        for status in ("open", "claimed", "closed", "deferred"):
+            op = {
+                "op_id": "abc",
+                "op_type": "set_status",
+                "entity_type": "work_item",
+                "actor_id": "actor-1",
+                "payload": {"status": status},
+            }
+            assert apply_policy(op) is None, f"legacy status {status!r} rejected"
+
 
 # ---------------------------------------------------------------------------
 # Entity-level and global verification
