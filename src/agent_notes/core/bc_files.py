@@ -86,25 +86,34 @@ def discover_breadcrumb_files(directory: Path, include_resolved: bool = True) ->
 
 
 def _map_bc_status_to_wi(bc_status: str) -> str:
+    # See cli/breadcrumbs.py: canonical lifecycle states pass through; legacy
+    # bc_status synonyms map to their canonical equivalent. `claimed` is a
+    # liveness axis, not a workflow state — never emit it here.
     mapping = {
-        "new": "open",
+        # Canonical lifecycle states — pass through.
         "open": "open",
-        "active": "claimed",
-        "in_progress": "claimed",
-        "blocked": "open",
-        "under_review": "claimed",
+        "in_progress": "in_progress",
+        "blocked": "blocked",
+        "deferred": "deferred",
+        "in_review": "in_review",
+        "in_human_review": "in_human_review",
+        "done": "done",
+        # Legacy breadcrumb synonyms → canonical equivalent.
+        "new": "open",
+        "active": "in_progress",
+        "under_review": "in_review",
         "proposed": "open",
         "decision-pending": "open",
-        "resolved": "closed",
-        "closed": "closed",
-        "implemented": "closed",
-        "accepted": "closed",
+        # Legacy terminals → canonical terminal (`done`).
+        "resolved": "done",
+        "closed": "done",
+        "implemented": "done",
+        "accepted": "done",
         "wont_fix": "deferred",
         "wontfix": "deferred",
         "duplicate": "deferred",
         "obsolete": "deferred",
         "rejected": "deferred",
-        "deferred": "deferred",
     }
     return mapping.get(bc_status, "open")
 

@@ -29,25 +29,37 @@ from agent_notes.cli.common import (
 from agent_notes.core import config as reg_config
 from agent_notes.core import outbox
 
+# Legacy bc_status synonyms → canonical lifecycle (wi_status) states. Canonical
+# states MUST pass through unchanged: previously `in_progress`/`blocked` were
+# remapped to `claimed`/`open`, which made the canonical lifecycle unreachable
+# (an item could never enter `in_progress`, so `submit_for_review` was blocked).
+# `claimed` is a liveness/lease axis, NOT a workflow state (canonical.workflow.yaml
+# lines 30-31, Plan 010 WI-2) — no --status value may produce it.
 _BC_STATUS_TO_WI = {
-    "new": "open",
+    # Canonical lifecycle states — pass through.
     "open": "open",
-    "active": "claimed",
-    "in_progress": "claimed",
-    "blocked": "open",
-    "under_review": "claimed",
+    "in_progress": "in_progress",
+    "blocked": "blocked",
+    "deferred": "deferred",
+    "in_review": "in_review",
+    "in_human_review": "in_human_review",
+    "done": "done",
+    # Legacy breadcrumb synonyms → canonical equivalent.
+    "new": "open",
+    "active": "in_progress",
+    "under_review": "in_review",
     "proposed": "open",
     "decision-pending": "open",
-    "resolved": "closed",
-    "closed": "closed",
-    "implemented": "closed",
-    "accepted": "closed",
+    # Legacy terminals → canonical terminal (`done`; `closed` aliases it).
+    "resolved": "done",
+    "closed": "done",
+    "implemented": "done",
+    "accepted": "done",
     "wont_fix": "deferred",
     "wontfix": "deferred",
     "duplicate": "deferred",
     "obsolete": "deferred",
     "rejected": "deferred",
-    "deferred": "deferred",
 }
 
 
