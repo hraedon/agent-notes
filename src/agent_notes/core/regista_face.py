@@ -19,7 +19,11 @@ from typing import Any, Protocol
 
 from agent_notes.core.actor import Actor
 
-WORKFLOW_NAME = "breadcrumb"
+# Plan 010 (WI-2): agent-notes registers the single canonical workflow shipped
+# from regista — the same one dossier registers — so a work-item is governed by
+# one shared workflow. `breadcrumb` remains the work-item *type* (its custom
+# fields are unchanged), now defined inside the canonical workflow.
+WORKFLOW_NAME = "canonical"
 WORK_ITEM_TYPE = "breadcrumb"
 
 
@@ -47,14 +51,16 @@ def _crack(actor: Actor) -> dict:
 
 
 def packaged_workflow_yaml() -> str:
-    import importlib.resources as ir
+    # The canonical workflow is shipped from regista (the authoritative store),
+    # so both faces register the exact same bytes — no per-face drift (Plan 010).
+    import regista
 
-    return (ir.files("agent_notes") / "workflows" / "breadcrumb.workflow.yaml").read_text()
+    return regista.canonical_workflow_yaml()
 
 
 class RegistaFace:
     """The agent/CLI face of regista. Construct with a ``Regista`` or
-    ``InMemoryRegista``; registers the breadcrumb workflow on construction."""
+    ``InMemoryRegista``; registers the canonical workflow on first use."""
 
     def __init__(self, regista: _RegistaLike) -> None:
         self._reg = regista
