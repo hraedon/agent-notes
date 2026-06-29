@@ -31,6 +31,9 @@ class _RegistaLike(Protocol):
     def get_work_item(self, *args: Any, **kwargs: Any) -> Any: ...
     def query_work_items(self, **kwargs: Any) -> Any: ...
     def read_events(self, **kwargs: Any) -> Any: ...
+    def acquire_claim(self, *args: Any, **kwargs: Any) -> Any: ...
+    def heartbeat_claim(self, *args: Any, **kwargs: Any) -> Any: ...
+    def release_claim(self, *args: Any, **kwargs: Any) -> None: ...
     def close(self) -> None: ...
 
 
@@ -210,9 +213,45 @@ class RegistaFace:
     def history(self, work_item_id: Any) -> list[Any]:
         return list(self._reg.read_events(work_item_id=work_item_id, limit=10_000))
 
+    # ------------------------------------------------------------------
+    # Lease axis (Plan 010 WI-2): regista claims, NOT lifecycle state.
+    # claim/release/heartbeat are concurrency + liveness primitives, orthogonal
+    # to the canonical workflow. The lifecycle does not move to `claimed`.
+    # ------------------------------------------------------------------
+    def acquire_claim(self, actor: Actor, work_item_id: Any, *, ttl_seconds: int = 300) -> Any:
+        ac = self._ac(actor)
+        return self._reg.acquire_claim(
+            work_item_id,
+            ac["actor_id"],
+            ttl_seconds,
+            actor_kind=ac["actor_kind"],
+        )
+
+    def heartbeat_claim(self, actor: Actor, work_item_id: Any, *, ttl_seconds: int = 300) -> Any:
+        ac = self._ac(actor)
+        return self._reg.heartbeat_claim(
+            work_item_id,
+            ac["actor_id"],
+            ttl_seconds,
+            actor_kind=ac["actor_kind"],
+        )
+
+    def release_claim(self, actor: Actor, work_item_id: Any) -> None:
+        ac = self._ac(actor)
+        self._reg.release_claim(
+            work_item_id,
+            ac["actor_id"],
+            actor_kind=ac["actor_kind"],
+        )
+
+
+# Terminal canonical states cannot be amended directly (reopen first).
+_TERMINAL_STATES = frozenset({"done"})
+
 
 def _amend_transition_for(state: str) -> str:
-    table = {"open": "amend_open", "claimed": "amend_claimed", "deferred": "amend_deferred"}
-    if state not in table:
-        raise ValueError(f"amend_breadcrumb: no amend transition for state {state!r}")
-    return table[state]
+    if state in _TERMINAL_STATES:
+        raise ValueError(f"amend_breadcrumb: cannot amend terminal state {state!r} (reopen first)")
+    # The canonical workflow defines `amend` as a self-transition for every
+    # non-terminal state; regista resolves it by the work-item's current `from`.
+    return "amend"

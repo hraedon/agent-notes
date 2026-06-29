@@ -144,9 +144,7 @@ class TestAC1UnreachableEnqueues:
         outface = OutboxAwareFace(
             face, project=_PROJECT, signer=signer, unreachable_probe=lambda: True
         )
-        state = outface.amend_breadcrumb(
-            actor, wid, current_state="open", title="Updated"
-        )
+        state = outface.amend_breadcrumb(actor, wid, current_state="open", title="Updated")
 
         assert state == "open"
         assert outface.last_op_outboxed is True
@@ -289,12 +287,12 @@ class TestAC3ConcurrentChangeConflict:
 
         enqueue(
             _PROJECT,
-            _make_transition_op(actor, wid, "close_open", expected_state="open"),
+            _make_transition_op(actor, wid, "close_from_open", expected_state="open"),
             signer,
         )
 
-        face.transition_breadcrumb(actor, wid, "close_open")
-        assert face.get(wid).current_state == "closed"
+        face.transition_breadcrumb(actor, wid, "close_from_open")
+        assert face.get(wid).current_state == "done"
 
         report = reconcile(_PROJECT, face=face, signer=signer)
 
@@ -303,7 +301,7 @@ class TestAC3ConcurrentChangeConflict:
         assert len(report.conflict_details) == 1
         detail = report.conflict_details[0]
         assert detail["expected_state"] == "open"
-        assert detail["actual_state"] == "closed"
+        assert detail["actual_state"] == "done"
 
         assert count_ops(_PROJECT) == 1
 
@@ -319,11 +317,11 @@ class TestAC3ConcurrentChangeConflict:
         face,
     ) -> None:
         wid, _ = face.create_breadcrumb(actor, title="Item")
-        face.transition_breadcrumb(actor, wid, "close_open")
+        face.transition_breadcrumb(actor, wid, "close_from_open")
 
         enqueue(
             _PROJECT,
-            _make_transition_op(actor, wid, "close_open", expected_state=None),
+            _make_transition_op(actor, wid, "close_from_open", expected_state=None),
             signer,
         )
 
@@ -349,7 +347,7 @@ class TestAC3ConcurrentChangeConflict:
         wid, _ = face.create_breadcrumb(actor, title="Live item")
 
         with pytest.raises(OutboxPendingError, match="pending sync"):
-            outface.transition_breadcrumb(actor, wid, "close_open")
+            outface.transition_breadcrumb(actor, wid, "close_from_open")
 
     def test_reopen_blocked_with_pending(
         self,
@@ -364,7 +362,7 @@ class TestAC3ConcurrentChangeConflict:
         outface.create_breadcrumb(actor, title="Pending offline op")
 
         wid, _ = face.create_breadcrumb(actor, title="Live item")
-        face.transition_breadcrumb(actor, wid, "close_open")
+        face.transition_breadcrumb(actor, wid, "close_from_open")
 
         with pytest.raises(OutboxPendingError, match="pending sync"):
             outface.transition_breadcrumb(actor, wid, "reopen")
@@ -382,7 +380,7 @@ class TestAC3ConcurrentChangeConflict:
         outface.create_breadcrumb(actor, title="Pending offline op")
 
         wid, _ = face.create_breadcrumb(actor, title="Live item")
-        outface.transition_breadcrumb(actor, wid, "claim")
+        outface.transition_breadcrumb(actor, wid, "start")
 
         assert outface.last_op_outboxed is True
         assert outface.pending_count() == 2
@@ -497,13 +495,13 @@ class TestPositiveReconcile:
 
         enqueue(
             _PROJECT,
-            _make_transition_op(actor, wid, "close_open", expected_state="open"),
+            _make_transition_op(actor, wid, "close_from_open", expected_state="open"),
             signer,
         )
 
         report2 = reconcile(_PROJECT, face=face, signer=signer)
         assert report2.replayed == 1
-        assert face.get(wid).current_state == "closed"
+        assert face.get(wid).current_state == "done"
         assert count_ops(_PROJECT) == 0
 
 
@@ -617,9 +615,7 @@ class TestE2EPostgres:
 
             try:
                 with psycopg.connect(dsn) as conn:
-                    conn.execute(
-                        f'DROP SCHEMA IF EXISTS "{project_name}" CASCADE'
-                    )
+                    conn.execute(f'DROP SCHEMA IF EXISTS "{project_name}" CASCADE')
                     conn.commit()
             except Exception:
                 pass
@@ -637,6 +633,9 @@ class _BusinessErrorFace:
         self.history = real_face.history
         self.create_breadcrumb = real_face.create_breadcrumb
         self.comment = real_face.comment
+        self.acquire_claim = real_face.acquire_claim
+        self.heartbeat_claim = real_face.heartbeat_claim
+        self.release_claim = real_face.release_claim
 
     def transition_breadcrumb(self, *args, **kwargs):
         from regista._errors import RegistaError
@@ -650,13 +649,10 @@ class TestBusinessErrorSurfaces:
     business error would make the agent believe a write succeeded when regista
     rejected it (provenance corruption, dossier-006 D2)."""
 
-    def test_business_error_raises_not_enqueues(
-        self, outbox_env, signer, actor, face
-    ):
+    def test_business_error_raises_not_enqueues(self, outbox_env, signer, actor, face):
         wid, _ = face.create_breadcrumb(actor, title="src")
         outface = OutboxAwareFace(_BusinessErrorFace(face), project=_PROJECT, signer=signer)
         with pytest.raises(Exception):
-            outface.transition_breadcrumb(actor, wid, "claim")
+            outface.transition_breadcrumb(actor, wid, "start")
         assert outface.last_op_outboxed is False
         assert outface.pending_count() == 0
-

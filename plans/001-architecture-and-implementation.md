@@ -556,3 +556,34 @@ Changes from v1.0:
 **Merge op:** The `merge` op carries a `merged_state` payload and replaces the entire state. This is the reconciliation primitive for replica logs.
 
 **Rationale:** This matches the Radicle COB / git-bug model: deterministic ordering by `(lamport, op_id)` with a lattice for concurrent conflicts. The lattice direction is intentionally fail-safe (unfinished work is visible) because silently closing work is the anti-pattern this project exists to kill.
+
+## 14. Plan 010 decision — canonical lifecycle convergence
+
+**Decision 58 (2026-06-28):** The regista-branch write path (when
+`AGENT_NOTES_REGISTA_WRITES=1`) uses the dossier v4 **canonical lifecycle
+workflow** (states: open/in_progress/blocked/deferred/in_review/in_human_review/
+done), not the legacy breadcrumb lattice (open/claimed/deferred/closed). The
+review gate (`adversarial_review` + `human_gate`) is registered with the
+**relaxed** policy (`require_human: false`, homelab default) — an agent can file
+→ another-lineage actor reviews → close, with no per-item human bottleneck, while
+the mixed-chain integrity guarantee (Invariant G: `done` requires a distinct
+cross-lineage pass + accepter) still holds. `claimed` is retired as a lifecycle
+state (Plan 010 WI-2): lease is a regista claim (a separate axis), not a state.
+Agent `close` maps to `submit_for_review` (→ `in_review`), NOT `done` — the
+agent cannot reach `done` unilaterally.
+
+**Projection vocabulary (Decision 59):** the local `work_items.status` column
+holds canonical states directly (no display remapping layer). The schema CHECK
+constraint and `wi_status` vocabulary accept both canonical and legacy breadcrumb
+states during the transition (additive, backward-compatible). The legacy op_log
+path (flag off) is unchanged — it still writes breadcrumb states. The migration
+(`migrate-to-regista`) converts legacy items to canonical (`closed`→`done`,
+`claimed`→`in_progress`, `deferred`→`deferred`).
+
+**Rationale:** "One lifecycle" is the convergence plan's purpose — a display
+remapping layer would be exactly the drift the project avoids. The relaxed gate
+keeps agent workflows frictionless in a homelab while preserving the provenance
+guarantee (a distinct cross-lineage pass is always required for `done`).
+Landing behind the existing `AGENT_NOTES_REGISTA_WRITES` flag means the change is
+zero-risk for existing deployments (flag off = legacy path unchanged); flip
+per-project after migration + `replay()==0`.

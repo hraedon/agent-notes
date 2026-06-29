@@ -1,12 +1,15 @@
-"""One-shot migration: local work_items → regista breadcrumbs (Plan 009 P1).
+"""One-shot migration: local work_items → regista canonical work-items
+(Plan 009 P1 → Plan 010 WI-4 canonical convergence).
 
 Usage:
     AGENT_NOTES_REGISTA_DSN=postgresql://... \
     AGENT_NOTES_REGISTA_HMAC_KEY_PATH=/path/to/keys.json \
     python -m agent_notes.scripts.migrate_to_regista [--project <slug>] [--apply]
 
-Dry-run by default. With --apply, creates a regista breadcrumb work-item for
-each local row and records the regista_work_item_id back on the local row.
+Dry-run by default. With --apply, creates a regista breadcrumb work-item (now on
+the canonical v2 lifecycle) for each local row and records the
+regista_work_item_id back on the local row. Legacy breadcrumb statuses map onto
+canonical states per Plan 010 §2 / WI-4.
 """
 
 from __future__ import annotations
@@ -38,11 +41,23 @@ def _resolve_project(conn: psycopg.Connection, slug: str) -> dict:
 
 
 def _status_transition_for_create(status: str) -> str | None:
+    """Map a legacy breadcrumb status to the canonical transition applied after
+    create (which starts in `open`). Plan 010 WI-4: breadcrumb → canonical.
+
+    - `open` → no transition (stays open).
+    - `claimed` → `start` (→ in_progress). `claimed` is no longer a lifecycle
+      state (WI-2); the lease is ephemeral and not migrated (D8 snapshot). The
+      item is represented as in-progress (was being worked).
+    - `deferred` → `defer` (open → deferred).
+    - `closed` → `close_from_open` (open → done). The review gate is NOT
+      replayed (D8: snapshot migration reproduces final state, not full
+      lifecycle history); the old store stays read-only for full history.
+    """
     return {
         "open": None,
-        "claimed": "claim",
-        "deferred": "defer_open",
-        "closed": "close_open",
+        "claimed": "start",
+        "deferred": "defer",
+        "closed": "close_from_open",
     }.get(status)
 
 
@@ -110,10 +125,16 @@ def _migrate_row(
         elif existing is not None:
             state = existing.current_state
 
+    # Mirror the canonical state back onto the local projection so it is honest
+    # post-migration (Plan 010 WI-4). The local row's legacy status (e.g.
+    # 'closed') is replaced with the canonical state ('done').
+    from agent_notes.core.projection import state_to_status
+
+    canonical_status = state_to_status(state)
     cur = conn.cursor()
     cur.execute(
-        "UPDATE work_items SET regista_work_item_id = %s WHERE id = %s",
-        (str(wid), row["id"]),
+        "UPDATE work_items SET regista_work_item_id = %s, status = %s WHERE id = %s",
+        (str(wid), canonical_status, row["id"]),
     )
 
     return {

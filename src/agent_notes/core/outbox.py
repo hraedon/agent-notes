@@ -40,8 +40,13 @@ _TRANSPORT_ERRORS: tuple[type[Exception], ...] = (
     OSError,
 )
 
+# Terminal-marking transitions: those that reach `done` (the canonical terminal
+# state) or reverse it. While ops are pending sync, the face rejects these so an
+# actor cannot mark work done (or reopen done work) with un-replayed ops.
+# `close_` prefix catches the legacy breadcrumb close_* and the canonical
+# close_from_open; `accept` is the canonical review-gate done-marker.
 _TERMINAL_PREFIX = "close_"
-_TERMINAL_TRANSITIONS = frozenset({"reopen"})
+_TERMINAL_TRANSITIONS = frozenset({"accept", "reopen"})
 
 
 class OutboxPendingError(Exception):
@@ -203,9 +208,7 @@ def list_projects() -> list[str]:
     root = outbox_dir()
     if not root.is_dir():
         return []
-    return sorted(
-        d.name for d in root.iterdir() if d.is_dir() and any(_session_files(d))
-    )
+    return sorted(d.name for d in root.iterdir() if d.is_dir() and any(_session_files(d)))
 
 
 _SIGNER: LocalKeySigner | None = None
@@ -454,3 +457,18 @@ class OutboxAwareFace:
         except _TRANSPORT_ERRORS:
             self._enqueue_op("comment", actor, work_item_id, None, **kwargs)
             return None
+
+    # ------------------------------------------------------------------
+    # Lease axis (Plan 010 WI-2): claims are a liveness/concurrency primitive,
+    # not a provenance write. They are NOT buffered in the outbox — if regista is
+    # unreachable the claim simply fails (there is no authority to claim
+    # against). Delegated straight to the base face.
+    # ------------------------------------------------------------------
+    def acquire_claim(self, actor: Actor, work_item_id: Any, *, ttl_seconds: int = 300):
+        return self._base.acquire_claim(actor, work_item_id, ttl_seconds=ttl_seconds)
+
+    def heartbeat_claim(self, actor: Actor, work_item_id: Any, *, ttl_seconds: int = 300):
+        return self._base.heartbeat_claim(actor, work_item_id, ttl_seconds=ttl_seconds)
+
+    def release_claim(self, actor: Actor, work_item_id: Any) -> None:
+        return self._base.release_claim(actor, work_item_id)

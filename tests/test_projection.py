@@ -32,13 +32,20 @@ def default_project():
 
 class TestStateToStatus:
     def test_maps_known_states(self):
+        # canonical v2 states
         assert projection.state_to_status("open") == "open"
-        assert projection.state_to_status("claimed") == "claimed"
+        assert projection.state_to_status("in_progress") == "in_progress"
+        assert projection.state_to_status("blocked") == "blocked"
         assert projection.state_to_status("deferred") == "deferred"
+        assert projection.state_to_status("in_review") == "in_review"
+        assert projection.state_to_status("in_human_review") == "in_human_review"
+        assert projection.state_to_status("done") == "done"
+        # legacy breadcrumb v1 states (pre-migration items)
+        assert projection.state_to_status("claimed") == "claimed"
         assert projection.state_to_status("closed") == "closed"
 
     def test_unknown_state_raises(self):
-        with pytest.raises(ValueError, match="unknown regista breadcrumb state"):
+        with pytest.raises(ValueError, match="unknown regista work-item state"):
             projection.state_to_status("invalid")
 
 

@@ -74,12 +74,17 @@ def _clear_regista_env():
 
 
 class TestRegistaWriteThrough:
-    def test_file_amend_close_reopen_round_trip(
+    def test_file_amend_start_close_review_round_trip(
         self, default_project, hmac_key_path, monkeypatch
     ):
+        # Plan 010 WI-3/WI-5: canonical lifecycle. file(open) → amend → start →
+        # close(submit_for_review→in_review) → adversarial_pass → accept(done) →
+        # reopen(open). The agent cannot reach `done` alone (Invariant G); it
+        # requires the cross-lineage review gate.
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
         monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
         monkeypatch.setenv("AGENT_NOTES_PRINCIPAL_ID", "test@example.com")
+        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")
 
         reg = InMemoryRegista(hmac_key_path=hmac_key_path)
         face = RegistaFace(reg)
@@ -119,6 +124,7 @@ class TestRegistaWriteThrough:
             assert local["title"] == "Original title"
             assert str(local["regista_work_item_id"]) == str(regista_id)
 
+            # amend is a non-state event (lifecycle stays open).
             updated = WorkItemModel.update_work_item(
                 project_id=default_project.id,
                 identifier="WI-REG-01",
@@ -127,25 +133,120 @@ class TestRegistaWriteThrough:
             assert updated["title"] == "Amended title"
             assert updated["status"] == "open"
 
+            # close → submit_for_review → in_review (NOT done; agent can't reach
+            # done alone). close from `open` starts work first, then submits.
             closed = WorkItemModel.close_work_item(default_project.id, "WI-REG-01")
-            assert closed["status"] == "closed"
+            assert closed["status"] == "in_review"
+            assert closed["closed_at"] is None  # in_review is not terminal
 
+            # A different-lineage reviewer does the adversarial pass.
+            from agent_notes.core.actor import Actor
+
+            reviewer = Actor(
+                actor_id="reviewer-kimi",
+                actor_kind="agent",
+                role="agent",
+                model_lineage="kimi",
+            )
+            face.transition_breadcrumb(
+                reviewer,
+                regista_id,
+                "adversarial_pass",
+                payload={"review_note": "LGTM — cross-lineage pass"},
+            )
+            assert face.get(regista_id).current_state == "in_human_review"
+
+            # Final accept (relaxed gate: any actor may accept after the pass,
+            # but must differ from the adversarial-pass identity).
+            accepter = Actor(
+                actor_id="accepter-opus",
+                actor_kind="agent",
+                role="agent",
+                model_lineage="opus",
+            )
+            face.transition_breadcrumb(
+                accepter,
+                regista_id,
+                "accept",
+                payload={"review_note": "accepted"},
+            )
+            done = face.get(regista_id)
+            assert done.current_state == "done"
+
+            # The review-gate transitions were done directly on the face (by
+            # reviewer/accepter actors, not the filing agent), so mirror the
+            # final canonical state into the local projection.
+            with _conn() as conn:
+                WorkItemModel._mirror_regista_snapshot(
+                    conn,
+                    {
+                        "project_id": default_project.id,
+                        "identifier": "WI-REG-01",
+                        "entity_id": wi["entity_id"],
+                    },
+                    done,
+                )
+                conn.commit()
+
+            # The projection reflects `done` (terminal → closed_at set).
+            with _conn() as conn:
+                cur = conn.cursor(row_factory=dict_row)
+                cur.execute(
+                    "SELECT status, closed_at FROM work_items WHERE identifier = %s",
+                    ("WI-REG-01",),
+                )
+                row = cur.fetchone()
+            assert row["status"] == "done"
+            assert row["closed_at"] is not None
+
+            # reopen: done → open.
             reopened = WorkItemModel.update_work_item(
                 project_id=default_project.id,
                 identifier="WI-REG-01",
                 status="open",
             )
             assert reopened["status"] == "open"
+            assert reopened["closed_at"] is None
 
-            listed_closed = face.list(current_states=["closed"])
-            assert not any(str(item.work_item_id) == str(regista_id) for item in listed_closed)
+            listed_done = face.list(current_states=["done"])
+            assert not any(str(item.work_item_id) == str(regista_id) for item in listed_done)
         finally:
             reset_face()
             reg.close()
 
-    def test_claim_release_updates_lease_projection(
+    def test_agent_close_cannot_reach_done_alone(self, default_project, hmac_key_path, monkeypatch):
+        # Plan 010 WI-5 / Invariant G: an agent's close leaves the item in
+        # in_review, NOT done. Reaching done requires the review gate.
+        monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")
+
+        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        face = RegistaFace(reg)
+        reset_face()
+        set_face_for_test(face)
+
+        try:
+            WorkItemModel.file_work_item(
+                project_id=default_project.id,
+                identifier="WI-REG-G",
+                title="Invariant G test",
+                status="open",
+                embedding=_vec768(),
+            )
+            closed = WorkItemModel.close_work_item(default_project.id, "WI-REG-G")
+            assert closed["status"] == "in_review"
+            assert closed["status"] != "done"
+        finally:
+            reset_face()
+            reg.close()
+
+    def test_claim_release_uses_regista_claims_not_lifecycle(
         self, default_project, hmac_key_path, monkeypatch
     ):
+        # Plan 010 WI-2/WI-5: claim/release are regista claims (a lease axis),
+        # NOT lifecycle transitions. `claimed` is no longer a lifecycle state —
+        # the status stays `open`; the lease is recorded in work_item_leases.
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
         monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
 
@@ -170,13 +271,15 @@ class TestRegistaWriteThrough:
                 actor_id="legacy-actor",
                 ttl_seconds=300,
             )
-            assert claimed["status"] == "claimed"
+            # Lifecycle does NOT move to 'claimed' — it stays 'open'.
+            assert claimed["status"] == "open"
 
             with _conn() as conn:
                 cur = conn.cursor(row_factory=dict_row)
                 cur.execute("SELECT * FROM work_item_leases WHERE entity_id = %s", (entity_id,))
                 lease = cur.fetchone()
             assert lease is not None
+            # The lease actor is the env-resolved agent actor, not the legacy param.
             assert lease["actor_id"] != "legacy-actor"
 
             released = WorkItemModel.release_work_item(
@@ -184,6 +287,7 @@ class TestRegistaWriteThrough:
                 identifier="WI-REG-02",
                 actor_id="legacy-actor",
             )
+            # Lifecycle still 'open' (release does not move state either).
             assert released["status"] == "open"
 
             with _conn() as conn:
@@ -194,7 +298,9 @@ class TestRegistaWriteThrough:
             reset_face()
             reg.close()
 
-    def test_heartbeat_updates_local_lease(self, default_project, hmac_key_path, monkeypatch):
+    def test_heartbeat_uses_regista_claim(self, default_project, hmac_key_path, monkeypatch):
+        # Plan 010 WI-2/WI-5: heartbeat extends the regista claim; the local
+        # lease row is a projection mirror of the authoritative claim.
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
         monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
 
@@ -288,12 +394,13 @@ class TestMigrateToRegista:
                 row = cur.fetchone()
             assert row is not None
             assert row["regista_work_item_id"] is not None
-            assert row["status"] == "closed"
+            # Plan 010 WI-4: closed → done (canonical terminal) via close_from_open.
+            assert row["status"] == "done"
 
             face = RegistaFace(reg)
             item = face.get(row["regista_work_item_id"])
             assert item is not None
-            assert item.current_state == "closed"
+            assert item.current_state == "done"
             assert item.custom_fields["title"] == "Migrate me"
         finally:
             reg.close()

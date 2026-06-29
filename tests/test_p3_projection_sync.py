@@ -197,9 +197,7 @@ class TestRebuildFromRegista:
         )
 
         with _conn() as conn:
-            report = projection.rebuild_from_regista(
-                conn, face, project_id=default_project.id
-            )
+            report = projection.rebuild_from_regista(conn, face, project_id=default_project.id)
         assert report.mirrored == 0
         assert report.created == 1
         assert report.skipped == 0
@@ -211,18 +209,17 @@ class TestRebuildFromRegista:
         assert local["identifier"] == "WI-REB-01"
         assert local["status"] == "open"
 
-        face.transition_breadcrumb(actor, wid, "close_open")
+        face.transition_breadcrumb(actor, wid, "start")
+        face.transition_breadcrumb(actor, wid, "submit_for_review")
 
         with _conn() as conn:
-            report2 = projection.rebuild_from_regista(
-                conn, face, project_id=default_project.id
-            )
+            report2 = projection.rebuild_from_regista(conn, face, project_id=default_project.id)
         assert report2.mirrored == 1
         assert report2.created == 0
 
         with _conn() as conn:
             local2 = projection.find_local_for_regista(conn, wid)
-        assert local2["status"] == "closed"
+        assert local2["status"] == "in_review"
 
 
 class TestExportIndexBanner:
@@ -239,9 +236,7 @@ class TestExportIndexBanner:
             signer,
         )
         out_path = tmp_path / "OPEN_WORK_ITEMS.txt"
-        code = cmd_bc_export_index(
-            _make_args(json=False, output=str(out_path))
-        )
+        code = cmd_bc_export_index(_make_args(json=False, output=str(out_path)))
         assert code == 0
         content = out_path.read_text(encoding="utf-8")
         assert content.startswith(
@@ -255,9 +250,7 @@ class TestExportIndexBanner:
         tmp_path: Path,
     ):
         out_path = tmp_path / "OPEN_WORK_ITEMS.txt"
-        code = cmd_bc_export_index(
-            _make_args(json=False, output=str(out_path))
-        )
+        code = cmd_bc_export_index(_make_args(json=False, output=str(out_path)))
         assert code == 0
         content = out_path.read_text(encoding="utf-8")
         assert not content.startswith("> ⚠ STALE")

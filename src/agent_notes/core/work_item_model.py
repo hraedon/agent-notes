@@ -36,27 +36,37 @@ class WorkItemModel:
     kind = "work_item"
     entity_type = "work_item"
 
+    # Plan 010 WI-3: canonical transition table. Maps (old, new) canonical
+    # states to the workflow transition name. `closed` is accepted as a target
+    # alias for `done` (the canonical terminal) for backward compatibility with
+    # callers that pass the legacy breadcrumb vocabulary.
+    _CANONICAL_TRANSITIONS = {
+        ("open", "in_progress"): "start",
+        ("in_progress", "blocked"): "block",
+        ("blocked", "in_progress"): "unblock",
+        ("open", "deferred"): "defer",
+        ("in_progress", "deferred"): "defer",
+        ("deferred", "open"): "resume",
+        ("deferred", "in_progress"): "start",
+        ("in_progress", "in_review"): "submit_for_review",
+        ("in_review", "in_human_review"): "adversarial_pass",
+        ("in_review", "in_progress"): "request_changes",
+        ("in_human_review", "done"): "accept",
+        ("in_human_review", "in_progress"): "reject",
+        ("done", "open"): "reopen",
+        ("open", "done"): "close_from_open",
+    }
+
     @staticmethod
     def _transition_for_status_change(old_status: str, new_status: str) -> str | None:
         if old_status == new_status:
             return None
-        known = {
-            ("open", "claimed"): "claim",
-            ("claimed", "open"): "release",
-            ("open", "closed"): "close_open",
-            ("claimed", "closed"): "close_claimed",
-            ("deferred", "closed"): "close_deferred",
-            ("open", "deferred"): "defer_open",
-            ("claimed", "deferred"): "defer_claimed",
-            ("closed", "open"): "reopen",
-            ("deferred", "open"): "undefer",
-        }
-        if (old_status, new_status) in known:
-            return known[(old_status, new_status)]
-        if new_status == "closed":
-            return f"close_{old_status}"
-        if new_status == "deferred":
-            return f"defer_{old_status}"
+        # `closed` (legacy breadcrumb terminal) is an alias for `done`.
+        old = "done" if old_status == "closed" else old_status
+        new = "done" if new_status == "closed" else new_status
+        transition = WorkItemModel._CANONICAL_TRANSITIONS.get((old, new))
+        if transition is not None:
+            return transition
         raise ValueError(f"Unsupported status transition: {old_status!r} -> {new_status!r}")
 
     @staticmethod
@@ -170,9 +180,7 @@ class WorkItemModel:
         return dict(mirrored)
 
     @staticmethod
-    def _load_work_item_row(
-        conn: psycopg.Connection, project_id: int, identifier: str
-    ) -> dict:
+    def _load_work_item_row(conn: psycopg.Connection, project_id: int, identifier: str) -> dict:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
@@ -606,10 +614,30 @@ class WorkItemModel:
                     f"Work item {identifier!r} has no regista mapping; run migrate-to-regista first"
                 )
             wid = old["regista_work_item_id"]
+            state = old["status"]
 
         actor = face_factory.default_actor()
-        transition_name = f"close_{old['status']}"
-        face.transition_breadcrumb(actor, wid, transition_name)
+        # Plan 010 WI-3: close → submit_for_review → in_review. The agent cannot
+        # reach `done` unilaterally (Invariant G); work awaits a cross-lineage
+        # review pass + accept. `closed` (legacy terminal) is treated as `done`.
+        canonical = "done" if state == "closed" else state
+        if canonical in ("in_review", "in_human_review"):
+            pass  # already awaiting review — no-op
+        elif canonical == "done":
+            raise ValueError(f"Work item {identifier!r} is already done; reopen first")
+        elif canonical == "blocked":
+            raise ValueError(f"Work item {identifier!r} is blocked; unblock before closing")
+        elif canonical == "deferred":
+            raise ValueError(f"Work item {identifier!r} is deferred; resume before closing")
+        elif canonical == "claimed":
+            raise ValueError(
+                f"Work item {identifier!r} is in legacy 'claimed' state; "
+                "migrate to the canonical workflow first"
+            )
+        else:  # open or in_progress
+            if canonical == "open":
+                face.transition_breadcrumb(actor, wid, "start")
+            face.transition_breadcrumb(actor, wid, "submit_for_review")
         regista_work_item = face.get(wid)
         with _conn() as conn:
             mirrored = WorkItemModel._mirror_regista_snapshot(
@@ -654,7 +682,12 @@ class WorkItemModel:
         identifier: str,
         actor_id: str | None = None,
     ) -> dict:
-        """Close a work item (writes a close op)."""
+        """Close a work item.
+
+        Regista branch (Plan 010 WI-3): ``close`` → ``submit_for_review`` →
+        ``in_review``. The agent cannot reach ``done`` unilaterally; work awaits a
+        cross-lineage review pass + accept. Legacy path writes a ``close`` op.
+        """
         face = face_factory.get_face()
         if face is not None:
             return cls._close_work_item_regista(face, project_id, identifier)
@@ -1016,20 +1049,15 @@ class WorkItemModel:
                 raise ValueError(
                     f"Work item {identifier!r} has no regista mapping; run migrate-to-regista first"
                 )
-            if old["status"] != "open":
-                raise ValueError(f"Cannot claim: status is {old['status']!r} (must be 'open')")
-            cur = conn.cursor(row_factory=dict_row)
-            cur.execute(
-                "SELECT 1 FROM work_item_leases WHERE entity_id = %s AND expires_at > now()",
-                (old["entity_id"],),
-            )
-            if cur.fetchone() is not None:
-                raise ValueError(f"Work item {identifier!r} is already claimed")
+            if old["status"] == "done":
+                raise ValueError("Cannot claim: work item is done (terminal)")
             wid = old["regista_work_item_id"]
             entity_id = old["entity_id"]
 
         actor = face_factory.default_actor()
-        face.transition_breadcrumb(actor, wid, "claim")
+        # Plan 010 WI-2: lease is a regista claim, NOT a lifecycle state.
+        # acquire_claim is the authoritative lease; the lifecycle does not move.
+        claim = face.acquire_claim(actor, wid, ttl_seconds=ttl_seconds)
         regista_work_item = face.get(wid)
         with _conn() as conn:
             mirrored = WorkItemModel._mirror_regista_snapshot(
@@ -1038,18 +1066,30 @@ class WorkItemModel:
                 regista_work_item,
                 actor_id=actor.actor_id,
             )
+            # Mirror the claim into the local lease projection row.
+            expires_at = getattr(claim, "expires_at", None)
             cur = conn.cursor(row_factory=dict_row)
             cur.execute(
                 """
                 INSERT INTO work_item_leases (entity_id, actor_id, expires_at)
-                VALUES (%s, %s, now() + make_interval(secs => %s))
+                VALUES (%s, %s, %s)
                 ON CONFLICT (entity_id) DO UPDATE SET
                     actor_id = EXCLUDED.actor_id,
                     acquired_at = now(),
                     expires_at = EXCLUDED.expires_at,
                     heartbeat_count = work_item_leases.heartbeat_count + 1
                 """,
-                (entity_id, actor.actor_id, ttl_seconds),
+                (entity_id, actor.actor_id, expires_at),
+            )
+            write_change(
+                conn,
+                kind=WorkItemModel.kind,
+                workspace_id=WorkItemModel._resolve_workspace_for_project(conn, project_id),
+                project_id=project_id,
+                identifier=identifier,
+                event="claimed",
+                payload={"actor_id": actor.actor_id, "ttl_seconds": ttl_seconds},
+                actor=actor.actor_id,
             )
             conn.commit()
         return dict(mirrored)
@@ -1062,10 +1102,13 @@ class WorkItemModel:
         actor_id: str | None = None,
         ttl_seconds: int = 300,
     ) -> dict:
-        """Claim a work item (P4 — local lease, no coordinator yet).
+        """Claim a work item (Plan 010 WI-2 — lease as a regista claim).
 
-        Writes a ``claim`` op to the op_log and inserts a row into
-        ``work_item_leases``.  Returns the folded work_item.
+        Acquires a regista claim (the authoritative lease) and mirrors it into
+        the local ``work_item_leases`` projection. The lifecycle state is NOT
+        moved — ``claimed`` is no longer a lifecycle state (it is a claim).
+        Legacy path (no regista face) writes a ``claim`` op + ``set_status``
+        to ``claimed`` unchanged.
         """
         face = face_factory.get_face()
         if face is not None:
@@ -1159,7 +1202,8 @@ class WorkItemModel:
             entity_id = old["entity_id"]
 
         actor = face_factory.default_actor()
-        face.transition_breadcrumb(actor, wid, "release")
+        # Plan 010 WI-2: release the regista claim; the lifecycle is untouched.
+        face.release_claim(actor, wid)
         regista_work_item = face.get(wid)
         with _conn() as conn:
             mirrored = WorkItemModel._mirror_regista_snapshot(
@@ -1173,6 +1217,16 @@ class WorkItemModel:
                 "DELETE FROM work_item_leases WHERE entity_id = %s",
                 (entity_id,),
             )
+            write_change(
+                conn,
+                kind=WorkItemModel.kind,
+                workspace_id=WorkItemModel._resolve_workspace_for_project(conn, project_id),
+                project_id=project_id,
+                identifier=identifier,
+                event="released",
+                payload={"actor_id": actor.actor_id},
+                actor=actor.actor_id,
+            )
             conn.commit()
         return dict(mirrored)
 
@@ -1183,9 +1237,10 @@ class WorkItemModel:
         identifier: str,
         actor_id: str | None = None,
     ) -> dict:
-        """Release a claimed work item (P4).
+        """Release a claimed work item (Plan 010 WI-2 — lease as a regista claim).
 
-        Writes a ``release`` op and deletes the lease row.
+        Releases the regista claim; the lifecycle state is untouched. Legacy
+        path writes a ``release`` op + ``set_status`` back to ``open``.
         """
         face = face_factory.get_face()
         if face is not None:
@@ -1246,6 +1301,7 @@ class WorkItemModel:
 
     @staticmethod
     def _heartbeat_work_item_regista(
+        face: Any,
         project_id: int,
         identifier: str,
         ttl_seconds: int,
@@ -1253,16 +1309,23 @@ class WorkItemModel:
         with _conn() as conn:
             old = WorkItemModel._load_work_item_row(conn, project_id, identifier)
             entity_id = old["entity_id"]
+            wid = old["regista_work_item_id"]
+
+        actor = face_factory.default_actor()
+        # Plan 010 WI-2: authoritative liveness is the regista claim heartbeat.
+        claim = face.heartbeat_claim(actor, wid, ttl_seconds=ttl_seconds)
+        expires_at = getattr(claim, "expires_at", None)
+        with _conn() as conn:
             cur = conn.cursor(row_factory=dict_row)
             cur.execute(
                 """
                 UPDATE work_item_leases
-                SET expires_at = now() + make_interval(secs => %s),
+                SET expires_at = %s,
                     heartbeat_count = heartbeat_count + 1
                 WHERE entity_id = %s
                 RETURNING *
                 """,
-                (ttl_seconds, entity_id),
+                (expires_at, entity_id),
             )
             row = cur.fetchone()
             if row is None:
@@ -1278,10 +1341,14 @@ class WorkItemModel:
         actor_id: str | None = None,
         ttl_seconds: int = 300,
     ) -> dict:
-        """Heartbeat a claimed work item to extend its lease (P4)."""
+        """Heartbeat a claimed work item to extend its lease (Plan 010 WI-2).
+
+        Authoritative liveness is the regista claim heartbeat; the local lease
+        row is a projection mirror. Legacy path touches the local lease only.
+        """
         face = face_factory.get_face()
         if face is not None:
-            return cls._heartbeat_work_item_regista(project_id, identifier, ttl_seconds)
+            return cls._heartbeat_work_item_regista(face, project_id, identifier, ttl_seconds)
         with _conn() as conn:
             cur = conn.cursor(row_factory=dict_row)
             cur.execute(

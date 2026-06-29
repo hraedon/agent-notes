@@ -21,10 +21,20 @@ import psycopg.types.json
 
 from agent_notes.core import kernel
 
+# Plan 010: the projection holds canonical states directly (one lifecycle). The
+# legacy breadcrumb states (claimed/closed) remain for pre-migration items written
+# by the op_log path or migrated under the v1 breadcrumb workflow.
 _STATUS_FROM_STATE = {
+    # canonical v2
     "open": "open",
-    "claimed": "claimed",
+    "in_progress": "in_progress",
+    "blocked": "blocked",
     "deferred": "deferred",
+    "in_review": "in_review",
+    "in_human_review": "in_human_review",
+    "done": "done",
+    # legacy breadcrumb v1 (pre-migration items)
+    "claimed": "claimed",
     "closed": "closed",
 }
 
@@ -37,7 +47,7 @@ class _ConnLike(Protocol):
 
 def state_to_status(state: str) -> str:
     if state not in _STATUS_FROM_STATE:
-        raise ValueError(f"unknown regista breadcrumb state: {state!r}")
+        raise ValueError(f"unknown regista work-item state: {state!r}")
     return _STATUS_FROM_STATE[state]
 
 
