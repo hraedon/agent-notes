@@ -31,7 +31,7 @@ agent-notes breadcrumb update --path . <WI-id> [--status <state>] [--title ...] 
 
 - **`--type` (kind):** todo, observation, decision, risk, task, bug, feature,
   improvement, question, experiment, spike, refactor, docs, ci, job.
-- **`--severity`:** low, medium, high, urgent, critical.
+- **`--severity`:** low, medium, high, critical.
 
 **Lifecycle (canonical workflow):**
 `open → in_progress → (blocked | deferred) → in_review → in_human_review → done`.

@@ -24,6 +24,42 @@ from agent_notes.core import db as coredb
 SCHEMA_DIR = Path(__file__).resolve().parents[1] / "schema"
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _hermetic_config(tmp_path_factory):
+    """Hermetic config isolation for the test session.
+
+    Plan 012 WI-1 added a config-file fallback to ``RegistaConfig``. Without
+    isolation, the operator's host ``~/.config/agent-notes/config.json`` (which
+    enables regista against the prod DB) would be read by every test that hits
+    the write path, routing test writes to production. This pins
+    ``AGENT_NOTES_CONFIG`` to an empty ``{}`` session file and clears any
+    host-provided regista env, so regista stays disabled unless a test opts in
+    (via ``monkeypatch`` env, or ``set_face_for_test`` which bypasses config).
+    """
+    cfg = tmp_path_factory.mktemp("cfg") / "empty.json"
+    cfg.write_text("{}")
+    keys = (
+        "AGENT_NOTES_CONFIG",
+        "AGENT_NOTES_REGISTA_DSN",
+        "AGENT_NOTES_REGISTA_HMAC_KEY_PATH",
+        "AGENT_NOTES_REGISTA_PROJECT",
+        "AGENT_NOTES_REGISTA_REQUIRE_SSL",
+        "AGENT_NOTES_REGISTA_WRITES",
+    )
+    saved = {k: os.environ.get(k) for k in keys}
+    os.environ["AGENT_NOTES_CONFIG"] = str(cfg)
+    for k in keys[1:]:
+        os.environ.pop(k, None)
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 def _apply_schema(dsn: str) -> None:
     sql_files = sorted(SCHEMA_DIR.glob("*.sql"))
     for f in sql_files:
