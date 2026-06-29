@@ -1,8 +1,8 @@
 """Face selection — the integration seam between the write path and regista
-(Plan 009).
+(Plan 009; per-project routing in Plan 011).
 
-``get_face()`` returns the process-wide face singleton used by the write path
-(``work_item_model.py``):
+``get_face()`` returns the face for the **current project** used by the write
+path (``work_item_model.py``):
 
 - regista writes disabled (``AGENT_NOTES_REGISTA_WRITES`` unset / off) → returns
   ``None``; the write path uses the legacy op_log unchanged (the feature gate).
@@ -10,11 +10,20 @@
 - outbox enabled (``AGENT_NOTES_OUTBOX=1``) → the base face wrapped in the
   never-fail outbox layer from ``core.outbox`` (P2: AC-1).
 
+**Per-project routing (Plan 011):** the converged store is one regista project
+(schema) per software-project. The CLI's ``_resolve()`` sets the current project
+via ``set_current_project()``; ``get_face()`` reads it and returns the cached
+face for that project (one ``Regista`` per schema). When no project is set, it
+falls back to ``cfg.project`` (the legacy single-project default). A face
+injected by ``set_face_for_test`` overrides routing entirely, so unit tests
+that drive a single in-memory store keep working.
+
 The outbox import is lazy so P1 does not depend on P2 modules at import time.
 """
 
 from __future__ import annotations
 
+import contextvars
 import threading
 
 from agent_notes.core.actor import resolve_actor
@@ -22,54 +31,86 @@ from agent_notes.core.config import RegistaConfig, regista_config
 from agent_notes.core.regista_face import RegistaFace
 
 _FACE_LOCK = threading.Lock()
-_FACE: RegistaFace | None = None
-_FACE_BUILT = False
+# Per-project face cache, keyed by regista project name (schema).
+_FACES: dict[str, RegistaFace] = {}
+# Test override: when set, get_face() returns this for ANY project.
+_TEST_FACE: RegistaFace | None = None
+_TEST_FACE_SET = False
+
+# The current regista project name for this execution context. The CLI sets it
+# from the resolved software-project; None falls back to cfg.project.
+_CURRENT_PROJECT: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "agent_notes_regista_project", default=None
+)
 
 _OUTBOX_ENV = "AGENT_NOTES_OUTBOX"
 
 
-def _build_base_face(cfg: RegistaConfig) -> RegistaFace:
+def regista_project_name(slug: str) -> str:
+    """Map a software-project slug to its regista project (schema) name.
+
+    regista schema names forbid hyphens (``validate_project_name``), so slugs
+    like ``cert-watch`` map to ``cert_watch``. This MUST match the migration's
+    mapping (see [[reference-production-regista-store]]).
+    """
+    from regista._connection import validate_project_name
+
+    return validate_project_name(slug.replace("-", "_"))
+
+
+def set_current_project(regista_name: str | None) -> None:
+    """Set the current regista project for this context (Plan 011).
+
+    Pass a regista project NAME (already mapped via ``regista_project_name``),
+    or ``None`` to fall back to the configured default.
+    """
+    _CURRENT_PROJECT.set(regista_name)
+
+
+def current_project() -> str | None:
+    return _CURRENT_PROJECT.get()
+
+
+def _build_face(cfg: RegistaConfig, project: str) -> RegistaFace:
+    import os
+
     import regista
 
     reg = regista.Regista(
         cfg.dsn,
-        cfg.project,
+        project,
         cfg.hmac_key_path,
         require_ssl=cfg.require_ssl,
     )
-    return RegistaFace(reg)
-
-
-def _build_face(cfg: RegistaConfig) -> RegistaFace | None:
-    if not cfg.enabled:
-        return None
-    import os
-
-    face = _build_base_face(cfg)
+    face: RegistaFace = RegistaFace(reg)
     if os.environ.get(_OUTBOX_ENV, "").lower() in {"1", "true", "yes"}:
         from agent_notes.core.outbox import OutboxAwareFace
 
-        return OutboxAwareFace(face, project=cfg.project)
+        return OutboxAwareFace(face, project=project)
     return face
 
 
 def get_face() -> RegistaFace | None:
-    """Return the process-wide face, building it on first call.
+    """Return the face for the current project, building+caching on first use.
 
-    Returns ``None`` when regista writes are disabled (legacy op_log path).
-    Re-reads config only until the first successful build; later calls return
-    the cached face. Call ``reset_face()`` from tests.
+    Returns ``None`` when regista writes are disabled (legacy op_log path). A
+    face injected via ``set_face_for_test`` takes precedence over routing.
     """
-    global _FACE, _FACE_BUILT
-    if _FACE_BUILT:
-        return _FACE
+    if _TEST_FACE_SET:
+        return _TEST_FACE
+    cfg = regista_config()
+    if not cfg.enabled:
+        return None
+    target = _CURRENT_PROJECT.get() or cfg.project
+    cached = _FACES.get(target)
+    if cached is not None:
+        return cached
     with _FACE_LOCK:
-        if _FACE_BUILT:
-            return _FACE
-        cfg = regista_config()
-        _FACE = _build_face(cfg)
-        _FACE_BUILT = True
-        return _FACE
+        cached = _FACES.get(target)
+        if cached is None:
+            cached = _build_face(cfg, target)
+            _FACES[target] = cached
+        return cached
 
 
 def default_actor():
@@ -78,21 +119,28 @@ def default_actor():
 
 
 def reset_face() -> None:
-    """Reset the face singleton (tests). Closes any open regista handle."""
-    global _FACE, _FACE_BUILT
+    """Reset all faces (tests). Closes any open regista handles."""
+    global _TEST_FACE, _TEST_FACE_SET
     with _FACE_LOCK:
-        if _FACE is not None:
+        for face in _FACES.values():
             try:
-                _FACE.close()
+                face.close()
             except Exception:
                 pass
-        _FACE = None
-        _FACE_BUILT = False
+        _FACES.clear()
+        if _TEST_FACE is not None:
+            try:
+                _TEST_FACE.close()
+            except Exception:
+                pass
+        _TEST_FACE = None
+        _TEST_FACE_SET = False
+    _CURRENT_PROJECT.set(None)
 
 
 def set_face_for_test(face: RegistaFace | None) -> None:
-    """Inject a face (e.g. an InMemoryRegista-backed one) for tests."""
-    global _FACE, _FACE_BUILT
+    """Inject a project-agnostic face (e.g. InMemoryRegista-backed) for tests."""
+    global _TEST_FACE, _TEST_FACE_SET
     with _FACE_LOCK:
-        _FACE = face
-        _FACE_BUILT = True
+        _TEST_FACE = face
+        _TEST_FACE_SET = True

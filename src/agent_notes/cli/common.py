@@ -15,6 +15,24 @@ EXIT_CONFLICT = 4
 def _resolve(
     ws_slug: str | None, proj_slug: str | None, path: str | None
 ) -> tuple[int, int, str, str]:
+    """Resolve the current workspace/project and set the regista routing context.
+
+    Plan 011: every CLI command resolves its project here, so this is the single
+    place to bind the regista write face to the matching per-project schema.
+    """
+    result = _resolve_impl(ws_slug, proj_slug, path)
+    from agent_notes.core import face_factory
+
+    try:
+        face_factory.set_current_project(face_factory.regista_project_name(result[3]))
+    except Exception:
+        face_factory.set_current_project(None)
+    return result
+
+
+def _resolve_impl(
+    ws_slug: str | None, proj_slug: str | None, path: str | None
+) -> tuple[int, int, str, str]:
     from agent_notes.core.db import list_projects, list_workspaces
 
     if path:
