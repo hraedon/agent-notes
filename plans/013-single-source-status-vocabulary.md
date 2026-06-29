@@ -2,10 +2,51 @@
 
 **Status:** Proposed 2026-06-29.
 **Author:** glm-5.2
+**Reviewed:** 2026-06-29 (opus-4.8) — approved with the refinements in §0. P0
+lattice bug verified live in `kernel._STATUS_LATTICE` on current main.
 **Strategic role:** Retire the entire class of "a validation/resolution surface
 never caught up to the canonical lifecycle" bugs by making the work-item status
 vocabulary and its properties authoritative in **one** place, with every
 consumer referencing it instead of re-declaring it.
+
+## 0. Reviewer addendum (refinements, not objections)
+
+The diagnosis and architecture hold. Four refinements keep the success criteria
+honest:
+
+1. **"Single source" is really three cross-checked layers, not one.** Status
+   truth still lives in regista's `canonical.workflow.yaml` (workflow
+   authority), the DB `wi_status` vocab (runtime flags), and the new
+   `lifecycle.py` (static props). They are reconciled by tests, not unified.
+   So "adding a state is a one-line change / a missed surface is impossible"
+   (§2) is overstated: adding a state is *three* coordinated edits (YAML + SQL
+   seed + `lifecycle.py`), and "impossible to miss" means "a test fails if you
+   miss one." Still a major reduction (N≈7 → 3 with enforced agreement) — just
+   don't claim compile-time single-sourcing the design doesn't deliver.
+2. **WI-4's guards are load-bearing and MUST run in default CI.** The entire
+   "can't miss a surface" guarantee rests on `test_lifecycle_module_matches_db_vocab`
+   and the transitions-vs-YAML cross-check actually running. If they are
+   `ephemeral_db`-gated and CI skips DB-backed tests, the guarantee evaporates
+   silently. Treat "these run in the default CI job" as an explicit AC of WI-4.
+3. **The P0 is live on the now-primary states; don't let WI-3 trail WI-2.**
+   Since the regista agent-SoT MVP went live, canonical states are the common
+   case. The dangerous case is not "open dominates done" (that is the safe
+   direction) — it is **canonical-vs-canonical ties resolving by `op_id`**: a
+   concurrent `done` with a smaller `op_id` beats `in_progress` and *silently
+   completes*, violating the fail-safe principle. WI-3 depends only on WI-1
+   (`lifecycle.rank`), so it may land immediately after WI-1 — ahead of the
+   mechanical WI-2 wiring if convenient.
+4. **Point the §5 adversarial review at the cross-axis `claimed` comparison.**
+   The within-lifecycle ordering is fine. The soft spot is that `claimed` is a
+   *liveness/lease* axis, not a lifecycle state, yet it shares the 0–8 rank
+   scale — so a concurrent `claimed`-vs-`in_review` resolves two different axes
+   against each other. Low stakes (legacy-only, transitional) but it is the one
+   place the rank table can surprise; scope the review there.
+
+Also: this plan prevents *future* mis-resolution but contains no detection or
+repair for items the live P0 may have *already* silently mis-resolved. Accepting
+"no repair pass — incidence is low" is defensible, but record it as a decision
+rather than leaving it unstated (see §8).
 
 ## 1. The problem (evidence)
 
@@ -42,9 +83,13 @@ correct" in isolation, so review misses it.
 
 ## 2. Goal / non-goals
 
-**Goal:** exactly one authoritative definition of the status set and its
-properties; every consumer imports/queries it. Adding a state becomes a
-one-line change. A missed surface becomes impossible.
+**Goal:** one authoritative definition *per layer* of the status set and its
+properties — the regista workflow YAML, the DB vocab, and `lifecycle.py` — with
+every consumer importing/querying its layer instead of re-declaring, and
+test-enforced agreement *between* the layers. Adding a state drops from ~7
+independent edits to 3 coordinated ones, and any missed surface fails a
+consistency test rather than shipping silently (see §0.1 for why this is "three
+cross-checked layers," not literal single-sourcing).
 
 **Non-goals (explicitly out of scope):**
 - Unifying the **semantic** divergence between the regista and native write
@@ -133,6 +178,11 @@ and a test that asserts `lifecycle.VALID_TRANSITIONS` matches the canonical
 workflow's `from`/`to` pairs (already shipped in regista; mirror the existing
 `test_canonical_convergence.py` pattern that compares packaged YAML bytes).
 
+**These guards must run in the default CI job, not a DB-gated or opt-in suite.**
+The "can't miss a surface" guarantee is only real if the consistency tests
+actually execute on every PR; an `ephemeral_db` fixture that CI skips would make
+the guarantee silently false. "Runs in default CI" is an explicit AC of WI-4.
+
 ## 5. Lattice rank design (the P0 fix)
 
 Fail-safe principle (existing): in a concurrent conflict, **the more-unfinished
@@ -155,6 +205,12 @@ Ties (`in_progress` vs `blocked`, `done` vs `closed`) break by lexicographic
 `op_id` as today. `claimed` sits below the active lifecycle states (a lease
 should not override real lifecycle progress) but above terminal. **This needs
 adversarial review** — conflict-resolution semantics are the core CRDT property.
+Scope that review at the **cross-axis `claimed` comparisons** specifically:
+`claimed` is a liveness/lease axis rather than a lifecycle state, so ranking it
+on the same scale means a concurrent `claimed`-vs-`in_review` resolves two
+different axes against each other. The within-lifecycle ordering
+(`open` > `in_progress` > `in_review` > … > `done`) is the uncontroversial part;
+the `claimed` placement is the part that can surprise.
 
 ## 6. Work items
 
@@ -192,3 +248,18 @@ state vs. lease primitive) is intentional degrade-mode behavior from Plan 010
 §1. Unifying it is a product decision (does degrade-mode enforce Invariant G?)
 and is out of scope here. This plan retires the **vocabulary** drift category;
 that one retires the **behavior** drift category.
+
+**Repair of already-mis-resolved items (decision).** The live P0 (§5) can have
+*already* silently mis-resolved concurrent status writes on canonical states.
+This plan stops it going forward but ships **no detection or repair pass** for
+historical damage. Decision: accept this — incidence is low (concurrent writes
+to the *same* item's status on *canonical* states, within the short live-MVP
+window) and the op-log retains the raw ops, so a forensic pass is possible later
+if a discrepancy surfaces. Recorded here so the absence is a choice, not a gap.
+
+**Note (vocabulary vs. behavior — when the "stuck state" class actually
+closes).** WI-1–4 consolidate the *vocabulary* and fix the lattice. The native
+`update_work_item` path still writes any vocab-valid status with no transition
+check until **WI-5** lands — so an illegal state remains creatable from the
+native path (now merely spelled consistently). The "stuck/illegal state" class
+is only fully retired at WI-5; treat WI-1–4 as necessary-not-sufficient for it.
