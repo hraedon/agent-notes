@@ -66,7 +66,12 @@ issues the right way:
 - The human face is dossier (when [[dossier Plan 011]] lands).
 - Do NOT create physical breadcrumb files.
 - Note the slug→schema mapping is automatic (hyphens→underscores).
-Template once, apply per repo.
+
+**Copy-paste-ready template:** `plans/templates/AGENTS-worktracking-section.md`
+(the block between the `BEGIN/END: work-tracking section` markers). It is
+project-agnostic — drop it into each repo's `AGENTS.md`, replacing any older
+breadcrumb/file-based instructions. Commands in it were verified against the live
+store.
 
 ## WI-4 — Validate + safety
 
