@@ -245,6 +245,10 @@ def test_doctor_bridge_target_unreachable():
 
 def test_bridge_to_agent_wake_ingest():
     """Bridge POSTs to a real agent-wake ingest app; event is delivered to mock router."""
+    # Cross-project integration check: requires the agent-wake sibling (and aiohttp).
+    # Skip cleanly when they are not installed (e.g. CI) rather than hard-failing.
+    pytest.importorskip("agent_waked", reason="agent-wake sibling not installed")
+    pytest.importorskip("aiohttp", reason="aiohttp not installed")
     from agent_waked.ingest import create_ingest_app
 
     class _MockRouter:
