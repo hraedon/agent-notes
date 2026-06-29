@@ -1,6 +1,19 @@
 """One-shot migration: breadcrumbs → work-item entities (Plan 008 Tier A #2).
 
-Usage:
+.. deprecated::
+    HISTORICAL RECORD ONLY — do not re-run and do not copy the status map below
+    as current truth. The ``breadcrumbs`` table this script read from was dropped
+    in schema 800 (``800_drop_breadcrumbs.sql``), so the script can no longer
+    execute. The status mapping here reflects the **legacy breadcrumb vocabulary
+    that predated the canonical lifecycle (Plan 010)**: it maps ``in_progress`` →
+    ``claimed`` and ``blocked`` → ``open`` because those canonical states did not
+    exist in the breadcrumb workflow yet. The *current* canonical lifecycle
+    states (open/in_progress/blocked/deferred/in_review/in_human_review/done) and
+    the correct legacy→canonical mapping live in
+    ``agent_notes.cli.breadcrumbs._BC_STATUS_TO_WI`` and
+    ``agent_notes.core.bc_files._map_bc_status_to_wi``.
+
+Usage (historical):
     AGENT_NOTES_DSN=postgresql://... \
     python -m agent_notes.scripts.migrate_breadcrumbs_to_work_items
 
