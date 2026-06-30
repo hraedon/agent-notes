@@ -241,6 +241,62 @@ class TestRegistaWriteThrough:
             reset_face()
             reg.close()
 
+    def test_refile_with_stale_local_projection_does_not_duplicate(
+        self, default_project, hmac_key_path, monkeypatch
+    ):
+        # Plan 015 regression: the duplication bug. A caller's create-vs-update
+        # decision is made against the LOCAL projection; when that projection is
+        # stale relative to the remote SoT (here: row deleted to simulate a fresh
+        # session / reset local DB), a re-file used to mint a duplicate in regista.
+        # The idempotency guard must find the existing item by normalized
+        # source_identifier and amend it in place — leaving regista with ONE item.
+        monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")
+
+        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        face = RegistaFace(reg)
+        reset_face()
+        set_face_for_test(face)
+
+        try:
+            first = WorkItemModel.file_work_item(
+                project_id=default_project.id,
+                identifier="050",
+                title="poll_hooks dead-letter",
+                status="open",
+                embedding=_vec768(),
+            )
+            wid_first = first["regista_work_item_id"]
+            assert len(face.list()) == 1
+
+            # Simulate the stale projection: drop the local row so the next file
+            # is routed as a "create" again (the exact bug condition).
+            with _conn() as conn:
+                conn.execute(
+                    "DELETE FROM work_items WHERE project_id = %s AND identifier = %s",
+                    (default_project.id, "050"),
+                )
+                conn.commit()
+
+            # Re-file the SAME breadcrumb, now under the BC- identifier format.
+            second = WorkItemModel.file_work_item(
+                project_id=default_project.id,
+                identifier="BC-050",
+                title="poll_hooks dead-letter (updated)",
+                status="open",
+                embedding=_vec768(),
+            )
+
+            # Regista still holds exactly ONE work-item, and it is the original.
+            all_items = face.list()
+            assert len(all_items) == 1, f"expected 1 item, got {len(all_items)} (duplicate!)"
+            assert str(second["regista_work_item_id"]) == str(wid_first)
+            assert face.get(wid_first).custom_fields["title"] == "poll_hooks dead-letter (updated)"
+        finally:
+            reset_face()
+            reg.close()
+
     def test_claim_release_uses_regista_claims_not_lifecycle(
         self, default_project, hmac_key_path, monkeypatch
     ):

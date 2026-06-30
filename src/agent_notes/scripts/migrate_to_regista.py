@@ -25,7 +25,7 @@ from agent_notes.core.actor import migration_actor
 from agent_notes.core.config import regista_config
 from agent_notes.core.db import _conn
 from agent_notes.core.kernel import get_blob
-from agent_notes.core.regista_face import RegistaFace
+from agent_notes.core.regista_face import RegistaFace, normalize_source_identifier
 
 
 def _resolve_project(conn: psycopg.Connection, slug: str) -> dict:
@@ -90,11 +90,13 @@ def _plan_row(row: dict) -> dict[str, Any]:
 
 
 def _find_existing_regista_id(face: RegistaFace, identifier: str) -> Any | None:
-    page = face.list(page_size=100)
-    for item in page:
-        if (item.custom_fields or {}).get("source_identifier") == identifier:
-            return item.work_item_id
-    return None
+    # Plan 015: page through ALL items via a normalized source_identifier lookup.
+    # The previous implementation scanned only the first page (page_size=100) and
+    # matched the raw identifier exactly, so re-running the migration on a project
+    # with >100 items, or one whose breadcrumbs were also filed under a different
+    # identifier format ("050" vs "BC-050"), silently re-created duplicates.
+    existing = face.find_by_source_identifier(identifier)
+    return existing.work_item_id if existing is not None else None
 
 
 def _migrate_row(
@@ -114,7 +116,7 @@ def _migrate_row(
             kind=row["kind"] or "todo",
             external_refs=dict(row.get("external_refs") or {}),
             diagnostic_keys=dict(row.get("diagnostic_keys") or {}),
-            source_identifier=row["identifier"],
+            source_identifier=normalize_source_identifier(row["identifier"]),
         )
     transition_name = _status_transition_for_create(row["status"])
     state = "open"

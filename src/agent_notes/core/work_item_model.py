@@ -29,6 +29,7 @@ from agent_notes.core import face_factory, kernel, projection
 from agent_notes.core.change_log import write_change
 from agent_notes.core.db import _conn
 from agent_notes.core.lifecycle import transition_for as _lifecycle_transition_for
+from agent_notes.core.regista_face import normalize_source_identifier
 
 
 class WorkItemModel:
@@ -107,20 +108,47 @@ class WorkItemModel:
 
         effective_title = title or identifier
         actor = face_factory.default_actor()
-        wid, state = face.create_breadcrumb(
-            actor,
-            title=effective_title,
-            description=body or "",
-            severity=severity,
-            kind=kind,
-            external_refs=external_refs or {},
-            diagnostic_keys=diagnostic_keys or {},
-            source_identifier=identifier,
-        )
-        if status != "open":
-            close_transition = WorkItemModel._transition_for_status_change("open", status)
-            if close_transition is not None:
-                state = face.transition_breadcrumb(actor, wid, close_transition)
+        norm_sid = normalize_source_identifier(identifier)
+
+        # Idempotency guard (Plan 015): regista is the SoT, but the create-vs-update
+        # decision in callers (e.g. bc_files.sync_breadcrumbs_from_dir) is made
+        # against the *local* projection, which can be empty/stale relative to the
+        # remote store (fresh session, reset local DB, per-project routing). When
+        # it is, the caller routes a re-import here as a "create" even though the
+        # breadcrumb already exists in regista — the original duplication bug. Look
+        # the item up by normalized source_identifier first; if it exists, amend
+        # fields in place rather than minting a duplicate. Status transitions are
+        # intentionally NOT re-driven on this path (the live lifecycle state wins;
+        # forcing a transition could violate the review gate).
+        existing = face.find_by_source_identifier(norm_sid) if norm_sid is not None else None
+        if existing is not None:
+            wid = existing.work_item_id
+            state = face.amend_breadcrumb(
+                actor,
+                wid,
+                current_state=existing.current_state,
+                title=effective_title,
+                description=body or "",
+                severity=severity,
+                kind=kind,
+                external_refs=external_refs or {},
+                diagnostic_keys=diagnostic_keys or {},
+            )
+        else:
+            wid, state = face.create_breadcrumb(
+                actor,
+                title=effective_title,
+                description=body or "",
+                severity=severity,
+                kind=kind,
+                external_refs=external_refs or {},
+                diagnostic_keys=diagnostic_keys or {},
+                source_identifier=norm_sid,
+            )
+            if status != "open":
+                close_transition = WorkItemModel._transition_for_status_change("open", status)
+                if close_transition is not None:
+                    state = face.transition_breadcrumb(actor, wid, close_transition)
         entity_id = WorkItemModel._entity_id_for_regista_create(identifier, wid)
         custom_fields = {
             "title": effective_title,
@@ -129,7 +157,7 @@ class WorkItemModel:
             "kind": kind,
             "external_refs": external_refs or {},
             "diagnostic_keys": diagnostic_keys or {},
-            "source_identifier": identifier,
+            "source_identifier": norm_sid,
         }
         with _conn() as conn:
             mirrored = projection.mirror_from_regista(

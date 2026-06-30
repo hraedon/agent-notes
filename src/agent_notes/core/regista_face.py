@@ -15,9 +15,30 @@ works in fast tests.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Protocol
 
 from agent_notes.core.actor import Actor
+
+# Breadcrumb source identifiers reach regista in two historical formats: the bare
+# file `number` ("050") and the local-projection identifier ("BC-050"). They
+# denote the same logical breadcrumb. Canonicalize by stripping a leading
+# `BC-`/`bc_` prefix so the two collapse to one key — used both for the
+# idempotent create lookup and the dedup repair (Plan 015). A separator is
+# required so legitimate identifiers like "BCD-1" are left untouched.
+_BC_PREFIX_RE = re.compile(r"^bc[-_]", re.IGNORECASE)
+
+
+def normalize_source_identifier(value: str | None) -> str | None:
+    """Canonicalize a breadcrumb ``source_identifier`` so ``BC-050`` == ``050``.
+
+    Strips a leading ``BC-`` / ``bc_`` prefix (case-insensitive) and surrounding
+    whitespace. ``None`` passes through. This is the single dedup key for a
+    logical breadcrumb across the file-sync and migration ingestion paths.
+    """
+    if value is None:
+        return None
+    return _BC_PREFIX_RE.sub("", str(value).strip()).strip()
 
 # Plan 010 (WI-2): agent-notes registers the single canonical workflow shipped
 # from regista — the same one dossier registers — so a work-item is governed by
@@ -215,6 +236,34 @@ class RegistaFace:
             if cursor is None:
                 break
         return items
+
+    def find_by_source_identifier(self, source_identifier: str | None) -> Any | None:
+        """Return the existing work-item for ``source_identifier``, or ``None``.
+
+        Matches on the normalized key (see ``normalize_source_identifier``), so a
+        breadcrumb already filed as ``BC-050`` is found when re-synced as ``050``.
+        This is the idempotency guard for the regista create path: callers look up
+        before creating so a re-import updates rather than duplicates. Returns the
+        first match (the store should hold at most one after the Plan 015 repair).
+        """
+        norm = normalize_source_identifier(source_identifier)
+        if norm is None:
+            return None
+        cursor: Any = None
+        while True:
+            page = self._reg.query_work_items(
+                workflow_name=WORKFLOW_NAME,
+                custom_field_filters={"source_identifier": norm},
+                page_size=100,
+                cursor=cursor,
+            )
+            if page.items:
+                return page.items[0]
+            if not getattr(page, "has_more", False):
+                return None
+            cursor = getattr(page, "cursor", None)
+            if cursor is None:
+                return None
 
     def history(self, work_item_id: Any) -> list[Any]:
         return list(self._reg.read_events(work_item_id=work_item_id, limit=10_000))
