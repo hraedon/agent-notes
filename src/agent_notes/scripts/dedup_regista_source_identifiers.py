@@ -80,7 +80,7 @@ def _plan(items: list[dict]) -> dict:
         winner = ordered[0]
         losers = ordered[1:]
         resolution_loss = winner["current_state"] not in TERMINAL and any(
-            l["current_state"] in TERMINAL for l in losers
+            loser["current_state"] in TERMINAL for loser in losers
         )
         if resolution_loss:
             risk_groups.append({"key": key, "winner": winner, "losers": losers})
@@ -116,7 +116,8 @@ def _retire(face: RegistaFace, loser: dict, winner_id: Any) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--project", default="regista", help="regista project schema (default: regista)")
+    ap.add_argument("--project", default="regista",
+                    help="regista project schema (default: regista)")
     ap.add_argument("--execute", action="store_true", help="apply (default: dry run)")
     ap.add_argument("--force-resolution-loss", action="store_true",
                     help="also retire done losers under non-done winners (risky)")
@@ -135,7 +136,7 @@ def main() -> int:
     print(f"losers to retire={len(plan['actions'])}  by-state={dict(state_counts)}")
     print(f"resolution-loss groups FLAGGED (skipped)={len(plan['risk_groups'])}")
     for rg in plan["risk_groups"][:20]:
-        ls = ",".join(f"{l['current_state']}({l['nev']})" for l in rg["losers"])
+        ls = ",".join(f"{loser['current_state']}({loser['nev']})" for loser in rg["losers"])
         print(f"  RISK key={rg['key']} winner={rg['winner']['current_state']}"
               f"({rg['winner']['nev']}) losers=[{ls}] title={rg['winner']['title']!r:.50}")
 
@@ -144,8 +145,9 @@ def main() -> int:
         return 0
 
     print("\n[execute] retiring duplicates...")
-    from agent_notes.core.config import regista_config
     import regista
+
+    from agent_notes.core.config import regista_config
 
     cfg = regista_config()
     reg = regista.Regista(cfg.dsn, args.project, cfg.hmac_key_path, require_ssl=cfg.require_ssl)
