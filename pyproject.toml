@@ -32,6 +32,14 @@ agent-notes-trigger-loop = "agent_notes.trigger_loop:main"
 agent-notes-web          = "agent_notes.web.app:main"
 
 
+[tool.uv.sources]
+# regista is a local sibling repo in the sf2 constellation, not published to
+# any package index. This mapping lets `uv lock` / `uv run` resolve it from the
+# checked-out source so the Makefile targets (make lint, make test) work without
+# a pre-built venv. Assumes the constellation layout (repos are siblings under a
+# common parent, e.g. /projects/{regista,agent-notes}).
+regista = { path = "../regista", editable = true }
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
