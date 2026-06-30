@@ -34,9 +34,15 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 print(f"Error: invalid --public-key: {exc}")
             return EXIT_GENERIC
 
-    from agent_notes.core.verifier import verify_all, verify_cache, verify_entity
+    from agent_notes.core.verifier import (
+        verify_all,
+        verify_cache,
+        verify_entity,
+        verify_gate_integrity,
+    )
 
     check_cache = getattr(args, "check_cache", False)
+    check_gate = getattr(args, "check_gate", False)
 
     try:
         if args.entity_id:
@@ -60,6 +66,17 @@ def cmd_verify(args: argparse.Namespace) -> int:
             result.passed += cache_result.passed
             result.failed += cache_result.failed
             result.violations.extend(cache_result.violations)
+
+        if check_gate:
+            # Plan 014 WI-3: surface terminal items completed without the
+            # cross-lineage review gate (degraded / unverified completions).
+            # These are warnings, not errors — force-close is a legitimate
+            # admin action; the detector makes the bypass legible.
+            gate_result = verify_gate_integrity(entity_id=args.entity_id)
+            result.checked += gate_result.checked
+            result.passed += gate_result.passed
+            result.failed += gate_result.failed
+            result.violations.extend(gate_result.violations)
     except RuntimeError as exc:
         if use_json:
             print(json.dumps({"error": str(exc)}, indent=2))
@@ -135,6 +152,12 @@ def register_verify_parsers(sub: argparse._SubParsersAction) -> None:
         action="store_true",
         dest="check_cache",
         help="Also verify that the work_items cache matches the op-log fold",
+    )
+    v_run.add_argument(
+        "--check-gate",
+        action="store_true",
+        dest="check_gate",
+        help="Also flag terminal items completed without the review gate (Plan 014 WI-3)",
     )
     _add_common(v_run)
     v_run.set_defaults(func=cmd_verify)

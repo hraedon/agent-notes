@@ -569,22 +569,46 @@ class TestE2EPostgres:
             )
         )
 
-        dsn = os.environ.get("AGENT_NOTES_DSN")
-        if not dsn:
-            pytest.skip("AGENT_NOTES_DSN not set; skipping e2e")
+        # regista's migrations target Postgres 15, but agent-notes' ephemeral
+        # testcontainer is pgvector/pgvector:pg17 (see tests/conftest.py), so
+        # reusing AGENT_NOTES_DSN makes create_project fail on the pg17
+        # container. Point instead at regista's own pg15 test DB spun up by
+        # /projects/regista/docker-compose.test.yml. The default mirrors the
+        # DSN constant used across /projects/regista/tests/*.py; the env var
+        # allows overriding the host/port in CI.
+        dsn = os.environ.get(
+            "REGISTA_TEST_DSN",
+            "postgresql://regista_test:regista_test@localhost:5432/regista_test",
+        )
+
+        import psycopg
+
+        try:
+            psycopg.connect(dsn, connect_timeout=2).close()
+        except Exception:
+            pytest.skip(
+                "regista pg15 test DB not available; run: "
+                "cd /projects/regista && docker compose -f "
+                "docker-compose.test.yml up -d"
+            )
 
         import regista
 
         from agent_notes.core.regista_face import RegistaFace
 
         project_name = f"an_outbox_{uuid.uuid4().hex[:8]}"
+        reg = None
 
+        # Single outer try/finally so the schema is always dropped and the
+        # regista connection pool is always closed — even if create_project
+        # fails partway (which would otherwise leak the an_outbox_<uuid>
+        # schema) or an assertion aborts the body.
         try:
-            reg = regista.Regista.create_project(dsn, project_name, str(key_path))
-        except Exception as exc:
-            pytest.skip(f"cannot create regista project: {exc}")
+            try:
+                reg = regista.Regista.create_project(dsn, project_name, str(key_path))
+            except Exception as exc:
+                pytest.skip(f"cannot create regista project: {exc}")
 
-        try:
             face = RegistaFace(reg)
             outface = OutboxAwareFace(
                 face,
@@ -598,8 +622,6 @@ class TestE2EPostgres:
             assert state == "open"
             assert outface.last_op_outboxed is False
 
-            import psycopg
-
             with psycopg.connect(dsn) as conn:
                 conn.execute(f'DROP SCHEMA IF EXISTS "{project_name}" CASCADE')
                 conn.commit()
@@ -611,14 +633,17 @@ class TestE2EPostgres:
             assert outface.last_op_outboxed is True
             assert outface.pending_count() == 1
         finally:
-            import psycopg
-
             try:
                 with psycopg.connect(dsn) as conn:
                     conn.execute(f'DROP SCHEMA IF EXISTS "{project_name}" CASCADE')
                     conn.commit()
             except Exception:
                 pass
+            if reg is not None:
+                try:
+                    reg.close()
+                except Exception:
+                    pass
 
 
 class _BusinessErrorFace:

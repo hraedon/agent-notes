@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -364,6 +365,34 @@ def cmd_bc_sync(args: argparse.Namespace) -> int:
     return EXIT_CONFLICT if (summary["errors"] or summary["missing_vocab"]) else EXIT_SUCCESS
 
 
+def _check_gitignored(repo_root: str | Path, path: Path) -> bool | None:
+    """Return whether *path* is gitignored inside the repo at *repo_root*.
+
+    Mirrors the fail-safe subprocess style of
+    :func:`agent_notes.core.git_reconcile.scan_git_for_resolutions`.
+    Returns ``True`` when *path* matches an ignore rule (git exit 0),
+    ``False`` when it is explicitly not ignored (git exit 1), or ``None``
+    when git could not decide — not a repository, git unavailable, or any
+    other non-0/non-1 exit. ``None`` means "skip the guard": we refuse to
+    block a write solely because we could not ask git.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root), "check-ignore", str(path)],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode == 0:
+        return True
+    if proc.returncode == 1:
+        return False
+    return None
+
+
 def cmd_bc_export_index(args: argparse.Namespace) -> int:
     use_json = getattr(args, "json", False)
     try:
@@ -376,12 +405,52 @@ def cmd_bc_export_index(args: argparse.Namespace) -> int:
     from agent_notes.core.db import list_projects
     from agent_notes.core.work_item_model import WorkItemModel
 
-    if args.output:
+    repo_root: str | None = None
+    if args.output is not None:
         out_path = Path(args.output)
     else:
         proj = next((p for p in list_projects(workspace_id=ws_id) if p.id == proj_id), None)
-        rr = proj.repo_root if proj else None
-        out_path = Path(rr or ".") / "OPEN_WORK_ITEMS.txt"
+        repo_root = proj.repo_root if proj else None
+        if not repo_root:
+            msg = (
+                "cannot determine repo root for this project; pass --output to "
+                "choose the output path explicitly."
+            )
+            if use_json:
+                print(json.dumps({"error": msg}, indent=2))
+            else:
+                print(f"Error: {msg}", file=sys.stderr)
+            return EXIT_GENERIC
+        out_path = Path(repo_root) / "OPEN_WORK_ITEMS.txt"
+
+    # Guard (WI-011/WI-012): refuse to write the generated index into the repo
+    # tree unless it is gitignored, so a `git add -A` can't commit a churning
+    # STALE banner. Only the default repo-root path is guarded — an explicit
+    # --output is the operator's choice and is respected as-is. When git
+    # cannot decide (no repo / git error) the guard is skipped rather than
+    # blocking a legitimate write.
+    if args.output is None and repo_root:
+        ignored = _check_gitignored(repo_root, out_path.resolve())
+        if ignored is False:
+            msg = (
+                f"refusing to write {out_path} — not gitignored. Add it to "
+                ".gitignore or use --output to write outside the repo."
+            )
+            if use_json:
+                print(
+                    json.dumps(
+                        {
+                            "error": f"refusing to write {out_path} — not gitignored",
+                            "path": str(out_path),
+                            "hint": "add OPEN_WORK_ITEMS.txt to .gitignore, or use "
+                            "--output to write outside the repo",
+                        },
+                        indent=2,
+                    )
+                )
+            else:
+                print(msg, file=sys.stderr)
+            return EXIT_GENERIC
 
     open_wis = WorkItemModel.query_work_items(project_id=proj_id, is_open=True, limit=200)
     severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}

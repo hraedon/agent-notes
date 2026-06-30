@@ -1,8 +1,8 @@
 # Plan 014 — Degrade-mode gate parity (retire the behavior-drift category)
 
-**Status:** WI-1/WI-2/WI-5 IMPLEMENTED 2026-06-30 (decision: Option A(b)).
-WI-3 (degraded-completion detector in `verify`) and WI-4 (reconcile pass) remain.
-**Author:** opus-4.8.
+**Status:** WI-1/WI-2/WI-3/WI-4/WI-5 IMPLEMENTED 2026-06-30 (decision: Option A(b)).
+Plan complete — all work items landed. WI-3 and WI-4 were implemented by
+umans-glm-5.2 in this session. **Author:** opus-4.8 (WI-1/2/5), umans-glm-5.2 (WI-3/4).
 
 **Decision (resolved 2026-06-30):** Option **A(b)** — native `close` defers to
 `in_review` (never terminal); `force=True` is the admin/repair terminal hatch.
@@ -117,15 +117,32 @@ detector regardless of which path is chosen.
   `force=True` (the `("open","done"): close_from_open` review-exempt transition is
   the one deliberate exception — confirm it is intended to remain reachable in
   degrade mode, or also gate it).
-- **WI-3 — Degraded-completion detector in `verify`.** `agent-notes verify`
-  flags any terminal item whose op-chain shows a terminal `close`/`set_status`
-  to `done` *without* a preceding cross-lineage `adversarial_pass` in the chain.
-  This catches both pre-existing native-path completions and any future
-  `force=True` overrides. (This is Option B's legibility, adopted as a net.)
-- **WI-4 — Reconcile pass (optional, pairs with the outbox).** When a degraded
-  item later reaches regista, re-drive it through the gate (or leave it terminal
-  and record an attestation that the gate was retroactively waived). Decide
-  whether this is automatic or operator-invoked.
+- **WI-3 — Degraded-completion detector in `verify`.** `agent-notes verify run
+  --check-gate` flags any terminal item whose op-chain shows a terminal
+  `close`/`set_status` to `done` *without* a preceding cross-lineage
+  `adversarial_pass` in the chain. This catches both pre-existing native-path
+  completions and any future `force=True` overrides. (This is Option B's
+  legibility, adopted as a net.) **Implemented:** `verify_gate_integrity()` in
+  `core/verifier.py` reconstructs the status-transition chain (grouped by
+  lamport, mirroring the fold) and surfaces `gate`-rule warnings (severity
+  `warning` — force-close is a legitimate admin action; the op-log is not
+  corrupt). The review-exempt dismissal (`close_from_open`: `open → done`) is
+  excluded — it declines work rather than completing it. Regista-path items
+  (projection-only, no ops in `op_log`) are skipped: regista's own validators
+  enforce the gate by construction. Tests: `TestGateIntegrityDetector` (7) +
+  `TestVerifyCli.test_cli_verify_check_gate_flags_force_close`.
+- **WI-4 — Reconcile pass (operator-invoked attestation, pairs with the
+  outbox).** When a degraded item is left terminal, an operator may record an
+  attestation that the gate was retroactively waived: `agent-notes work-item
+  attest-gate <identifier> --reason <text>` writes a `set_field` op stamping
+  `diagnostic_keys.gate_attestation`, which the WI-3 detector recognizes and
+  skips. The item stays terminal; the waiver is legible in the op-chain rather
+  than silently completing work. This is the "leave it terminal and record an
+  attestation" option from §3 (chosen over automatic re-driving: the latter
+  requires regista connectivity and would re-run the gate against live state,
+  which is a separate operational decision). Operates on the local op-log only
+  — regista-path items (no op-chain) are gate-verified by construction and are
+  rejected with a clear message. Tests: `TestGateAttestation` (3).
 - **WI-5 — Cross-path behavior test.** A single test that drives the *same* verb
   sequence through both `face_factory` branches and asserts the terminal-reachability
   invariant holds identically. The Plan 010 unit suites test each path in
@@ -140,6 +157,12 @@ land until the §3 decision is explicit. WI-3 (detector) is safe and valuable
 independently and can land first as the legibility net. WI-5 is the regression
 guard. WI-4 is deferrable.
 
+**Landed:** WI-1/WI-2/WI-5 (2026-06-30), WI-3/WI-4 (2026-06-30). The detector
+(WI-3) shipped as `--check-gate` (opt-in, parallel to `--check-cache`) with
+warning-level violations so it surfaces provenance weakness without failing
+CI. WI-4 shipped as an operator-invoked `attest-gate` command (not automatic)
+so the waiver is an explicit, auditable action.
+
 **Risk:** anything currently relying on native `close` reaching terminal (scripts,
 the `WRITES=0` workflow) changes meaning. Audit callers before WI-1. Given the
 go-live MVP runs `WRITES=1`, the native completion path should have near-zero
@@ -152,4 +175,6 @@ the *gate behavior* path-invariant. Together they retire both drift categories
 named in 013 §8. After this lands, "what a status is" and "what a verb does" are
 both consistent across the dual path, and the only remaining cross-path
 difference is *where the validators run* (regista only) — which is by design, not
-drift.
+drift. The WI-3 detector makes any residual gap (a `force=True` override, or a
+pre-existing native completion) legible in `verify`, and WI-4 lets an operator
+record an auditable waiver rather than leaving the bypass undocumented.

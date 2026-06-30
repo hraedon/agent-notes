@@ -400,6 +400,40 @@ def cmd_wi_diagnose(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
+def cmd_wi_attest_gate(args: argparse.Namespace) -> int:
+    use_json = getattr(args, "json", False)
+    try:
+        ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return code
+
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    try:
+        wi = WorkItemModel.attest_gate_waiver(
+            proj_id, args.identifier, reason=args.reason
+        )
+    except ValueError as exc:
+        if use_json:
+            print(json.dumps({"error": str(exc)}, indent=2))
+        else:
+            print(f"Error: {exc}")
+        return EXIT_NOT_FOUND
+
+    if use_json:
+        print(json.dumps({"work_item": wi}, indent=2, default=str))
+    else:
+        diag = wi.get("diagnostic_keys") or {}
+        att = diag.get("gate_attestation", {}) if isinstance(diag, dict) else {}
+        print(f"Gate waiver attested for **{wi['identifier']}** (status={wi['status']}).")
+        if att:
+            print(f"  Reason: {att.get('reason', '')}")
+            print(f"  Actor:  {att.get('actor_id', '')}")
+    return EXIT_SUCCESS
+
+
 def cmd_wi_request(args: argparse.Namespace) -> int:
     """Request a new work item in a target project (cross-project, P3)."""
     use_json = getattr(args, "json", False)
@@ -835,6 +869,19 @@ def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
     wi_diagnose.add_argument("identifier")
     _add_common(wi_diagnose)
     wi_diagnose.set_defaults(func=cmd_wi_diagnose)
+
+    wi_attest = wi_sub.add_parser(
+        "attest-gate",
+        help="Record that the review gate was waived for a degraded completion (Plan 014 WI-4)",
+    )
+    wi_attest.add_argument("identifier")
+    wi_attest.add_argument(
+        "--reason",
+        required=True,
+        help="Why the cross-lineage review gate was waived (recorded in the op-chain)",
+    )
+    _add_common(wi_attest)
+    wi_attest.set_defaults(func=cmd_wi_attest_gate)
 
     # Cross-project commands (P3)
     wi_request = wi_sub.add_parser(

@@ -21,6 +21,7 @@ Public surface:
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import psycopg
@@ -29,7 +30,12 @@ from psycopg.rows import dict_row
 from agent_notes.core import face_factory, kernel, projection
 from agent_notes.core.change_log import write_change
 from agent_notes.core.db import _conn
-from agent_notes.core.lifecycle import transition_for as _lifecycle_transition_for
+from agent_notes.core.lifecycle import (
+    is_terminal,
+)
+from agent_notes.core.lifecycle import (
+    transition_for as _lifecycle_transition_for,
+)
 from agent_notes.core.regista_face import normalize_source_identifier
 
 
@@ -196,6 +202,34 @@ class WorkItemModel:
         if row is None:
             raise ValueError(f"Work item not found: {identifier!r} in project {project_id}")
         return dict(row)
+
+    @staticmethod
+    def _embedding_equal(new_emb: Any, old_emb: Any) -> bool:
+        """Compare an incoming embedding (list of floats) against the cached
+        value read from ``work_items.embedding``.
+
+        The cached value is a pgvector text string (``"[0.1,0.2,...]"``) when
+        read without the pgvector psycopg adapter; the incoming value is a
+        plain list of floats. Normalize both to lists and compare with a
+        tolerance so float representation drift doesn't cause spurious ops
+        (WI-008/WI-009).
+        """
+        if new_emb is None or old_emb is None:
+            return new_emb is old_emb
+
+        def _to_float_list(v: Any) -> list[float]:
+            if isinstance(v, str):
+                return [float(x) for x in json.loads(v)]
+            return [float(x) for x in v]
+
+        try:
+            a = _to_float_list(new_emb)
+            b = _to_float_list(old_emb)
+        except (TypeError, ValueError):
+            return False
+        if len(a) != len(b):
+            return False
+        return all(abs(x - y) < 1e-6 for x, y in zip(a, b))
 
     @staticmethod
     def _update_change_log_payload(
@@ -515,26 +549,36 @@ class WorkItemModel:
             if severity is not None:
                 cls._validate_vocab(conn, workspace_id, "wi_severity", severity)
 
-            # Build payload for the op.
+            # Build payload for the set_field op, diffing each field against
+            # the item's current values so an unchanged re-import writes no op
+            # (WI-008/WI-009 — op-log bloat on breadcrumb re-sync).
             payload: dict = {}
-            if title is not None:
+            if title is not None and title != old["title"]:
                 payload["title"] = title
             if body is not None:
-                payload["body_hash"] = kernel.store_blob(conn, body)
-            if kind is not None:
+                body_hash = kernel.store_blob(conn, body)
+                if body_hash != old["body_hash"]:
+                    payload["body_hash"] = body_hash
+            if kind is not None and kind != old["kind"]:
                 payload["kind"] = kind
-            if severity is not None:
+            if severity is not None and severity != old["severity"]:
                 payload["severity"] = severity
-            if external_refs is not None:
+            if external_refs is not None and old.get("external_refs") != external_refs:
                 payload["external_refs"] = external_refs
-            if diagnostic_keys is not None:
+            if diagnostic_keys is not None and old.get("diagnostic_keys") != diagnostic_keys:
                 payload["diagnostic_keys"] = diagnostic_keys
-            if embedding is not None:
+            if embedding is not None and not cls._embedding_equal(
+                embedding, old.get("embedding")
+            ):
                 payload["embedding"] = embedding
-            if frontmatter_version is not None:
+            if (
+                frontmatter_version is not None
+                and frontmatter_version != old.get("frontmatter_version")
+            ):
                 payload["frontmatter_version"] = frontmatter_version
 
             # If status changed, write a separate set_status op.
+            status_changed = False
             if status is not None and status != old["status"]:
                 # Plan 013 WI-5: pre-flight transition check on the native path.
                 # Both paths (regista + native) now reject the same illegal
@@ -573,6 +617,7 @@ class WorkItemModel:
                         "new_status": status,
                     },
                 )
+                status_changed = True
 
             # Write the set_field op if any non-status fields changed.
             if payload:
@@ -596,34 +641,46 @@ class WorkItemModel:
                     },
                 )
 
+            # Nothing changed (no status op, no set_field op): skip the fold
+            # and change_log entirely, returning the current state as-is
+            # (WI-008/WI-009).
+            if not payload and not status_changed:
+                conn.commit()
+                return dict(old)
+
             # Fold into cache.
             folded = kernel.fold_work_item(conn, entity_id)
             if folded is None:
                 raise RuntimeError("fold_work_item returned None after update op")
 
-            # Backward-compat change_log.
+            # Backward-compat change_log — only when something actually changed.
+            # ``folded`` is the work_items cache row (no ``body`` column — only
+            # ``body_hash``), so resolve the new body from the blob for the diff,
+            # mirroring the regista path (``_update_change_log_payload``).
+            new_body = kernel.get_blob(conn, folded["body_hash"]) or ""
             cl_payload: dict = {}
-            for field in ("title", "body", "kind", "status", "severity"):
+            for field in ("title", "kind", "status", "severity"):
                 old_val = old.get(field)
-                if field == "body":
-                    old_val = old_body
                 new_val = folded.get(field)
                 if old_val != new_val:
                     cl_payload[field] = {"from": old_val, "to": new_val}
+            if old_body != new_body:
+                cl_payload["body"] = {"from": old_body, "to": new_body}
             if external_refs is not None and old.get("external_refs") != external_refs:
                 cl_payload["external_refs"] = external_refs
             if diagnostic_keys is not None and old.get("diagnostic_keys") != diagnostic_keys:
                 cl_payload["diagnostic_keys"] = diagnostic_keys
 
-            write_change(
-                conn,
-                kind=cls.kind,
-                workspace_id=workspace_id,
-                project_id=project_id,
-                identifier=identifier,
-                event="updated",
-                payload=cl_payload if cl_payload else {},
-            )
+            if cl_payload:
+                write_change(
+                    conn,
+                    kind=cls.kind,
+                    workspace_id=workspace_id,
+                    project_id=project_id,
+                    identifier=identifier,
+                    event="updated",
+                    payload=cl_payload,
+                )
 
             conn.commit()
             return dict(folded)
@@ -815,6 +872,102 @@ class WorkItemModel:
                 identifier=identifier,
                 event="status_changed",
                 payload={"old_status": old["status"], "new_status": "closed"},
+            )
+
+            conn.commit()
+            return dict(folded)
+
+    @classmethod
+    def attest_gate_waiver(
+        cls,
+        project_id: int,
+        identifier: str,
+        reason: str,
+        actor_id: str | None = None,
+    ) -> dict:
+        """Record that the review gate was retroactively waived (Plan 014 WI-4).
+
+        For a degraded completion (a terminal item that reached ``done`` /
+        ``closed`` without the cross-lineage review gate — e.g. a
+        ``force=True`` close), an operator may record an attestation that the
+        gate was waived. This writes a ``set_field`` op stamping
+        ``diagnostic_keys.gate_attestation``, which the WI-3 detector
+        (:func:`verifier.verify_gate_integrity`) recognizes and skips.
+
+        The item stays terminal; the attestation makes the waiver legible in
+        the op-chain rather than silently completing work. It is an
+        operator-invoked action (not automatic) and operates on the local
+        op-log only — regista-path items (projection-only, no ops) are
+        gate-verified by construction and have nothing to attest.
+        """
+        from datetime import datetime, timezone
+
+        with _conn() as conn:
+            workspace_id = cls._resolve_workspace_for_project(conn, project_id)
+            old = cls._load_work_item_row(conn, project_id, identifier)
+            entity_id = old["entity_id"]
+            status = old["status"]
+            canonical = "done" if status == "closed" else status
+            if not is_terminal(canonical):
+                raise ValueError(
+                    f"Work item {identifier!r} is not terminal (status={status!r}); "
+                    "gate attestation applies only to completed items."
+                )
+
+            # Only op-log (native-path) items can be attested — regista-path
+            # items have no op-chain and are gate-verified by construction.
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT 1 FROM op_log WHERE entity_id = %s AND op_type = 'create'",
+                (entity_id,),
+            )
+            if cur.fetchone() is None:
+                raise ValueError(
+                    f"Work item {identifier!r} has no op-chain (regista-path item); "
+                    "it is gate-verified by construction and needs no attestation."
+                )
+
+            actor = face_factory.default_actor()
+            attestation = {
+                "status": "waived",
+                "reason": reason,
+                "actor_id": actor.actor_id,
+                "waived_at": datetime.now(timezone.utc).isoformat(),
+            }
+            op = kernel.commit_op(
+                conn,
+                entity_id=entity_id,
+                entity_type=cls.entity_type,
+                op_type="set_field",
+                payload={"diagnostic_keys": {"gate_attestation": attestation}},
+                parent_op_ids=[entity_id],
+                actor_id=actor.actor_id,
+            )
+
+            folded = kernel.fold_work_item(conn, entity_id)
+            if folded is None:
+                raise RuntimeError("fold_work_item returned None after attest op")
+
+            kernel.emit_event(
+                conn,
+                op_id=op["op_id"],
+                event_type="item.gate_attested",
+                payload={
+                    "entity_id": entity_id,
+                    "identifier": identifier,
+                    "attestation": attestation,
+                },
+            )
+
+            write_change(
+                conn,
+                kind=cls.kind,
+                workspace_id=workspace_id,
+                project_id=project_id,
+                identifier=identifier,
+                event="gate_attested",
+                payload={"attestation": attestation},
+                actor=actor.actor_id,
             )
 
             conn.commit()

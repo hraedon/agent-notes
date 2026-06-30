@@ -49,5 +49,5 @@ select = ["E", "F", "I", "N", "W"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "postgres: requires a real Postgres instance (set AGENT_NOTES_DSN)",
+    "postgres: requires a real Postgres instance (regista pg15 test DB; set REGISTA_TEST_DSN)",
 ]

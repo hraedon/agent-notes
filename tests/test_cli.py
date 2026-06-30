@@ -1086,3 +1086,147 @@ def test_memory_search(default_project):
     data = json.loads(result.stdout)
     names = {m["name"] for m in data["memories"]}
     assert "search-cli-mem" in names
+
+
+# ---------------------------------------------------------------------------
+# breadcrumb export-index gitignore guard (WI-011/WI-012)
+# ---------------------------------------------------------------------------
+
+
+def _git_init(repo: Path) -> None:
+    """Initialise a real git repo so `git check-ignore` behaves as in production."""
+    subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, check=True)
+
+
+def _register_repo_project(ws_id: int, repo: Path, slug: str):
+    """Register a project whose repo_root is *repo* and return it."""
+    return coredb.get_or_create_project(
+        ws_id, slug=slug, name=slug, repo_root=str(repo)
+    )
+
+
+def test_export_index_refuses_unignored_repo_root(default_project):
+    """WI-011/WI-012: the default repo-root index must not be written when
+    OPEN_WORK_ITEMS.txt is not gitignored — a `git add -A` would otherwise
+    commit a churning STALE banner. The command refuses with exit 1 and a
+    structured JSON error, and leaves no file behind."""
+    with tempfile.TemporaryDirectory() as td:
+        repo = Path(td) / "repo"
+        repo.mkdir()
+        _git_init(repo)
+        # No .gitignore entry for OPEN_WORK_ITEMS.txt.
+        _register_repo_project(default_project.workspace_id, repo, "expidx-unguarded")
+
+        result = _run(
+            "breadcrumb",
+            "export-index",
+            "--path",
+            str(repo),
+            "--json",
+            check=False,
+        )
+        assert result.returncode == 1, result.stderr
+        data = json.loads(result.stdout)
+        assert "gitignored" in data["error"]
+        assert data["path"] == str(repo / "OPEN_WORK_ITEMS.txt")
+        assert "gitignore" in data["hint"]
+        # Refusal must not have side-effects: no file written.
+        assert not (repo / "OPEN_WORK_ITEMS.txt").exists()
+
+
+def test_export_index_writes_when_gitignored(default_project):
+    """When OPEN_WORK_ITEMS.txt IS gitignored, the guard passes and the file is
+    written to the repo root with exit 0."""
+    with tempfile.TemporaryDirectory() as td:
+        repo = Path(td) / "repo"
+        repo.mkdir()
+        _git_init(repo)
+        (repo / ".gitignore").write_text("OPEN_WORK_ITEMS.txt\n", encoding="utf-8")
+        _register_repo_project(default_project.workspace_id, repo, "expidx-guarded")
+
+        result = _run(
+            "breadcrumb",
+            "export-index",
+            "--path",
+            str(repo),
+            "--json",
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        data = json.loads(result.stdout)
+        assert data["path"] == str(repo / "OPEN_WORK_ITEMS.txt")
+        assert (repo / "OPEN_WORK_ITEMS.txt").is_file()
+
+
+def test_export_index_output_flag_bypasses_guard(default_project):
+    """An explicit --output is the operator's choice; the gitignore guard is
+    skipped even when the repo root is unignored, writing wherever --output
+    points."""
+    with tempfile.TemporaryDirectory() as td:
+        repo = Path(td) / "repo"
+        repo.mkdir()
+        _git_init(repo)
+        # Unignored repo root — would be refused by the default-path guard.
+        _register_repo_project(default_project.workspace_id, repo, "expidx-output")
+        out_file = Path(td) / "elsewhere.txt"
+
+        result = _run(
+            "breadcrumb",
+            "export-index",
+            "--path",
+            str(repo),
+            "--output",
+            str(out_file),
+            "--json",
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert out_file.is_file()
+        # And the repo root was not touched.
+        assert not (repo / "OPEN_WORK_ITEMS.txt").exists()
+
+
+def test_export_index_no_git_repo_no_guard(default_project):
+    """When repo_root is not inside a git repo, there is no tree to pollute;
+    the guard is skipped and the file is written to the repo root."""
+    with tempfile.TemporaryDirectory() as td:
+        repo = Path(td) / "repo"
+        repo.mkdir()
+        # Deliberately NOT a git repo (no `git init`).
+        _register_repo_project(default_project.workspace_id, repo, "expidx-nogit")
+
+        result = _run(
+            "breadcrumb",
+            "export-index",
+            "--path",
+            str(repo),
+            "--json",
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert (repo / "OPEN_WORK_ITEMS.txt").is_file()
+
+
+def test_export_index_refuses_when_repo_root_missing(default_project):
+    """WI-011/WI-012: when the project has no repo_root, the default path
+    cannot be gitignore-checked, so the command refuses rather than write to an
+    arbitrary CWD unguarded. The operator must pass --output explicitly."""
+    coredb.get_or_create_project(
+        default_project.workspace_id,
+        slug="expidx-noroot",
+        name="expidx-noroot",
+        repo_root=None,
+    )
+    result = _run(
+        "breadcrumb",
+        "export-index",
+        "--workspace",
+        "default",
+        "--project",
+        "expidx-noroot",
+        "--json",
+        check=False,
+    )
+    assert result.returncode == 1, result.stderr
+    data = json.loads(result.stdout)
+    assert "repo root" in data["error"].lower()

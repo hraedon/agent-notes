@@ -165,6 +165,197 @@ class TestWorkItemUpdate:
         assert updated["title"] == "New title"
 
 
+class TestWorkItemUpdateNoOp:
+    """WI-008/WI-009 — ``update_work_item`` must not write a redundant
+    ``set_field`` op (or change_log row) when no field actually changed.
+
+    Before the fix, the native path built its payload from any non-None
+    argument without comparing to the item's current values, so every
+    breadcrumb re-sync that re-imported an unchanged file appended a
+    set_field op, folded it, cached it, emitted an event, and wrote a
+    change_log row — all for zero state change.
+    """
+
+    @staticmethod
+    def _op_count(entity_id: str) -> int:
+        with kernel._conn() as conn:
+            return len(kernel._get_entity_ops(conn, entity_id))
+
+    @staticmethod
+    def _cl_count(workspace_id: int, project_id: int, identifier: str) -> int:
+        from agent_notes.core.change_log import history
+
+        return len(history("work_item", workspace_id, project_id, identifier))
+
+    def test_same_title_writes_no_op(self, default_project):
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id, identifier="WI-NOOP-01",
+            title="Same title", status="open", embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+        ops_before = self._op_count(entity_id)
+        WorkItemModel.update_work_item(
+            project_id=default_project.id, identifier="WI-NOOP-01",
+            title="Same title",
+        )
+        assert self._op_count(entity_id) == ops_before
+
+    def test_changed_title_writes_op(self, default_project):
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id, identifier="WI-NOOP-02",
+            title="Old title", status="open", embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+        ops_before = self._op_count(entity_id)
+        updated = WorkItemModel.update_work_item(
+            project_id=default_project.id, identifier="WI-NOOP-02",
+            title="New title",
+        )
+        assert self._op_count(entity_id) == ops_before + 1
+        assert updated["title"] == "New title"
+
+    def test_all_same_fields_writes_no_op(self, default_project):
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id, identifier="WI-NOOP-03",
+            title="Unchanged", body="Body text", kind="bug",
+            status="open", severity="high", embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+        ops_before = self._op_count(entity_id)
+        cl_before = self._cl_count(
+            default_project.workspace_id, default_project.id, "WI-NOOP-03",
+        )
+        updated = WorkItemModel.update_work_item(
+            project_id=default_project.id, identifier="WI-NOOP-03",
+            title="Unchanged", body="Body text", kind="bug", severity="high",
+        )
+        assert self._op_count(entity_id) == ops_before
+        assert self._cl_count(
+            default_project.workspace_id, default_project.id, "WI-NOOP-03",
+        ) == cl_before
+        # Returns the current state unchanged.
+        assert updated["title"] == "Unchanged"
+        assert updated["kind"] == "bug"
+
+    def test_same_body_writes_no_op(self, default_project):
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id, identifier="WI-NOOP-04",
+            title="Body test", body="Stable body text", status="open",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+        ops_before = self._op_count(entity_id)
+        WorkItemModel.update_work_item(
+            project_id=default_project.id, identifier="WI-NOOP-04",
+            body="Stable body text",
+        )
+        assert self._op_count(entity_id) == ops_before
+
+    def test_same_embedding_writes_no_op(self, default_project):
+        vec = [0.1] * 768
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id, identifier="WI-NOOP-05",
+            title="Embed test", status="open", embedding=vec,
+        )
+        entity_id = wi["entity_id"]
+        ops_before = self._op_count(entity_id)
+        WorkItemModel.update_work_item(
+            project_id=default_project.id, identifier="WI-NOOP-05",
+            embedding=vec,
+        )
+        assert self._op_count(entity_id) == ops_before
+
+    def test_changed_embedding_writes_op(self, default_project):
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id, identifier="WI-NOOP-06",
+            title="Embed change", status="open", embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+        ops_before = self._op_count(entity_id)
+        WorkItemModel.update_work_item(
+            project_id=default_project.id, identifier="WI-NOOP-06",
+            embedding=[0.9] * 768,
+        )
+        assert self._op_count(entity_id) == ops_before + 1
+
+    def test_same_status_no_op(self, default_project):
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id, identifier="WI-NOOP-07",
+            title="Status test", status="open", embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+        ops_before = self._op_count(entity_id)
+        WorkItemModel.update_work_item(
+            project_id=default_project.id, identifier="WI-NOOP-07",
+            status="open",
+        )
+        assert self._op_count(entity_id) == ops_before
+
+    def test_same_external_refs_no_op(self, default_project):
+        refs = {"github": "issue-42"}
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id, identifier="WI-NOOP-08",
+            title="Refs test", status="open", embedding=_vec768(),
+            external_refs=refs,
+        )
+        entity_id = wi["entity_id"]
+        ops_before = self._op_count(entity_id)
+        WorkItemModel.update_work_item(
+            project_id=default_project.id, identifier="WI-NOOP-08",
+            external_refs=refs,
+        )
+        assert self._op_count(entity_id) == ops_before
+
+    def test_mixed_changed_and_unchanged_only_writes_changed(self, default_project):
+        # Only the genuinely-changed field must appear in the set_field op; the
+        # unchanged fields must not bloat the payload (WI-008/WI-009).
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id, identifier="WI-NOOP-09",
+            title="Keep me", body="Keep body", kind="bug", severity="high",
+            status="open", embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+        WorkItemModel.update_work_item(
+            project_id=default_project.id, identifier="WI-NOOP-09",
+            title="Keep me", body="Keep body", kind="todo", severity="high",
+        )
+        ops = kernel._get_entity_ops(kernel._conn().__enter__(), entity_id)
+        set_field_ops = [o for o in ops if o["op_type"] == "set_field"]
+        assert len(set_field_ops) >= 1
+        last_payload = {
+            k: v for k, v in (set_field_ops[-1].get("payload") or {}).items()
+            if k != "envelope"
+        }
+        assert "kind" in last_payload
+        assert "title" not in last_payload
+        assert "severity" not in last_payload
+
+    def test_change_log_body_payload_is_correct(self, default_project):
+        # Adversarial-review catch: the native change_log builder used to log
+        # body as {"from": old_body, "to": None} because folded has no "body"
+        # column. Verify the new body is resolved from the blob instead.
+        from agent_notes.core.change_log import history
+
+        WorkItemModel.file_work_item(
+            project_id=default_project.id, identifier="WI-NOOP-10",
+            title="CL body", body="original body", status="open",
+            embedding=_vec768(),
+        )
+        WorkItemModel.update_work_item(
+            project_id=default_project.id, identifier="WI-NOOP-10",
+            body="updated body",
+        )
+        rows = history(
+            "work_item", default_project.workspace_id, default_project.id, "WI-NOOP-10",
+        )
+        update_rows = [r for r in rows if r.event == "updated"]
+        assert update_rows, "expected an 'updated' change_log row"
+        body_entry = update_rows[-1].payload.get("body")
+        assert body_entry is not None, "change_log should record the body change"
+        assert body_entry["from"] == "original body"
+        assert body_entry["to"] == "updated body"
+
+
 class TestWorkItemClose:
     def test_close_work_item(self, default_project):
         # Plan 014 A(b): native (degrade) close DEFERS to in_review, not terminal

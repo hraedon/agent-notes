@@ -511,3 +511,42 @@ class TestVerifyCli:
         with kernel._conn() as conn:
             kernel.fold_work_item(conn, wi["entity_id"])
             conn.commit()
+
+    def test_cli_verify_check_gate_flags_force_close(self, default_project, capsys):
+        # Force the native (degrade) path so close_work_item(force=True) writes
+        # a terminal close op to the op-log (the degraded completion).
+        import os
+
+        from agent_notes.cli.verify import cmd_verify
+        from agent_notes.core.face_factory import reset_face
+
+        os.environ.pop("AGENT_NOTES_REGISTA_WRITES", None)
+        reset_face()
+
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-V-CLI-GATE",
+            title="Gate CLI",
+            embedding=_vec768(),
+        )
+        WorkItemModel.close_work_item(
+            default_project.id, "WI-V-CLI-GATE", force=True,
+        )
+
+        ns = argparse.Namespace(
+            json=True,
+            entity_id=wi["entity_id"],
+            entity_type=None,
+            public_key=None,
+            no_policy=False,
+            check_cache=False,
+            check_gate=True,
+        )
+        # Warnings do not fail verification (exit 0), but the gate violation
+        # is surfaced in the output.
+        assert cmd_verify(ns) == 0
+        data = json.loads(capsys.readouterr().out)
+        gate_vs = [v for v in data["violations"] if v["rule"] == "gate"]
+        assert len(gate_vs) == 1
+        assert gate_vs[0]["severity"] == "warning"
+        assert "force-close" in gate_vs[0]["message"]
