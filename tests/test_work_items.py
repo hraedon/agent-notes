@@ -167,6 +167,8 @@ class TestWorkItemUpdate:
 
 class TestWorkItemClose:
     def test_close_work_item(self, default_project):
+        # Plan 014 A(b): native (degrade) close DEFERS to in_review, not terminal
+        # — completion needs the review gate. force=True is the terminal escape hatch.
         WorkItemModel.file_work_item(
             project_id=default_project.id,
             identifier="WI-007",
@@ -174,7 +176,19 @@ class TestWorkItemClose:
             status="open",
             embedding=_vec768(),
         )
-        closed = WorkItemModel.close_work_item(default_project.id, "WI-007")
+        deferred = WorkItemModel.close_work_item(default_project.id, "WI-007")
+        assert deferred["status"] == "in_review"
+        assert deferred["closed_at"] is None
+
+    def test_force_close_work_item_terminal(self, default_project):
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-007F",
+            title="To force-close",
+            status="open",
+            embedding=_vec768(),
+        )
+        closed = WorkItemModel.close_work_item(default_project.id, "WI-007F", force=True)
         assert closed["status"] == "closed"
         assert closed["closed_at"] is not None
 
@@ -468,7 +482,9 @@ class TestEventSurface:
             title="Event filter",
             embedding=_vec768(),
         )
-        WorkItemModel.close_work_item(default_project.id, "WI-EVT-02")
+        # Plan 014 A(b): only force=True writes the terminal close (item.closed);
+        # default close now defers to in_review.
+        WorkItemModel.close_work_item(default_project.id, "WI-EVT-02", force=True)
         created_events = kernel.events_since(cursor=0, event_type="item.created", limit=10)
         closed_events = kernel.events_since(cursor=0, event_type="item.closed", limit=10)
         assert any(e["event_type"] == "item.created" for e in created_events)
@@ -568,7 +584,8 @@ class TestDiagnose:
             status="open",
             embedding=_vec768(),
         )
-        WorkItemModel.close_work_item(default_project.id, "WI-DIAG-01")
+        # force=True writes a terminal close op (Plan 014: default close defers).
+        WorkItemModel.close_work_item(default_project.id, "WI-DIAG-01", force=True)
         result = WorkItemModel.diagnose(default_project.id, "WI-DIAG-01")
         assert result["work_item"]["identifier"] == "WI-DIAG-01"
         assert len(result["ops"]) >= 2  # create + close
@@ -725,7 +742,7 @@ class TestStatusLattice:
             status="open",
             embedding=_vec768(),
         )
-        WorkItemModel.close_work_item(default_project.id, "WI-LAT-04")
+        WorkItemModel.close_work_item(default_project.id, "WI-LAT-04", force=True)
         fetched = WorkItemModel.get_work_item(default_project.id, "WI-LAT-04")
         assert fetched["status"] == "closed"
 

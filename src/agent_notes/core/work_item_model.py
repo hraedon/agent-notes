@@ -8,7 +8,8 @@ Public surface:
 - `file_work_item` — create a new work item (writes `create` op + fold).
 - `update_work_item` — update fields (writes `set_field` or `set_status` op + fold).
 - `set_status` — dedicated status transition (writes `set_status` op + fold).
-- `close_work_item` — close a work item (writes `close` op + fold).
+- `close_work_item` — close a work item. Defers to `in_review` (the review gate
+  owns completion); `force=True` writes a terminal `close` op (admin/repair).
 - `get_work_item` — read from the folded cache.
 - `delete_work_item` — remove from cache (writes `snapshot` op with tombstone).
 - `query_work_items` — filtered list from cache.
@@ -539,7 +540,19 @@ class WorkItemModel:
                 # Both paths (regista + native) now reject the same illegal
                 # transitions. ``force=True`` is the explicit admin escape hatch.
                 if not force:
-                    _lifecycle_transition_for(old["status"], status)
+                    transition = _lifecycle_transition_for(old["status"], status)
+                    # Plan 014 WI-2: degrade mode cannot run the cross-lineage
+                    # review gate, so it must not *complete* work unilaterally.
+                    # The only gate transition into a terminal state is `accept`
+                    # (in_human_review → done); block it off-regista. `close_from_open`
+                    # (the review-exempt won't-fix/duplicate dismissal) stays allowed,
+                    # matching the regista path.
+                    if transition == "accept":
+                        raise ValueError(
+                            f"Cannot accept {identifier!r} to 'done' in degrade mode: "
+                            "completion requires regista's cross-lineage review gate. "
+                            "Use force=True only for admin/repair."
+                        )
                 status_op = kernel.commit_op(
                     conn,
                     entity_id=entity_id,
@@ -694,21 +707,73 @@ class WorkItemModel:
         )
 
     @classmethod
+    def _close_work_item_native_deferred(
+        cls, project_id: int, identifier: str, old: dict, actor_id: str | None
+    ) -> dict:
+        """Native (degrade) close that defers to ``in_review`` (Plan 014 A(b)).
+
+        Mirrors ``_close_work_item_regista``'s state handling, but drives the
+        op-log via ``update_work_item`` (with the Plan 013 WI-5 transition
+        pre-flight) instead of a regista face. Reaching a terminal state is not
+        possible here — completion requires regista's review gate.
+        """
+        state = old["status"]
+        canonical = "done" if state == "closed" else state
+        if canonical in ("in_review", "in_human_review"):
+            return dict(old)  # already awaiting review — no-op
+        if canonical == "done":
+            raise ValueError(f"Work item {identifier!r} is already done; reopen first")
+        if canonical == "blocked":
+            raise ValueError(f"Work item {identifier!r} is blocked; unblock before closing")
+        if canonical == "deferred":
+            raise ValueError(f"Work item {identifier!r} is deferred; resume before closing")
+        if canonical == "claimed":
+            raise ValueError(
+                f"Work item {identifier!r} is in legacy 'claimed' state; "
+                "migrate to the canonical workflow first"
+            )
+        # open or in_progress → defer to in_review (never terminal).
+        if canonical == "open":
+            cls.update_work_item(
+                project_id=project_id, identifier=identifier,
+                status="in_progress", actor_id=actor_id,
+            )
+        return cls.update_work_item(
+            project_id=project_id, identifier=identifier,
+            status="in_review", actor_id=actor_id,
+        )
+
+    @classmethod
     def close_work_item(
         cls,
         project_id: int,
         identifier: str,
         actor_id: str | None = None,
+        force: bool = False,
     ) -> dict:
         """Close a work item.
 
         Regista branch (Plan 010 WI-3): ``close`` → ``submit_for_review`` →
         ``in_review``. The agent cannot reach ``done`` unilaterally; work awaits a
-        cross-lineage review pass + accept. Legacy path writes a ``close`` op.
+        cross-lineage review pass + accept.
+
+        Native / degrade branch (Plan 014, Option A(b)): ``close`` **defers** to
+        ``in_review`` here too — neither path may *complete* (reach ``done``) work
+        unilaterally. The review gate cannot run off-regista, so degrade-mode
+        records the work as submitted and leaves completion to regista. This makes
+        the two paths agree on the one provenance-critical invariant ("no
+        unilateral completion") instead of the old behavior where native ``close``
+        wrote a terminal op with no gate. ``force=True`` is the admin/repair escape
+        hatch that writes the legacy terminal ``close`` op.
         """
         face = face_factory.get_face()
         if face is not None:
             return cls._close_work_item_regista(face, project_id, identifier)
+        if not force:
+            old = cls.get_work_item(project_id, identifier)
+            if old is None:
+                raise ValueError(f"Work item not found: {identifier!r} in project {project_id}")
+            return cls._close_work_item_native_deferred(project_id, identifier, old, actor_id)
         with _conn() as conn:
             workspace_id = cls._resolve_workspace_for_project(conn, project_id)
             cur = conn.cursor(row_factory=dict_row)

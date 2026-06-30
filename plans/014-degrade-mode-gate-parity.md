@@ -1,7 +1,16 @@
 # Plan 014 — Degrade-mode gate parity (retire the behavior-drift category)
 
-**Status:** Proposed 2026-06-29.
+**Status:** WI-1/WI-2/WI-5 IMPLEMENTED 2026-06-30 (decision: Option A(b)).
+WI-3 (degraded-completion detector in `verify`) and WI-4 (reconcile pass) remain.
 **Author:** opus-4.8.
+
+**Decision (resolved 2026-06-30):** Option **A(b)** — native `close` defers to
+`in_review` (never terminal); `force=True` is the admin/repair terminal hatch.
+Implemented: `WorkItemModel._close_work_item_native_deferred` mirrors the regista
+path; `close_work_item(force=)` + CLI `breadcrumb close --force`; WI-2 blocks the
+native `accept`→`done` (gate-faking) while leaving the `close_from_open` dismissal
+reachable. Tests: `tests/test_degrade_gate_parity.py` (6) + updated
+`test_work_items.py` close/event/diagnose/lattice tests to the new contract.
 **Strategic role:** Plan 013 retired the *vocabulary* drift category (one status
 vocabulary, cross-checked). This plan retires the *behavior* drift category: the
 native (no-regista) write path and the regista path must agree not just on what a

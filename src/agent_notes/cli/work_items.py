@@ -348,7 +348,9 @@ def cmd_wi_close(args: argparse.Namespace) -> int:
     from agent_notes.core.work_item_model import WorkItemModel
 
     try:
-        wi = WorkItemModel.close_work_item(proj_id, args.identifier)
+        wi = WorkItemModel.close_work_item(
+            proj_id, args.identifier, force=getattr(args, "force", False)
+        )
     except ValueError as exc:
         if use_json:
             print(json.dumps({"error": str(exc)}, indent=2))
@@ -814,8 +816,13 @@ def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
     _add_common(wi_requeue)
     wi_requeue.set_defaults(func=cmd_wi_requeue_expired)
 
-    wi_close = wi_sub.add_parser("close", help="Close a work item")
+    wi_close = wi_sub.add_parser("close", help="Close a work item (submits for review)")
     wi_close.add_argument("identifier")
+    wi_close.add_argument(
+        "--force",
+        action="store_true",
+        help="Admin/repair: write a terminal close instead of deferring to review",
+    )
     _add_common(wi_close)
     wi_close.set_defaults(func=cmd_wi_close)
 
