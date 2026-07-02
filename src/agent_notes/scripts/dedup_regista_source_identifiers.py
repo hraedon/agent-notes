@@ -116,11 +116,15 @@ def _retire(face: RegistaFace, loser: dict, winner_id: Any) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--project", default="regista",
-                    help="regista project schema (default: regista)")
+    ap.add_argument(
+        "--project", default="regista", help="regista project schema (default: regista)"
+    )
     ap.add_argument("--execute", action="store_true", help="apply (default: dry run)")
-    ap.add_argument("--force-resolution-loss", action="store_true",
-                    help="also retire done losers under non-done winners (risky)")
+    ap.add_argument(
+        "--force-resolution-loss",
+        action="store_true",
+        help="also retire done losers under non-done winners (risky)",
+    )
     args = ap.parse_args()
 
     dsn = os.environ["AGENT_NOTES_REGISTA_DSN"]
@@ -128,8 +132,10 @@ def main() -> int:
     plan = _plan(items)
 
     print(f"project schema: {args.project}")
-    print(f"items={plan['total']}  distinct-keys={plan['distinct_keys']}  "
-          f"duplicate-groups={plan['dup_groups']}")
+    print(
+        f"items={plan['total']}  distinct-keys={plan['distinct_keys']}  "
+        f"duplicate-groups={plan['dup_groups']}"
+    )
     state_counts: dict[str, int] = defaultdict(int)
     for a in plan["actions"]:
         state_counts[a["loser"]["current_state"]] += 1
@@ -137,8 +143,10 @@ def main() -> int:
     print(f"resolution-loss groups FLAGGED (skipped)={len(plan['risk_groups'])}")
     for rg in plan["risk_groups"][:20]:
         ls = ",".join(f"{loser['current_state']}({loser['nev']})" for loser in rg["losers"])
-        print(f"  RISK key={rg['key']} winner={rg['winner']['current_state']}"
-              f"({rg['winner']['nev']}) losers=[{ls}] title={rg['winner']['title']!r:.50}")
+        print(
+            f"  RISK key={rg['key']} winner={rg['winner']['current_state']}"
+            f"({rg['winner']['nev']}) losers=[{ls}] title={rg['winner']['title']!r:.50}"
+        )
 
     if not args.execute:
         print("\n[dry run] no changes made. Re-run with --execute to apply.")

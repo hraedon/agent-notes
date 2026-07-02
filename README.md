@@ -78,6 +78,13 @@ agent-notes work-item release <id> [--actor-id ...] [--json]
 agent-notes work-item heartbeat <id> [--actor-id ...] [--ttl 300] [--json]
 agent-notes work-item requeue-expired [--json]
 agent-notes work-item close <id> [--path PATH] [--json]
+agent-notes work-item attest-gate <id> --reason <txt> [--path PATH] [--json]
+agent-notes work-item review list [--path PATH] [--json]
+agent-notes work-item review pass    <id> --note <txt> [--actor-id ...] [--model-lineage ...] [--same-lineage-acknowledged] [--json]
+agent-notes work-item review accept  <id> --note <txt> [--actor-id ...] [--model-lineage ...] [--json]
+agent-notes work-item review reject  <id> --note <txt> [--actor-id ...] [--model-lineage ...] [--json]
+agent-notes work-item review request-changes <id> --note <txt> [--actor-id ...] [--json]
+
 
 agent-notes changes since <timestamp-or-id> [--json]
 

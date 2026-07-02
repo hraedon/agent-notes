@@ -530,7 +530,9 @@ class TestVerifyCli:
             embedding=_vec768(),
         )
         WorkItemModel.close_work_item(
-            default_project.id, "WI-V-CLI-GATE", force=True,
+            default_project.id,
+            "WI-V-CLI-GATE",
+            force=True,
         )
 
         ns = argparse.Namespace(

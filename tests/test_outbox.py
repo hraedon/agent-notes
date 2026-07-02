@@ -131,9 +131,7 @@ class TestClientSeq:
 
 
 class TestSignature:
-    def test_signature_present_and_valid(
-        self, outbox_dir: Path, signer: LocalKeySigner
-    ) -> None:
+    def test_signature_present_and_valid(self, outbox_dir: Path, signer: LocalKeySigner) -> None:
         project = "test_proj"
         env = outbox.enqueue(project, _make_op("create", title="signed"), signer)
 
@@ -195,9 +193,7 @@ class TestRemoveOps:
         entries = outbox.read_all(project)
         assert entries == []
 
-    def test_remove_nonexistent_seq_noop(
-        self, outbox_dir: Path, signer: LocalKeySigner
-    ) -> None:
+    def test_remove_nonexistent_seq_noop(self, outbox_dir: Path, signer: LocalKeySigner) -> None:
         project = "test_proj"
         session = os.environ["AGENT_NOTES_SESSION"]
         outbox.enqueue(project, _make_op("create"), signer)

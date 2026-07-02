@@ -1100,9 +1100,7 @@ def _git_init(repo: Path) -> None:
 
 def _register_repo_project(ws_id: int, repo: Path, slug: str):
     """Register a project whose repo_root is *repo* and return it."""
-    return coredb.get_or_create_project(
-        ws_id, slug=slug, name=slug, repo_root=str(repo)
-    )
+    return coredb.get_or_create_project(ws_id, slug=slug, name=slug, repo_root=str(repo))
 
 
 def test_export_index_refuses_unignored_repo_root(default_project):

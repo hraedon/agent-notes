@@ -55,9 +55,8 @@ async def bearer_token_middleware(request: Request, call_next):
 
     auth_header = request.headers.get("authorization", "")
     scheme, _, provided = auth_header.partition(" ")
-    valid = (
-        hmac.compare_digest(scheme.lower(), "bearer")
-        and hmac.compare_digest(provided, _WEB_TOKEN)
+    valid = hmac.compare_digest(scheme.lower(), "bearer") and hmac.compare_digest(
+        provided, _WEB_TOKEN
     )
     if valid:
         return await call_next(request)

@@ -189,26 +189,34 @@ class TestWorkItemUpdateNoOp:
 
     def test_same_title_writes_no_op(self, default_project):
         wi = WorkItemModel.file_work_item(
-            project_id=default_project.id, identifier="WI-NOOP-01",
-            title="Same title", status="open", embedding=_vec768(),
+            project_id=default_project.id,
+            identifier="WI-NOOP-01",
+            title="Same title",
+            status="open",
+            embedding=_vec768(),
         )
         entity_id = wi["entity_id"]
         ops_before = self._op_count(entity_id)
         WorkItemModel.update_work_item(
-            project_id=default_project.id, identifier="WI-NOOP-01",
+            project_id=default_project.id,
+            identifier="WI-NOOP-01",
             title="Same title",
         )
         assert self._op_count(entity_id) == ops_before
 
     def test_changed_title_writes_op(self, default_project):
         wi = WorkItemModel.file_work_item(
-            project_id=default_project.id, identifier="WI-NOOP-02",
-            title="Old title", status="open", embedding=_vec768(),
+            project_id=default_project.id,
+            identifier="WI-NOOP-02",
+            title="Old title",
+            status="open",
+            embedding=_vec768(),
         )
         entity_id = wi["entity_id"]
         ops_before = self._op_count(entity_id)
         updated = WorkItemModel.update_work_item(
-            project_id=default_project.id, identifier="WI-NOOP-02",
+            project_id=default_project.id,
+            identifier="WI-NOOP-02",
             title="New title",
         )
         assert self._op_count(entity_id) == ops_before + 1
@@ -216,37 +224,57 @@ class TestWorkItemUpdateNoOp:
 
     def test_all_same_fields_writes_no_op(self, default_project):
         wi = WorkItemModel.file_work_item(
-            project_id=default_project.id, identifier="WI-NOOP-03",
-            title="Unchanged", body="Body text", kind="bug",
-            status="open", severity="high", embedding=_vec768(),
+            project_id=default_project.id,
+            identifier="WI-NOOP-03",
+            title="Unchanged",
+            body="Body text",
+            kind="bug",
+            status="open",
+            severity="high",
+            embedding=_vec768(),
         )
         entity_id = wi["entity_id"]
         ops_before = self._op_count(entity_id)
         cl_before = self._cl_count(
-            default_project.workspace_id, default_project.id, "WI-NOOP-03",
+            default_project.workspace_id,
+            default_project.id,
+            "WI-NOOP-03",
         )
         updated = WorkItemModel.update_work_item(
-            project_id=default_project.id, identifier="WI-NOOP-03",
-            title="Unchanged", body="Body text", kind="bug", severity="high",
+            project_id=default_project.id,
+            identifier="WI-NOOP-03",
+            title="Unchanged",
+            body="Body text",
+            kind="bug",
+            severity="high",
         )
         assert self._op_count(entity_id) == ops_before
-        assert self._cl_count(
-            default_project.workspace_id, default_project.id, "WI-NOOP-03",
-        ) == cl_before
+        assert (
+            self._cl_count(
+                default_project.workspace_id,
+                default_project.id,
+                "WI-NOOP-03",
+            )
+            == cl_before
+        )
         # Returns the current state unchanged.
         assert updated["title"] == "Unchanged"
         assert updated["kind"] == "bug"
 
     def test_same_body_writes_no_op(self, default_project):
         wi = WorkItemModel.file_work_item(
-            project_id=default_project.id, identifier="WI-NOOP-04",
-            title="Body test", body="Stable body text", status="open",
+            project_id=default_project.id,
+            identifier="WI-NOOP-04",
+            title="Body test",
+            body="Stable body text",
+            status="open",
             embedding=_vec768(),
         )
         entity_id = wi["entity_id"]
         ops_before = self._op_count(entity_id)
         WorkItemModel.update_work_item(
-            project_id=default_project.id, identifier="WI-NOOP-04",
+            project_id=default_project.id,
+            identifier="WI-NOOP-04",
             body="Stable body text",
         )
         assert self._op_count(entity_id) == ops_before
@@ -254,39 +282,51 @@ class TestWorkItemUpdateNoOp:
     def test_same_embedding_writes_no_op(self, default_project):
         vec = [0.1] * 768
         wi = WorkItemModel.file_work_item(
-            project_id=default_project.id, identifier="WI-NOOP-05",
-            title="Embed test", status="open", embedding=vec,
+            project_id=default_project.id,
+            identifier="WI-NOOP-05",
+            title="Embed test",
+            status="open",
+            embedding=vec,
         )
         entity_id = wi["entity_id"]
         ops_before = self._op_count(entity_id)
         WorkItemModel.update_work_item(
-            project_id=default_project.id, identifier="WI-NOOP-05",
+            project_id=default_project.id,
+            identifier="WI-NOOP-05",
             embedding=vec,
         )
         assert self._op_count(entity_id) == ops_before
 
     def test_changed_embedding_writes_op(self, default_project):
         wi = WorkItemModel.file_work_item(
-            project_id=default_project.id, identifier="WI-NOOP-06",
-            title="Embed change", status="open", embedding=_vec768(),
+            project_id=default_project.id,
+            identifier="WI-NOOP-06",
+            title="Embed change",
+            status="open",
+            embedding=_vec768(),
         )
         entity_id = wi["entity_id"]
         ops_before = self._op_count(entity_id)
         WorkItemModel.update_work_item(
-            project_id=default_project.id, identifier="WI-NOOP-06",
+            project_id=default_project.id,
+            identifier="WI-NOOP-06",
             embedding=[0.9] * 768,
         )
         assert self._op_count(entity_id) == ops_before + 1
 
     def test_same_status_no_op(self, default_project):
         wi = WorkItemModel.file_work_item(
-            project_id=default_project.id, identifier="WI-NOOP-07",
-            title="Status test", status="open", embedding=_vec768(),
+            project_id=default_project.id,
+            identifier="WI-NOOP-07",
+            title="Status test",
+            status="open",
+            embedding=_vec768(),
         )
         entity_id = wi["entity_id"]
         ops_before = self._op_count(entity_id)
         WorkItemModel.update_work_item(
-            project_id=default_project.id, identifier="WI-NOOP-07",
+            project_id=default_project.id,
+            identifier="WI-NOOP-07",
             status="open",
         )
         assert self._op_count(entity_id) == ops_before
@@ -294,14 +334,18 @@ class TestWorkItemUpdateNoOp:
     def test_same_external_refs_no_op(self, default_project):
         refs = {"github": "issue-42"}
         wi = WorkItemModel.file_work_item(
-            project_id=default_project.id, identifier="WI-NOOP-08",
-            title="Refs test", status="open", embedding=_vec768(),
+            project_id=default_project.id,
+            identifier="WI-NOOP-08",
+            title="Refs test",
+            status="open",
+            embedding=_vec768(),
             external_refs=refs,
         )
         entity_id = wi["entity_id"]
         ops_before = self._op_count(entity_id)
         WorkItemModel.update_work_item(
-            project_id=default_project.id, identifier="WI-NOOP-08",
+            project_id=default_project.id,
+            identifier="WI-NOOP-08",
             external_refs=refs,
         )
         assert self._op_count(entity_id) == ops_before
@@ -310,21 +354,29 @@ class TestWorkItemUpdateNoOp:
         # Only the genuinely-changed field must appear in the set_field op; the
         # unchanged fields must not bloat the payload (WI-008/WI-009).
         wi = WorkItemModel.file_work_item(
-            project_id=default_project.id, identifier="WI-NOOP-09",
-            title="Keep me", body="Keep body", kind="bug", severity="high",
-            status="open", embedding=_vec768(),
+            project_id=default_project.id,
+            identifier="WI-NOOP-09",
+            title="Keep me",
+            body="Keep body",
+            kind="bug",
+            severity="high",
+            status="open",
+            embedding=_vec768(),
         )
         entity_id = wi["entity_id"]
         WorkItemModel.update_work_item(
-            project_id=default_project.id, identifier="WI-NOOP-09",
-            title="Keep me", body="Keep body", kind="todo", severity="high",
+            project_id=default_project.id,
+            identifier="WI-NOOP-09",
+            title="Keep me",
+            body="Keep body",
+            kind="todo",
+            severity="high",
         )
         ops = kernel._get_entity_ops(kernel._conn().__enter__(), entity_id)
         set_field_ops = [o for o in ops if o["op_type"] == "set_field"]
         assert len(set_field_ops) >= 1
         last_payload = {
-            k: v for k, v in (set_field_ops[-1].get("payload") or {}).items()
-            if k != "envelope"
+            k: v for k, v in (set_field_ops[-1].get("payload") or {}).items() if k != "envelope"
         }
         assert "kind" in last_payload
         assert "title" not in last_payload
@@ -337,16 +389,23 @@ class TestWorkItemUpdateNoOp:
         from agent_notes.core.change_log import history
 
         WorkItemModel.file_work_item(
-            project_id=default_project.id, identifier="WI-NOOP-10",
-            title="CL body", body="original body", status="open",
+            project_id=default_project.id,
+            identifier="WI-NOOP-10",
+            title="CL body",
+            body="original body",
+            status="open",
             embedding=_vec768(),
         )
         WorkItemModel.update_work_item(
-            project_id=default_project.id, identifier="WI-NOOP-10",
+            project_id=default_project.id,
+            identifier="WI-NOOP-10",
             body="updated body",
         )
         rows = history(
-            "work_item", default_project.workspace_id, default_project.id, "WI-NOOP-10",
+            "work_item",
+            default_project.workspace_id,
+            default_project.id,
+            "WI-NOOP-10",
         )
         update_rows = [r for r in rows if r.event == "updated"]
         assert update_rows, "expected an 'updated' change_log row"
@@ -1041,9 +1100,7 @@ class TestCanonicalLatticeResolution:
         entity_id = wi["entity_id"]
 
         with kernel._conn() as conn:
-            _insert_op_direct(
-                conn, entity_id, "work_item", "set_status", 999, {"status": "done"}
-            )
+            _insert_op_direct(conn, entity_id, "work_item", "set_status", 999, {"status": "done"})
             _insert_op_direct(
                 conn, entity_id, "work_item", "set_status", 999, {"status": "in_progress"}
             )
@@ -1068,9 +1125,7 @@ class TestCanonicalLatticeResolution:
             _insert_op_direct(
                 conn, entity_id, "work_item", "set_status", 999, {"status": "in_progress"}
             )
-            _insert_op_direct(
-                conn, entity_id, "work_item", "set_status", 999, {"status": "open"}
-            )
+            _insert_op_direct(conn, entity_id, "work_item", "set_status", 999, {"status": "open"})
             conn.commit()
 
         with kernel._conn() as conn:
@@ -1095,9 +1150,7 @@ class TestCanonicalLatticeResolution:
             _insert_op_direct(
                 conn, entity_id, "work_item", "set_status", 999, {"status": "in_review"}
             )
-            _insert_op_direct(
-                conn, entity_id, "work_item", "set_status", 999, {"status": "done"}
-            )
+            _insert_op_direct(conn, entity_id, "work_item", "set_status", 999, {"status": "done"})
             conn.commit()
 
         with kernel._conn() as conn:
@@ -1144,9 +1197,7 @@ class TestCanonicalLatticeResolution:
         entity_id = wi["entity_id"]
 
         with kernel._conn() as conn:
-            _insert_op_direct(
-                conn, entity_id, "work_item", "set_status", 999, {"status": "done"}
-            )
+            _insert_op_direct(conn, entity_id, "work_item", "set_status", 999, {"status": "done"})
             _insert_op_direct(
                 conn, entity_id, "work_item", "set_status", 999, {"status": "claimed"}
             )
@@ -1241,9 +1292,7 @@ class TestResolveStatusLatticeUnit:
 
     def test_single_canonical_status_applied_directly(self):
         # Single op: sequential, applied directly.
-        result = kernel._resolve_status_lattice(
-            [self._status_op("in_progress", "aaa")], None
-        )
+        result = kernel._resolve_status_lattice([self._status_op("in_progress", "aaa")], None)
         assert result == "in_progress"
 
     def test_in_progress_beats_done(self):

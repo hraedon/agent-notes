@@ -40,6 +40,7 @@ def normalize_source_identifier(value: str | None) -> str | None:
         return None
     return _BC_PREFIX_RE.sub("", str(value).strip()).strip()
 
+
 # Plan 010 (WI-2): agent-notes registers the single canonical workflow shipped
 # from regista — the same one dossier registers — so a work-item is governed by
 # one shared workflow. `breadcrumb` remains the work-item *type* (its custom

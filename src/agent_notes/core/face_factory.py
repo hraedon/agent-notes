@@ -24,9 +24,10 @@ The outbox import is lazy so P1 does not depend on P2 modules at import time.
 from __future__ import annotations
 
 import contextvars
+import dataclasses
 import threading
 
-from agent_notes.core.actor import resolve_actor
+from agent_notes.core.actor import Actor, load_actor_config, resolve_actor
 from agent_notes.core.config import RegistaConfig, regista_config
 from agent_notes.core.regista_face import RegistaFace
 
@@ -116,6 +117,35 @@ def get_face() -> RegistaFace | None:
 def default_actor():
     """The actor used by the regista write path (env-resolved; Plan 009 D3)."""
     return resolve_actor()
+
+
+def reviewer_actor(
+    actor_id: str | None = None,
+    model_lineage: str | None = None,
+) -> Actor:
+    """Resolve an actor with optional identity overrides for review transitions.
+
+    Review-gate transitions (adversarial_pass, accept, reject, request_changes)
+    require a distinct actor identity from the work's authors. This helper
+    builds an Actor from the env-resolved config, applying per-call overrides
+    so a subagent can declare its own lineage without env-var mutation.
+
+    When ``actor_id`` is overridden, the env-resolved principal (``on_behalf_of``)
+    is cleared — a reviewer with a distinct identity is its own principal, not
+    acting on behalf of the author's principal. Without this, the gate's
+    separation-of-duties check would flag a "delegated self-review."
+    """
+    config = load_actor_config()
+    if actor_id is not None:
+        config = dataclasses.replace(
+            config,
+            actor_id=actor_id,
+            principal_id=None,
+            principal_display_name=None,
+        )
+    if model_lineage is not None:
+        config = dataclasses.replace(config, model_lineage=model_lineage)
+    return resolve_actor(config)
 
 
 def reset_face() -> None:

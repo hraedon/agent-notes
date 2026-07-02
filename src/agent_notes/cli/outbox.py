@@ -1,7 +1,7 @@
 """CLI for outbox status and reconcile (Plan 009 §6.4-6.5).
 
-    agent-notes outbox status   [--project <slug>] [--json]
-    agent-notes outbox reconcile [--project <slug>] [--json]
+agent-notes outbox status   [--project <slug>] [--json]
+agent-notes outbox reconcile [--project <slug>] [--json]
 """
 
 from __future__ import annotations

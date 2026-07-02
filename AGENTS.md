@@ -11,6 +11,7 @@ Conventions and quick reference for agents (and humans) working on agent-notes.
 3. **Then:** `plans/004-flatten-cli-and-async-bridge.md` for the MCP->CLI flattening (Phase 9a–9d — complete).
 4. **Then:** `plans/007-lifecycle-enforcement-spine.md` for the lifecycle enforcement and cross-harness instantiation (Piece 0–2 complete).
 5. **Then:** `plans/008-work-log-coordination-kernel.md` for the op-CRDT work log, provenance, and cross-project coordination (P0–P4 complete; Tier A shipped — regista coordinator is an optional L3 layer, not yet attached).
+6. **Then:** `plans/016-review-gate-cli-and-work-item-split.md` for the `work-item review` CLI surface and the `core/work_item/` subpackage split (`work_item_model.py` is now a thin dispatch facade).
 
 ## Build / test / lint
 
@@ -27,6 +28,8 @@ Tests for triggers, recursive CTEs, and `change_log` semantics must run against 
 ## Architecture in one paragraph
 
 One Postgres database (`agent_notes`), one Python package (`agent_notes`), one `Server` base class with composable kind registries. The **CLI (`agent-notes`) is the primary sync surface** (Plan 004 Phase 9a+). The shared `core/` library handles DB connection pooling, embedding, links, change_log, NOTIFY, and search. A read-only web frontend (`agent-notes-web`) provides browser-based browsing of breadcrumbs, memories, and semantic search.
+
+**Work-item model layout (Plan 016):** `core/work_item_model.py` is a thin dispatch facade — each public `WorkItemModel` method selects the regista path (face attached) or native op-log path (degrade) and delegates to free functions in the `core/work_item/` subpackage (`_common`, `_regista`, `_native`, `_queries`, `_cross_project`). The public class API is unchanged; do not add new logic to the facade — extend the relevant subpackage module.
 
 **Work-log coordination kernel** (Plan 008, P0–P4): the `op_log` is an append-only operation log (op-CRDT model) with content-addressed blobs, a deterministic fold into the `work_items` cache, a fail-safe status lattice, and a standalone verifier CLI. Cross-project coordination (P3) adds `request`/`wait` ops, a derived index for foreign work items, and a reverse-edge map so the `ready` query spans projects. The **regista coordinator is an optional, not-yet-attached L3 layer** — the degrade contract (`coordinator-absent / local-lease`) is the default and fully functional mode; the coordinator adds only race-free multi-writer claims when attached later.
 

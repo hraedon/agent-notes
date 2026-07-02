@@ -39,9 +39,7 @@ class TestStateSets:
         assert lifecycle.CANONICAL_STATES.isdisjoint(lifecycle.LEGACY_STATES)
 
     def test_all_valid_states_is_union(self):
-        assert lifecycle.ALL_VALID_STATES == (
-            lifecycle.CANONICAL_STATES | lifecycle.LEGACY_STATES
-        )
+        assert lifecycle.ALL_VALID_STATES == (lifecycle.CANONICAL_STATES | lifecycle.LEGACY_STATES)
 
     def test_all_valid_states_has_nine_members(self):
         # 7 canonical + 2 legacy = 9

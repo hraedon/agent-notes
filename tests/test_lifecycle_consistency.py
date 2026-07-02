@@ -89,15 +89,11 @@ def test_db_vocab_has_no_extra_statuses():
     dsn = os.environ["AGENT_NOTES_DSN"]
     with psycopg.connect(dsn) as conn:
         cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            "SELECT name FROM vocabularies WHERE kind_namespace = 'wi_status'"
-        )
+        cur.execute("SELECT name FROM vocabularies WHERE kind_namespace = 'wi_status'")
         db_names = {r["name"] for r in cur.fetchall()}
 
     extra = db_names - lifecycle.ALL_VALID_STATES
-    assert not extra, (
-        f"DB wi_status vocab has entries not in lifecycle: {sorted(extra)}"
-    )
+    assert not extra, f"DB wi_status vocab has entries not in lifecycle: {sorted(extra)}"
 
 
 # ---------------------------------------------------------------------------
@@ -162,12 +158,8 @@ def test_valid_transitions_no_amend_entries():
 def test_valid_transitions_only_canonical_states():
     """Both sides of every transition must be canonical states (not legacy)."""
     for old, new in lifecycle.VALID_TRANSITIONS:
-        assert old in lifecycle.CANONICAL_STATES, (
-            f"non-canonical 'from' state: {old!r}"
-        )
-        assert new in lifecycle.CANONICAL_STATES, (
-            f"non-canonical 'to' state: {new!r}"
-        )
+        assert old in lifecycle.CANONICAL_STATES, f"non-canonical 'from' state: {old!r}"
+        assert new in lifecycle.CANONICAL_STATES, f"non-canonical 'to' state: {new!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -188,8 +180,7 @@ def test_projection_status_map_is_identity():
     """The projection's state→status map must be identity (state == status)."""
     for state, status in projection._STATUS_FROM_STATE.items():
         assert state == status, (
-            f"projection._STATUS_FROM_STATE is not identity: "
-            f"{state!r} -> {status!r}"
+            f"projection._STATUS_FROM_STATE is not identity: {state!r} -> {status!r}"
         )
 
 

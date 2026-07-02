@@ -76,9 +76,7 @@ def _resolve_impl(
             suggestion = " Use --path for auto-resolution or run 'agent-notes workspace list'."
             print(f"Workspace '{ws_slug}' not found.{hint}{suggestion}", file=sys.stderr)
             raise SystemExit(EXIT_NOT_FOUND)
-        proj = next(
-            (p for p in list_projects(workspace_id=ws.id) if p.slug == "global"), None
-        )
+        proj = next((p for p in list_projects(workspace_id=ws.id) if p.slug == "global"), None)
         if proj is None:
             print(
                 f"Workspace '{ws_slug}' has no 'global' project for workspace-level "

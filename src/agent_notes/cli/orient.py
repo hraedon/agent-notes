@@ -121,8 +121,12 @@ def cmd_orient(args: argparse.Namespace) -> int:
             for ident, info in sorted(drift.items()):
                 print(f"  - {ident} — {info['commit']} {info['subject']!r}")
         pending = regista_sync["outbox_pending"]
-        if cfg.enabled and (pending or regista_sync["outbox_conflicts"]
-                or regista_sync["outbox_rejected"] or regista_sync["pending_sync_rows"]):
+        if cfg.enabled and (
+            pending
+            or regista_sync["outbox_conflicts"]
+            or regista_sync["outbox_rejected"]
+            or regista_sync["pending_sync_rows"]
+        ):
             print(
                 f"\n⚠ STALE — {pending} op(s) pending sync"
                 f" (+{regista_sync['outbox_conflicts']} conflicts, "

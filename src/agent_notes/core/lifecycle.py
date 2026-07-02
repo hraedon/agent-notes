@@ -197,6 +197,4 @@ def transition_for(old_status: str, new_status: str) -> str | None:
     transition = VALID_TRANSITIONS.get((old, new))
     if transition is not None:
         return transition
-    raise ValueError(
-        f"Unsupported status transition: {old_status!r} -> {new_status!r}"
-    )
+    raise ValueError(f"Unsupported status transition: {old_status!r} -> {new_status!r}")

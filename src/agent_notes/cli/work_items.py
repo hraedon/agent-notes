@@ -412,9 +412,7 @@ def cmd_wi_attest_gate(args: argparse.Namespace) -> int:
     from agent_notes.core.work_item_model import WorkItemModel
 
     try:
-        wi = WorkItemModel.attest_gate_waiver(
-            proj_id, args.identifier, reason=args.reason
-        )
+        wi = WorkItemModel.attest_gate_waiver(proj_id, args.identifier, reason=args.reason)
     except ValueError as exc:
         if use_json:
             print(json.dumps({"error": str(exc)}, indent=2))
@@ -431,6 +429,175 @@ def cmd_wi_attest_gate(args: argparse.Namespace) -> int:
         if att:
             print(f"  Reason: {att.get('reason', '')}")
             print(f"  Actor:  {att.get('actor_id', '')}")
+    return EXIT_SUCCESS
+
+
+def _review_resolve(args: argparse.Namespace) -> tuple[int, str, bool]:
+    """Resolve project + return (proj_id, proj_slug, use_json)."""
+    use_json = getattr(args, "json", False)
+    try:
+        ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
+        report_resolution_failure(args, code)
+        return -1, "", use_json
+    return proj_id, proj_slug, use_json
+
+
+def cmd_wi_review_list(args: argparse.Namespace) -> int:
+    """List work items awaiting review (in_review or in_human_review)."""
+    proj_id, proj_slug, use_json = _review_resolve(args)
+    if proj_id < 0:
+        return EXIT_NOT_CONFIGURED
+
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    in_review = WorkItemModel.query_work_items(project_id=proj_id, status="in_review", limit=200)
+    in_human = WorkItemModel.query_work_items(
+        project_id=proj_id, status="in_human_review", limit=200
+    )
+    items = in_review + in_human
+
+    if use_json:
+        for r in items:
+            r.pop("embedding", None)
+        print(json.dumps({"review_queue": items}, indent=2, default=str))
+    else:
+        if not items:
+            print("No work items awaiting review.")
+        else:
+            print(f"{len(items)} work item(s) awaiting review:")
+            for r in items:
+                stage = "adversarial" if r["status"] == "in_review" else "human-gate"
+                print(f"- **{r['identifier']}** [{stage}] ({r['status']}) — {r['title']}")
+    return EXIT_SUCCESS
+
+
+def cmd_wi_review_pass(args: argparse.Namespace) -> int:
+    """Drive adversarial_pass (in_review → in_human_review)."""
+    proj_id, proj_slug, use_json = _review_resolve(args)
+    if proj_id < 0:
+        return EXIT_NOT_CONFIGURED
+
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    try:
+        wi = WorkItemModel.review_transition(
+            proj_id,
+            args.identifier,
+            transition_name="adversarial_pass",
+            review_note=args.note,
+            actor_id=getattr(args, "actor_id", None),
+            model_lineage=getattr(args, "model_lineage", None),
+            same_lineage_acknowledged=getattr(args, "same_lineage_acknowledged", False),
+        )
+    except ValueError as exc:
+        if use_json:
+            print(json.dumps({"error": str(exc)}, indent=2))
+        else:
+            print(f"Error: {exc}")
+        return EXIT_CONFLICT
+
+    if use_json:
+        print(json.dumps({"work_item": wi}, indent=2, default=str))
+    else:
+        print(f"Adversarial pass recorded: **{wi['identifier']}** ({wi['status']})")
+    return EXIT_SUCCESS
+
+
+def cmd_wi_review_accept(args: argparse.Namespace) -> int:
+    """Drive accept (in_human_review → done). Requires regista (gate runs)."""
+    proj_id, proj_slug, use_json = _review_resolve(args)
+    if proj_id < 0:
+        return EXIT_NOT_CONFIGURED
+
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    try:
+        wi = WorkItemModel.review_transition(
+            proj_id,
+            args.identifier,
+            transition_name="accept",
+            review_note=args.note,
+            actor_id=getattr(args, "actor_id", None),
+            model_lineage=getattr(args, "model_lineage", None),
+            same_lineage_acknowledged=getattr(args, "same_lineage_acknowledged", False),
+        )
+    except ValueError as exc:
+        if use_json:
+            print(json.dumps({"error": str(exc)}, indent=2))
+        else:
+            print(f"Error: {exc}")
+        return EXIT_CONFLICT
+
+    if use_json:
+        print(json.dumps({"work_item": wi}, indent=2, default=str))
+    else:
+        print(f"Accepted: **{wi['identifier']}** ({wi['status']})")
+    return EXIT_SUCCESS
+
+
+def cmd_wi_review_reject(args: argparse.Namespace) -> int:
+    """Drive reject (in_human_review → in_progress)."""
+    proj_id, proj_slug, use_json = _review_resolve(args)
+    if proj_id < 0:
+        return EXIT_NOT_CONFIGURED
+
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    try:
+        wi = WorkItemModel.review_transition(
+            proj_id,
+            args.identifier,
+            transition_name="reject",
+            review_note=args.note,
+            actor_id=getattr(args, "actor_id", None),
+            model_lineage=getattr(args, "model_lineage", None),
+            same_lineage_acknowledged=getattr(args, "same_lineage_acknowledged", False),
+        )
+    except ValueError as exc:
+        if use_json:
+            print(json.dumps({"error": str(exc)}, indent=2))
+        else:
+            print(f"Error: {exc}")
+        return EXIT_CONFLICT
+
+    if use_json:
+        print(json.dumps({"work_item": wi}, indent=2, default=str))
+    else:
+        print(f"Rejected (back to in_progress): **{wi['identifier']}** ({wi['status']})")
+    return EXIT_SUCCESS
+
+
+def cmd_wi_review_request_changes(args: argparse.Namespace) -> int:
+    """Drive request_changes (in_review → in_progress)."""
+    proj_id, proj_slug, use_json = _review_resolve(args)
+    if proj_id < 0:
+        return EXIT_NOT_CONFIGURED
+
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    try:
+        wi = WorkItemModel.review_transition(
+            proj_id,
+            args.identifier,
+            transition_name="request_changes",
+            review_note=args.note,
+            actor_id=getattr(args, "actor_id", None),
+            model_lineage=getattr(args, "model_lineage", None),
+            same_lineage_acknowledged=getattr(args, "same_lineage_acknowledged", False),
+        )
+    except ValueError as exc:
+        if use_json:
+            print(json.dumps({"error": str(exc)}, indent=2))
+        else:
+            print(f"Error: {exc}")
+        return EXIT_CONFLICT
+
+    if use_json:
+        print(json.dumps({"work_item": wi}, indent=2, default=str))
+    else:
+        print(f"Changes requested (back to in_progress): **{wi['identifier']}** ({wi['status']})")
     return EXIT_SUCCESS
 
 
@@ -882,6 +1049,88 @@ def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
     )
     _add_common(wi_attest)
     wi_attest.set_defaults(func=cmd_wi_attest_gate)
+
+    # Review-gate commands (adversarial_pass / accept / reject / request_changes)
+    wi_review = wi_sub.add_parser(
+        "review",
+        help="Drive the cross-lineage review gate "
+        "(adversarial_pass / accept / reject / request_changes)",
+    )
+    wi_review_sub = wi_review.add_subparsers(dest="review_cmd")
+
+    wi_review_list = wi_review_sub.add_parser(
+        "list", help="List work items awaiting review (in_review / in_human_review)"
+    )
+    _add_common(wi_review_list)
+    wi_review_list.set_defaults(func=cmd_wi_review_list)
+
+    def _add_review_identity(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument(
+            "--actor-id",
+            default=None,
+            help="Override the reviewer's actor_id (default: AGENT_NOTES_ACTOR_ID env)",
+        )
+        parser.add_argument(
+            "--model-lineage",
+            default=None,
+            help="Override the reviewer's model lineage (default: AGENT_NOTES_MODEL_LINEAGE env). "
+            "Required for cross-lineage gate if the author was an agent.",
+        )
+        parser.add_argument(
+            "--same-lineage-acknowledged",
+            action="store_true",
+            default=False,
+            help="Acknowledge same-lineage review (regista validator requires this if the "
+            "reviewer shares a model lineage with an author)",
+        )
+
+    wi_review_pass = wi_review_sub.add_parser(
+        "pass", help="Record an adversarial review pass (in_review → in_human_review)"
+    )
+    wi_review_pass.add_argument("identifier")
+    wi_review_pass.add_argument(
+        "--note", required=True, help="Review findings (required by the gate validator)"
+    )
+    _add_review_identity(wi_review_pass)
+    _add_common(wi_review_pass)
+    wi_review_pass.set_defaults(func=cmd_wi_review_pass)
+
+    wi_review_accept = wi_review_sub.add_parser(
+        "accept",
+        help="Accept the work item (in_human_review → done). Requires regista (gate runs).",
+    )
+    wi_review_accept.add_argument("identifier")
+    wi_review_accept.add_argument(
+        "--note", required=True, help="Acceptance rationale (required by the gate validator)"
+    )
+    _add_review_identity(wi_review_accept)
+    _add_common(wi_review_accept)
+    wi_review_accept.set_defaults(func=cmd_wi_review_accept)
+
+    wi_review_reject = wi_review_sub.add_parser(
+        "reject", help="Reject the work item (in_human_review → in_progress)"
+    )
+    wi_review_reject.add_argument("identifier")
+    wi_review_reject.add_argument(
+        "--note", required=True, help="Rejection rationale (required by the gate validator)"
+    )
+    _add_review_identity(wi_review_reject)
+    _add_common(wi_review_reject)
+    wi_review_reject.set_defaults(func=cmd_wi_review_reject)
+
+    wi_review_rc = wi_review_sub.add_parser(
+        "request-changes",
+        help="Request changes (in_review → in_progress)",
+    )
+    wi_review_rc.add_argument("identifier")
+    wi_review_rc.add_argument(
+        "--note", required=True, help="Change requests (required by the gate validator)"
+    )
+    _add_review_identity(wi_review_rc)
+    _add_common(wi_review_rc)
+    wi_review_rc.set_defaults(func=cmd_wi_review_request_changes)
+
+    wi_review.set_defaults(func=lambda args: (_print_sub_help(wi_review), EXIT_SUCCESS)[1])
 
     # Cross-project commands (P3)
     wi_request = wi_sub.add_parser(

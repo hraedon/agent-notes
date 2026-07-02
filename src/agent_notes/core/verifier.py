@@ -601,9 +601,7 @@ def _has_gate_attestation(folded: dict) -> bool:
     return isinstance(diag, dict) and "gate_attestation" in diag
 
 
-def _check_degraded_completion(
-    entity_id: str, ops: list[dict], folded: dict
-) -> Violation | None:
+def _check_degraded_completion(entity_id: str, ops: list[dict], folded: dict) -> Violation | None:
     """Return a ``gate`` warning if the item is a degraded completion.
 
     A degraded completion is a terminal work item (``done``/``closed``) whose
@@ -712,9 +710,7 @@ def verify_gate_integrity(
     return _verify_gate_integrity(conn, entity_id)
 
 
-def _verify_gate_integrity(
-    conn: psycopg.Connection, entity_id: str | None
-) -> VerificationResult:
+def _verify_gate_integrity(conn: psycopg.Connection, entity_id: str | None) -> VerificationResult:
     result = VerificationResult()
     cur = conn.cursor(row_factory=dict_row)
     if entity_id is None:

@@ -14,6 +14,7 @@ from agent_notes.core import db as coredb
 from agent_notes.core.db import _conn
 from agent_notes.core.face_factory import reset_face, set_face_for_test
 from agent_notes.core.regista_face import RegistaFace
+from agent_notes.core.work_item._common import mirror_regista_snapshot
 from agent_notes.core.work_item_model import WorkItemModel
 from tests.conftest import ephemeral_db  # noqa: F401
 
@@ -177,7 +178,7 @@ class TestRegistaWriteThrough:
             # reviewer/accepter actors, not the filing agent), so mirror the
             # final canonical state into the local projection.
             with _conn() as conn:
-                WorkItemModel._mirror_regista_snapshot(
+                mirror_regista_snapshot(
                     conn,
                     {
                         "project_id": default_project.id,

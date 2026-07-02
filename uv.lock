@@ -1445,6 +1445,7 @@ requires-dist = [
     { name = "httpx", marker = "extra == 'sidecar'", specifier = ">=0.27" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.100" },
     { name = "jsonschema", specifier = ">=4.21" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
     { name = "prometheus-client", specifier = ">=0.20" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },
     { name = "psycopg-pool", specifier = ">=3.2,<4" },
@@ -1457,6 +1458,9 @@ requires-dist = [
     { name = "rfc8785", marker = "extra == 'vendor-check'", specifier = "==0.1.4" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
     { name = "structlog", specifier = ">=24.1" },
+    { name = "types-jsonschema", marker = "extra == 'dev'" },
+    { name = "types-python-dateutil", marker = "extra == 'dev'" },
+    { name = "types-pyyaml", marker = "extra == 'dev'" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'sidecar'", specifier = ">=0.30" },
 ]
 provides-extras = ["dev", "sidecar", "ed25519", "vendor-check", "timestamping"]
