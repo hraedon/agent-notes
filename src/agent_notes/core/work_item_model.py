@@ -219,15 +219,15 @@ class WorkItemModel:
         wrote a terminal op with no gate. ``force=True`` is the admin/repair escape
         hatch that writes the legacy terminal ``close`` op.
         """
+        if force:
+            return _native.close_work_item_force(project_id, identifier, actor_id)
         face = face_factory.get_face()
         if face is not None:
             return _regista.close_work_item(face, project_id, identifier)
-        if not force:
-            old = cls.get_work_item(project_id, identifier)
-            if old is None:
-                raise ValueError(f"Work item not found: {identifier!r} in project {project_id}")
-            return _native.close_work_item_native_deferred(project_id, identifier, old, actor_id)
-        return _native.close_work_item_force(project_id, identifier, actor_id)
+        old = cls.get_work_item(project_id, identifier)
+        if old is None:
+            raise ValueError(f"Work item not found: {identifier!r} in project {project_id}")
+        return _native.close_work_item_native_deferred(project_id, identifier, old, actor_id)
 
     @classmethod
     def attest_gate_waiver(
@@ -332,7 +332,9 @@ class WorkItemModel:
     def delete_work_item(cls, project_id: int, identifier: str) -> bool:
         """Soft-delete via snapshot op with tombstone. Removes from cache."""
         if face_factory.get_face() is not None:
-            return _queries.delete_work_item_regista(project_id, identifier)
+            existing = _queries.get_work_item(project_id, identifier)
+            if existing is not None and existing.get("regista_work_item_id") is not None:
+                return _queries.delete_work_item_regista(project_id, identifier)
         return _native.delete_work_item(project_id, identifier)
 
     @classmethod

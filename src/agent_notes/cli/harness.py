@@ -138,14 +138,29 @@ def _load_json(path: Path) -> dict:
         return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            f"Cannot parse {path}: {exc}. Refusing to overwrite a corrupted config. "
+            f"Fix or remove the file and re-run."
+        ) from exc
+    if not isinstance(data, dict):
+        raise RuntimeError(f"{path} contains a {type(data).__name__}, not a JSON object.")
+    return data
 
 
 def _save_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    content = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    import tempfile
+
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp, path)
+    except BaseException:
+        os.unlink(tmp)
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -640,9 +655,17 @@ def cmd_install_harness(args: argparse.Namespace) -> int:
     results: list[dict] = []
     for tgt in targets:
         if uninstall:
-            res, warns = _uninstall_one(tgt, home=home)
+            try:
+                res, warns = _uninstall_one(tgt, home=home)
+            except RuntimeError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return EXIT_GENERIC
         else:
-            res, warns = _install_harness_one(tgt, dry_run, user, source, dest, home=home)
+            try:
+                res, warns = _install_harness_one(tgt, dry_run, user, source, dest, home=home)
+            except RuntimeError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return EXIT_GENERIC
         results.append(res)
         all_warns += warns
 

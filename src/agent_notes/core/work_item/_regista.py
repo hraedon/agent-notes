@@ -65,17 +65,21 @@ def file_work_item(
     existing = face.find_by_source_identifier(norm_sid) if norm_sid is not None else None
     if existing is not None:
         wid = existing.work_item_id
-        state = face.amend_breadcrumb(
-            actor,
-            wid,
-            current_state=existing.current_state,
-            title=effective_title,
-            description=body or "",
-            severity=severity,
-            kind=kind,
-            external_refs=external_refs or {},
-            diagnostic_keys=diagnostic_keys or {},
-        )
+        live_state = existing.current_state or ""
+        if live_state in ("done", "closed"):
+            state = live_state  # terminal — skip amend (cannot amend terminal state)
+        else:
+            state = face.amend_breadcrumb(
+                actor,
+                wid,
+                current_state=live_state,
+                title=effective_title,
+                description=body or "",
+                severity=severity,
+                kind=kind,
+                external_refs=external_refs or {},
+                diagnostic_keys=diagnostic_keys or {},
+            )
     else:
         wid, state = face.create_breadcrumb(
             actor,

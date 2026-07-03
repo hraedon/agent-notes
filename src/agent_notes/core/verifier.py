@@ -754,7 +754,11 @@ def load_public_key(key_id: str) -> bytes | None:
     Key store: ``~/.config/agent-notes/keys/<key_id>.pub``
     """
     import os
+    import re
     from pathlib import Path
+
+    if not re.match(r"^[a-fA-F0-9]{4,64}$", key_id):
+        return None
 
     base = os.environ.get("XDG_CONFIG_HOME") or "~/.config"
     key_dir = Path(base).expanduser() / "agent-notes" / "keys"

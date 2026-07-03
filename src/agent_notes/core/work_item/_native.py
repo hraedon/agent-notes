@@ -414,7 +414,11 @@ def attest_gate_waiver(project_id: int, identifier: str, reason: str, actor_id: 
                 "it is gate-verified by construction and needs no attestation."
             )
 
-        actor = face_factory.default_actor()
+        actor = (
+            face_factory.reviewer_actor(actor_id, None)
+            if actor_id
+            else face_factory.default_actor()
+        )
         attestation = {
             "status": "waived",
             "reason": reason,
@@ -787,6 +791,12 @@ def delete_work_item(project_id: int, identifier: str) -> bool:
             op_type="snapshot",
             payload={"tombstone": True},
             parent_op_ids=[entity_id],
+        )
+
+        # Delete leases first to avoid FK violation (BC-028).
+        cur.execute(
+            "DELETE FROM work_item_leases WHERE entity_id = %s",
+            (entity_id,),
         )
 
         # Delete from cache.
