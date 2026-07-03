@@ -14,6 +14,9 @@ def _clean_env(monkeypatch):
     monkeypatch.delenv("AGENT_NOTES_DSN", raising=False)
     monkeypatch.delenv("AGENT_NOTES_CONFIG", raising=False)
     for v in (
+        config._SUITE_REGISTA_DSN_ENV,
+        config._SUITE_REGISTA_KEY_ENV,
+        config._SUITE_REGISTA_SSL_ENV,
         config._REGISTA_DSN_ENV,
         config._REGISTA_PROJECT_ENV,
         config._REGISTA_KEY_ENV,
@@ -21,6 +24,8 @@ def _clean_env(monkeypatch):
         config._REGISTA_SSL_ENV,
     ):
         monkeypatch.delenv(v, raising=False)
+    # Reset the one-shot deprecation-warning guard so each test can observe it.
+    config._WARNED_LEGACY.clear()
 
 
 def _write_config(tmp_path, monkeypatch, dsn):
@@ -244,3 +249,138 @@ def test_regista_file_nonstring_dsn_coerced_to_none(monkeypatch, tmp_path):
     cfg = config.RegistaConfig()
     assert cfg.dsn is None
     assert cfg.enabled is False
+
+
+# ---------------------------------------------------------------------------
+# Suite config adoption — canonical REGISTA_* precedence (Plan 017 WI-1.1)
+# ---------------------------------------------------------------------------
+
+
+def test_canonical_dsn_wins_over_legacy_alias(monkeypatch):
+    """REGISTA_DSN takes precedence over the AGENT_NOTES_REGISTA_DSN alias."""
+    monkeypatch.setenv(config._SUITE_REGISTA_DSN_ENV, "postgresql://canonical/x")
+    monkeypatch.setenv(config._REGISTA_DSN_ENV, "postgresql://legacy/x")
+    monkeypatch.setenv(config._REGISTA_WRITES_ENV, "1")
+    cfg = config.RegistaConfig()
+    assert cfg.dsn == "postgresql://canonical/x"
+    assert cfg.enabled is True
+
+
+def test_canonical_key_wins_over_legacy_alias(monkeypatch):
+    monkeypatch.setenv(config._SUITE_REGISTA_KEY_ENV, "/canonical/key")
+    monkeypatch.setenv(config._REGISTA_KEY_ENV, "/legacy/key")
+    monkeypatch.setenv(config._SUITE_REGISTA_DSN_ENV, "postgresql://x")
+    monkeypatch.setenv(config._REGISTA_WRITES_ENV, "1")
+    cfg = config.RegistaConfig()
+    assert cfg.hmac_key_path == "/canonical/key"
+
+
+def test_canonical_ssl_wins_over_legacy_alias(monkeypatch):
+    monkeypatch.setenv(config._SUITE_REGISTA_SSL_ENV, "true")
+    monkeypatch.setenv(config._REGISTA_SSL_ENV, "false")
+    monkeypatch.setenv(config._SUITE_REGISTA_DSN_ENV, "postgresql://x")
+    cfg = config.RegistaConfig()
+    assert cfg.require_ssl is True
+
+
+def test_legacy_dsn_falls_back_with_deprecation_warning(monkeypatch):
+    """When only the legacy alias is set, it is used and a DeprecationWarning fires."""
+    monkeypatch.setenv(config._REGISTA_DSN_ENV, "postgresql://legacy/x")
+    monkeypatch.setenv(config._REGISTA_WRITES_ENV, "1")
+    with pytest.warns(DeprecationWarning, match="AGENT_NOTES_REGISTA_DSN is deprecated"):
+        cfg = config.RegistaConfig()
+    assert cfg.dsn == "postgresql://legacy/x"
+    assert cfg.enabled is True
+
+
+def test_legacy_key_falls_back_with_deprecation_warning(monkeypatch):
+    monkeypatch.setenv(config._SUITE_REGISTA_DSN_ENV, "postgresql://x")
+    monkeypatch.setenv(config._REGISTA_KEY_ENV, "/legacy/key")
+    monkeypatch.setenv(config._REGISTA_WRITES_ENV, "1")
+    with pytest.warns(DeprecationWarning, match="AGENT_NOTES_REGISTA_HMAC_KEY_PATH is deprecated"):
+        cfg = config.RegistaConfig()
+    assert cfg.hmac_key_path == "/legacy/key"
+
+
+def test_legacy_warning_fires_once_per_process(monkeypatch):
+    """The one-shot guard suppresses repeat warnings for the same alias."""
+    monkeypatch.setenv(config._REGISTA_DSN_ENV, "postgresql://legacy/x")
+    monkeypatch.setenv(config._REGISTA_WRITES_ENV, "1")
+    with pytest.warns(DeprecationWarning):
+        config.RegistaConfig()
+    # Second call must NOT re-warn (guard already spent for this alias).
+    import warnings as _w
+
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        config.RegistaConfig()
+    assert not any(issubclass(w.category, DeprecationWarning) for w in caught)
+
+
+def test_canonical_env_wins_over_file(monkeypatch, tmp_path):
+    _write_regista_config(
+        tmp_path,
+        monkeypatch,
+        {"dsn": "postgresql://file/x", "hmac_key_path": "/file/key", "writes_enabled": True},
+    )
+    monkeypatch.setenv(config._SUITE_REGISTA_DSN_ENV, "postgresql://canonical/x")
+    monkeypatch.setenv(config._SUITE_REGISTA_KEY_ENV, "/canonical/key")
+    cfg = config.RegistaConfig()
+    assert cfg.dsn == "postgresql://canonical/x"
+    assert cfg.hmac_key_path == "/canonical/key"
+    assert cfg.enabled is True
+
+
+def test_legacy_env_wins_over_file(monkeypatch, tmp_path):
+    """Legacy alias still beats the file value (just with a warning)."""
+    _write_regista_config(
+        tmp_path,
+        monkeypatch,
+        {"dsn": "postgresql://file/x", "hmac_key_path": "/file/key", "writes_enabled": True},
+    )
+    monkeypatch.setenv(config._REGISTA_DSN_ENV, "postgresql://legacy/x")
+    monkeypatch.setenv(config._REGISTA_KEY_ENV, "/legacy/key")
+    with pytest.warns(DeprecationWarning):
+        cfg = config.RegistaConfig()
+    assert cfg.dsn == "postgresql://legacy/x"
+    assert cfg.hmac_key_path == "/legacy/key"
+    assert cfg.enabled is True
+
+
+def test_suite_env_only_scenario(monkeypatch):
+    """AC: the CLI operates reading only the canonical suite vars (no legacy)."""
+    monkeypatch.setenv(config._SUITE_REGISTA_DSN_ENV, "postgresql://suite/x")
+    monkeypatch.setenv(config._SUITE_REGISTA_KEY_ENV, "/suite/key")
+    monkeypatch.setenv(config._SUITE_REGISTA_SSL_ENV, "true")
+    monkeypatch.setenv(config._REGISTA_WRITES_ENV, "1")
+    import warnings as _w
+
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        cfg = config.RegistaConfig()
+    assert cfg.dsn == "postgresql://suite/x"
+    assert cfg.hmac_key_path == "/suite/key"
+    assert cfg.require_ssl is True
+    assert cfg.enabled is True
+    # No deprecation warning when only canonical vars are used.
+    assert not any(issubclass(w.category, DeprecationWarning) for w in caught)
+
+
+def test_canonical_empty_falls_through_to_legacy(monkeypatch):
+    """An empty canonical env var is treated as unset (mirrors resolve_dsn)."""
+    monkeypatch.setenv(config._SUITE_REGISTA_DSN_ENV, "")
+    monkeypatch.setenv(config._REGISTA_DSN_ENV, "postgresql://legacy/x")
+    monkeypatch.setenv(config._REGISTA_WRITES_ENV, "1")
+    with pytest.warns(DeprecationWarning):
+        cfg = config.RegistaConfig()
+    assert cfg.dsn == "postgresql://legacy/x"
+
+
+def test_writes_gate_and_project_keep_tool_specific_names(monkeypatch):
+    """AGENT_NOTES_REGISTA_WRITES and _PROJECT are tool-specific and keep their names."""
+    monkeypatch.setenv(config._SUITE_REGISTA_DSN_ENV, "postgresql://x")
+    monkeypatch.setenv(config._REGISTA_PROJECT_ENV, "my-project-slug")
+    monkeypatch.setenv(config._REGISTA_WRITES_ENV, "1")
+    cfg = config.RegistaConfig()
+    assert cfg.project == "my-project-slug"
+    assert cfg.writes_enabled is True

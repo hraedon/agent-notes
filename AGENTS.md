@@ -64,9 +64,11 @@ Agent-facing workflows ship as skills under `skills/`:
 `start`, `reflect`, `end`. Each is a Markdown SKILL.md that shells to
 `agent-notes <noun> <verb> --json` and carries the per-workflow
 judgment in prose. Install with `agent-notes install-skills --target
-{claude,opencode}` (idempotent). Both targets share the same
-SKILL.md source; the opencode target rewrites frontmatter at install
-time. See Plan 004 §9 Q4 (resolved 2026-05-27).
+{claude,opencode}` (skills only) or `agent-notes install-harness
+{claude|opencode|all}` (skills + env wiring + opencode plugin — Plan 017
+WI-2.1, the repeatable bootstrap step). Both are idempotent; `--dry-run` /
+`--uninstall` supported. See Plan 017 §Implementation log for the
+opencode env-via-config-file decision (D1).
 
 **Opencode plugin** (Plan 007 Piece 2): `integrations/opencode/index.js`
 uses `experimental.chat.system.transform` to inject `agent-notes orient`

@@ -17,6 +17,7 @@ from agent_notes.cli.changes import register_changes_parsers
 from agent_notes.cli.common import EXIT_GENERIC, EXIT_NOT_CONFIGURED, EXIT_SUCCESS
 from agent_notes.cli.events import register_events_parsers
 from agent_notes.cli.export import register_export_parsers
+from agent_notes.cli.harness import register_harness_parser
 from agent_notes.cli.links import register_link_parsers
 from agent_notes.cli.memory import register_memory_parsers
 from agent_notes.cli.orient import register_orient_parser
@@ -217,6 +218,7 @@ def main() -> int:
     register_changes_parsers(sub)
     register_events_parsers(sub)
     register_skills_parser(sub)
+    register_harness_parser(sub)
     register_export_parsers(sub)
     register_orient_parser(sub)
     register_verify_parsers(sub)

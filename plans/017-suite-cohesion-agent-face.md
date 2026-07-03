@@ -185,3 +185,56 @@ discovery + per-target dest paths + file-level idempotency are done and reusable
   first pass does not require the requeue/trigger-loop timers.
 - Parallel-safe with the in-flight kernel work (Plans 014–016); this plan touches
   config/install/doctor surface, not the op-CRDT core.
+
+---
+
+## Implementation log
+
+### WI-1.1 — Canonical `REGISTA_*` with aliased fallback (implemented 2026-07-03)
+
+`core/config.py` resolves the three shared suite facts — DSN, signing-key path,
+SSL flag — through canonical env vars (`REGISTA_DSN`, `REGISTA_KEY_PATH`,
+`REGISTA_REQUIRE_SSL`), falling back to the legacy `AGENT_NOTES_REGISTA_*`
+aliases with a one-shot `DeprecationWarning` (module-level `_WARNED_LEGACY` set
+guards against spam). `AGENT_NOTES_REGISTA_WRITES` and
+`AGENT_NOTES_REGISTA_PROJECT` stay tool-specific. The two admin scripts
+(`dedup_regista_source_identifiers`, `migrate_to_regista`) resolve through
+`regista_config()` so the whole CLI surface reads suite.env.
+
+### WI-2.1 — `install-harness` (implemented 2026-07-03)
+
+`cli/harness.py` implements the suite install-harness contract. Reusable
+skill-install helpers from `cli/skills.py`; `install-skills` stays the
+skills-only sub-step (Plan 004 AC intact). Reviewed by an independent
+adversarial reviewer (same-model — GLM 5.2); the one blocking finding
+(manifest-drift on re-install with a reduced env-var set) was fixed and tested.
+
+**Decision D1 — opencode env goes in the agent-notes config file, not
+opencode.json.** The opencode config schema (`additionalProperties: false` on
+`Config`) has **no top-level `env` key** (verified against
+`https://opencode.ai/config.json`). Writing one would violate the schema and
+risk breaking an existing opencode setup — exactly the regression the contract
+§5 guard targets. So env vars are written to agent-notes' own config file
+(`~/.config/agent-notes/config.json`), the existing harness-independent fallback
+that `config.py` already reads (Plan 012 WI-1). The plugin path is registered
+in `opencode.json["plugin"]` (schema-supported); the two transform hooks ship
+inside the plugin, so registering the path wires them. For **claude**, env goes
+into `settings.json["env"]` (the schema-supported, working mechanism). This
+asymmetry is forced by the two harnesses' schemas, not a design preference.
+
+**Decision D2 — manifest tracks *managed* keys, not *newly-written* keys.** A
+sidecar manifest (`.agent-notes-harness.json`) records what install-harness
+owns. On a re-install (idempotent no-op), the manifest is re-derived from the
+*previous* manifest: a "matching" key (already present, equal to our value) is
+managed only if a prior install wrote it, so a user's pre-existing matching
+value is never clobbered on uninstall (contract §3 rule 3). Previously-managed
+keys still present in the config but no longer in `env_values` (user unset a var
+between installs) are preserved so uninstall removes them (review B1). The same
+preservation applies to skills removed from the repo between installs.
+
+**Remaining WI-2.1 gaps (deferred):** `--user` for opencode is a warned no-op
+(principal_id resolves from git config per `core/actor.py`); the full per-user
+overlay model awaits the suite per-user layer (WI-4.2). WI-2.2 (pin regista to a
+SHA in `SUITE.lock`) is not yet done. The plugin/skills path is repo-relative
+(works for the editable-install deployment model; a published wheel would need
+`integrations/` + `skills/` as package data — pre-existing, tracked separately).

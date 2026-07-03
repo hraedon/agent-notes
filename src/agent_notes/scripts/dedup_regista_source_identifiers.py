@@ -27,7 +27,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import os
+import sys
 from collections import defaultdict
 from typing import Any
 
@@ -127,7 +127,16 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    dsn = os.environ["AGENT_NOTES_REGISTA_DSN"]
+    from agent_notes.core.config import regista_config
+
+    dsn = regista_config().dsn
+    if not dsn:
+        print(
+            "No regista DSN found. Set REGISTA_DSN (canonical, Plan 017 WI-1.1) "
+            "or the legacy AGENT_NOTES_REGISTA_DSN alias.",
+            file=sys.stderr,
+        )
+        return 2
     items = _load_items(dsn, args.project)
     plan = _plan(items)
 

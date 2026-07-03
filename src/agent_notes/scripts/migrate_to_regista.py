@@ -2,9 +2,12 @@
 (Plan 009 P1 → Plan 010 WI-4 canonical convergence).
 
 Usage:
-    AGENT_NOTES_REGISTA_DSN=postgresql://... \
-    AGENT_NOTES_REGISTA_HMAC_KEY_PATH=/path/to/keys.json \
+    REGISTA_DSN=postgresql://... \
+    REGISTA_KEY_PATH=/path/to/keys.json \
     python -m agent_notes.scripts.migrate_to_regista [--project <slug>] [--apply]
+
+(Legacy AGENT_NOTES_REGISTA_DSN / _HMAC_KEY_PATH aliases still work but warn;
+see Plan 017 WI-1.1.)
 
 Dry-run by default. With --apply, creates a regista breadcrumb work-item (now on
 the canonical v2 lifecycle) for each local row and records the
@@ -150,10 +153,18 @@ def _migrate_row(
 def _run_migration(project_slug: str | None, apply: bool) -> int:
     cfg = regista_config()
     if not cfg.dsn:
-        print("AGENT_NOTES_REGISTA_DSN is not set; cannot migrate.", file=sys.stderr)
+        print(
+            "No regista DSN found. Set REGISTA_DSN (canonical, Plan 017 WI-1.1) "
+            "or the legacy AGENT_NOTES_REGISTA_DSN alias; cannot migrate.",
+            file=sys.stderr,
+        )
         return 2
     if not cfg.hmac_key_path:
-        print("AGENT_NOTES_REGISTA_HMAC_KEY_PATH is not set; cannot migrate.", file=sys.stderr)
+        print(
+            "No signing key found. Set REGISTA_KEY_PATH (canonical, Plan 017 WI-1.1) "
+            "or the legacy AGENT_NOTES_REGISTA_HMAC_KEY_PATH alias; cannot migrate.",
+            file=sys.stderr,
+        )
         return 2
 
     face: RegistaFace | None = None
