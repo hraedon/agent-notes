@@ -12,11 +12,11 @@ roadmap is unaffected.
 
 ## Ground truth at time of writing
 
-- agent-notes is private (`hraedon/agent-notes`), CI green on 3.13/3.14. The
+- agent-notes is public (`hraedon/agent-notes`), CI green on 3.13/3.14. The
   agent SoT MVP went live 2026-06-29: `AGENT_NOTES_REGISTA_*` + `WRITES=1` wired
   into `~/.claude/settings.json` env; per-project face routing (Plan 011) landed;
   the native op_log is now read-only history, rollback = `WRITES=0`.
-- **The config surface is large and agent-notes-private** (~30 `AGENT_NOTES_*`
+- **The config surface is large** (~30 `AGENT_NOTES_*`
   vars incl. `AGENT_NOTES_REGISTA_DSN`, `_HMAC_KEY_PATH`, `_PROJECT`,
   `_REQUIRE_SSL`) — the same three shared facts as the other tools, under private
   names.
