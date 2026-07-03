@@ -28,7 +28,8 @@ def _reset_pool() -> None:
     _pool = None
 
 
-os.register_at_fork(after_in_child=_reset_pool)
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_pool)
 
 
 def _get_pool() -> ConnectionPool:
