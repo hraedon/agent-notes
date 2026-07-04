@@ -39,8 +39,34 @@ class TestDoctorClean:
     def test_doctor_clean_exit_code(self, capsys):
         from agent_notes.scripts.doctor import run
 
-        with patch("agent_notes.scripts.doctor._check_embedding", return_value=(True, "mocked")):
-            code = run(check_embed=True)
+        suite_patches = (
+            patch(
+                "agent_notes.scripts.doctor._check_skills_installed",
+                return_value=(True, "mocked skills"),
+            ),
+            patch(
+                "agent_notes.scripts.doctor._check_harness_wired",
+                return_value=(True, "mocked harness"),
+            ),
+            patch(
+                "agent_notes.scripts.doctor._check_chain_ok",
+                return_value=(True, "mocked chain ok"),
+            ),
+            patch(
+                "agent_notes.scripts.doctor._check_regista_reachable",
+                return_value=(None, "not configured"),
+            ),
+        )
+        for p in suite_patches:
+            p.start()
+        try:
+            with patch(
+                "agent_notes.scripts.doctor._check_embedding", return_value=(True, "mocked")
+            ):
+                code = run(check_embed=True)
+        finally:
+            for p in suite_patches:
+                p.stop()
         captured = capsys.readouterr()
         assert code == 0, f"Doctor failed: {captured.out}"
         assert "DSN" in captured.out
@@ -141,3 +167,131 @@ class TestDoctorSkipsEmbeddingByDefault:
         run(check_embed=False)
         captured = capsys.readouterr()
         assert "SKIPPED: use --check-embed" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Plan 017 WI-3.1 — suite-shape `doctor --json`
+# ---------------------------------------------------------------------------
+
+
+class TestDoctorJsonSuiteShape:
+    """The suite contract (blueprint §2.4 / Plan 017 WI-3.1) requires every
+    component's ``doctor --json`` to emit a common shape so a suite-doctor
+    umbrella can aggregate them. These tests pin the shape and the two AC
+    guarantees: degrade mode is a named status (not a failure), and an
+    unconfigured regista is clean.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _seed(self):
+        ws = coredb.get_or_create_workspace("doc-json-ws", "Doc JSON WS")
+        coredb.get_or_create_project(
+            ws.id,
+            slug="doc-json-proj",
+            name="Doc JSON Proj",
+            repo_root="/tmp",
+        )
+        coredb.add_vocabulary(ws.id, "bc_kind", "bug")
+        coredb.add_vocabulary(ws.id, "bc_status", "new")
+        coredb.add_vocabulary(ws.id, "bc_severity", "medium")
+        coredb.add_vocabulary(ws.id, "memory_type", "note")
+
+    def _required_top_keys(self):
+        return {"component", "version", "status", "regista", "checks"}
+
+    def _required_regista_keys(self):
+        return {"reachable", "project", "writes_enabled", "chain_ok", "mode"}
+
+    def test_emits_suite_shape(self):
+        from agent_notes.scripts.doctor import run_json
+
+        payload, code = run_json()
+        assert self._required_top_keys() <= set(payload)
+        assert payload["component"] == "agent-notes"
+        assert payload["version"] != "unknown"
+        assert payload["status"] in {"healthy", "degraded", "unhealthy"}
+        assert self._required_regista_keys() <= set(payload["regista"])
+        assert isinstance(payload["checks"], list) and payload["checks"]
+        for c in payload["checks"]:
+            assert {"name", "status", "detail"} <= set(c)
+            assert c["status"] in {"pass", "fail", "skip"}
+
+    def test_degrade_mode_is_not_a_failure(self):
+        """regista unconfigured (coordinator-absent) must not *fail* the suite.
+
+        It reports ``status: "degraded"`` (a distinct, non-failing signal for
+        the umbrella), never ``"unhealthy"``. The regista_reachable +
+        chain_integrity checks are ``skip``.
+        """
+        from agent_notes.scripts import doctor
+
+        # Pin the regista-layer + DB-state checks so the test is hermetic
+        # against a host REGISTA_DSN (conftest clears it, but belt-and-braces)
+        # and against session-shared DB rows from earlier tests.
+        suite_patches = [
+            patch.object(doctor, "_check_regista_reachable", return_value=(None, "not configured")),
+            patch.object(doctor, "_check_chain_ok", return_value=(None, "skipped")),
+            patch.object(doctor, "_check_links_audit", return_value=(True, "clean")),
+            patch.object(doctor, "_check_vocab_integrity", return_value=(True, "clean")),
+            patch.object(doctor, "_check_skills_installed", return_value=(True, "7 skills")),
+            patch.object(doctor, "_check_harness_wired", return_value=(True, "wired")),
+        ]
+        for p in suite_patches:
+            p.start()
+        try:
+            payload, code = doctor.run_json()
+        finally:
+            for p in suite_patches:
+                p.stop()
+        regista_checks = {c["name"]: c for c in payload["checks"]}
+        assert regista_checks["regista_reachable"]["status"] == "skip"
+        assert payload["regista"]["reachable"] is None
+        assert payload["status"] == "degraded"
+        assert code == 0
+        failing = [c["name"] for c in payload["checks"] if c["status"] == "fail"]
+        assert "regista_reachable" not in failing
+
+    def test_configured_but_unreachable_regista_fails(self, monkeypatch):
+        """A regista DSN that is set but cannot be reached is a real failure."""
+        from agent_notes.scripts.doctor import run_json
+
+        monkeypatch.setenv("REGISTA_DSN", "postgresql://nobody@127.0.0.1:1/none")
+        monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
+        payload, code = run_json()
+        regista_checks = {c["name"]: c for c in payload["checks"]}
+        assert regista_checks["regista_reachable"]["status"] == "fail"
+        # No secret leak: the detail must not contain the user/password.
+        assert "nobody" not in regista_checks["regista_reachable"]["detail"]
+        assert code == 1
+        assert payload["status"] == "unhealthy"
+
+    def test_clean_store_reports_healthy(self):
+        """When regista is reachable and every check passes, status is healthy."""
+        from agent_notes.scripts import doctor
+
+        checks = {
+            "_check_dsn": (True, "ok"),
+            "_check_schema": (True, "ok"),
+            "_check_coordination_mode": (True, "coordinator-present / local-lease"),
+            "_check_links_audit": (True, "no dangling links"),
+            "_check_vocab_integrity": (True, "ok"),
+            "_check_bridge_target": (True, "disabled"),
+            "_check_harness_configs": (True, "clean"),
+            "_check_regista_face": (True, "ok"),
+            "_check_chain_ok": (True, "0 violations"),
+            "_check_skills_installed": (True, "7 skills"),
+            "_check_harness_wired": (True, "wired"),
+            "_check_regista_reachable": (True, "regista DSN reachable"),
+        }
+        patchers = [patch.object(doctor, name, return_value=val) for name, val in checks.items()]
+        for p in patchers:
+            p.start()
+        try:
+            payload, code = doctor.run_json()
+        finally:
+            for p in patchers:
+                p.stop()
+        assert code == 0, payload
+        assert payload["status"] == "healthy"
+        assert payload["regista"]["reachable"] is True
+        assert all(c["status"] != "fail" for c in payload["checks"])

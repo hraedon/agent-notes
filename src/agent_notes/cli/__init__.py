@@ -164,14 +164,16 @@ def cmd_resolve(path: str | None, use_json: bool) -> int:
 
 
 def cmd_doctor(use_json: bool, skip_embed: bool = False, check_embed: bool = False) -> int:
+    if use_json:
+        from agent_notes.scripts.doctor import run_json
+
+        payload, code = run_json(check_embed=check_embed)
+        print(json.dumps(payload, indent=2, default=str))
+        return code
+
     from agent_notes.scripts.doctor import run as doctor_run
 
-    code = doctor_run(skip_embed=skip_embed, check_embed=check_embed)
-    if code != 0 and use_json:
-        print(json.dumps({"status": "unhealthy", "doctor_exit": code}))
-    elif use_json:
-        print(json.dumps({"status": "healthy"}))
-    return code
+    return doctor_run(skip_embed=skip_embed, check_embed=check_embed)
 
 
 def main() -> int:

@@ -37,6 +37,19 @@ def _print_result(ok: bool, msg: str) -> None:
     print(f"  {status}: {msg}")
 
 
+def _sanitize_conn_error(exc: Exception) -> str:
+    """Return a secret-safe summary of an exception from a DB check.
+
+    ``psycopg`` exception messages can embed the DSN, username, or host (e.g.
+    ``password authentication failed for user 'nobody'``). The doctor JSON is
+    machine-readable and may land in logs / aggregators, so we never surface
+    ``str(exc)`` directly — only the exception type name. Diagnostic detail is
+    intentionally traded for secret safety; the type name is enough to point an
+    operator at the right area.
+    """
+    return f"{type(exc).__name__}"
+
+
 def _check_dsn() -> tuple[bool, str]:
     try:
         from agent_notes.core.db import _conn
@@ -47,7 +60,7 @@ def _check_dsn() -> tuple[bool, str]:
             cur.fetchone()
         return True, "Connected successfully"
     except Exception as exc:
-        return False, str(exc)
+        return False, _sanitize_conn_error(exc)
 
 
 def _check_schema() -> tuple[bool, str]:
@@ -80,7 +93,7 @@ def _check_schema() -> tuple[bool, str]:
             return False, f"Missing tables/views: {sorted(missing)}"
         return True, f"All expected tables/views present ({len(expected)} total)"
     except Exception as exc:
-        return False, str(exc)
+        return False, _sanitize_conn_error(exc)
 
 
 def _check_coordination_mode() -> tuple[bool, str]:
@@ -96,7 +109,7 @@ def _check_coordination_mode() -> tuple[bool, str]:
         mode = get_coordination_mode()
         return True, mode
     except Exception as exc:
-        return False, str(exc)
+        return False, _sanitize_conn_error(exc)
 
 
 def _check_embedding() -> tuple[bool, str]:
@@ -115,7 +128,7 @@ def _check_embedding() -> tuple[bool, str]:
             return False, warn
         return True, msg
     except Exception as exc:
-        return False, str(exc)
+        return False, _sanitize_conn_error(exc)
 
 
 def _check_links_audit() -> tuple[bool, str]:
@@ -168,7 +181,7 @@ def _check_links_audit() -> tuple[bool, str]:
             )
         return True, "No dangling links"
     except Exception as exc:
-        return False, str(exc)
+        return False, _sanitize_conn_error(exc)
 
 
 def _check_vocab_integrity() -> tuple[bool, str]:
@@ -242,7 +255,7 @@ def _check_vocab_integrity() -> tuple[bool, str]:
 
         return True, "All kind/status/severity/memory_type values have matching vocab entries"
     except Exception as exc:
-        return False, str(exc)
+        return False, _sanitize_conn_error(exc)
 
 
 def _check_bridge_target() -> tuple[bool, str]:
@@ -270,7 +283,121 @@ def _check_bridge_target() -> tuple[bool, str]:
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             return False, f"Bridge target unreachable: {exc}"
     except Exception as exc:
-        return False, str(exc)
+        return False, _sanitize_conn_error(exc)
+
+
+def _component_version() -> str:
+    """Return the installed agent-notes distribution version."""
+    from importlib.metadata import version
+
+    try:
+        return version("agent-notes")
+    except Exception:
+        return "unknown"
+
+
+def _check_regista_reachable(cfg: reg_config.RegistaConfig) -> tuple[bool | None, str]:
+    """Probe the regista DSN. Returns (reachable, detail).
+
+    ``reachable`` is ``None`` (not configured — degrade mode), ``True`` (connected),
+    or ``False`` (configured but unreachable). Per Plan 017 WI-3.1 AC, an
+    *unconfigured* regista is a clean state (coordinator-absent is the default
+    safe mode), not a failure. A *configured-but-unreachable* regista is a real
+    failure (the operator wired a store the face cannot reach).
+
+    Honor ``cfg.require_ssl``: if the DSN does not already specify an sslmode,
+    a connection that demands SSL is probed with ``sslmode=require`` so the
+    reachability result reflects the configured security posture (not a
+    silently-insecure handshake).
+    """
+    if not cfg.dsn:
+        return None, "regista DSN not configured (native op_log path — coordinator-absent)"
+    try:
+        import psycopg
+
+        dsn = cfg.dsn
+        # Honor require_ssl without mutating the caller's DSN string parsing —
+        # only inject sslmode if the DSN does not already carry one.
+        if cfg.require_ssl and "sslmode=" not in dsn:
+            sep = "&" if "?" in dsn else "?"
+            dsn = f"{dsn}{sep}sslmode=require"
+        with psycopg.connect(dsn, connect_timeout=3) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        return True, "regista DSN reachable"
+    except Exception as exc:
+        return False, f"regista DSN configured but unreachable ({_sanitize_conn_error(exc)})"
+
+
+def _check_chain_ok() -> tuple[bool | None, str]:
+    """Verify agent-notes' own op-log chain integrity.
+
+    agent-notes owns an append-only ``op_log`` (Plan 008) that is the chain it is
+    responsible for; when regista writes are on, this log is the source the
+    write-through face replays into the spine. Verifying regista's *own* event
+    log is regista's doctor job — agent-notes cannot reach it from here. So
+    ``regista.chain_ok`` reports the integrity of the op-log the agent face owns
+    (the chain that feeds the spine), not a re-verification of the spine's
+    internal chain.
+
+    Returns ``(True, ...)`` for a valid (possibly empty) chain. A verifier error
+    (missing key file, import failure) returns ``(False, ...)`` — a verifier
+    that cannot run indicates a real misconfiguration the operator should see,
+    so it fails the suite rather than silently skipping.
+    """
+    try:
+        from agent_notes.core import verifier
+
+        result = verifier.verify_with_auto_key(check_policy=False)
+        if result.checked == 0:
+            return True, "agent-notes op-log chain: empty (fresh install, no violations)"
+        ok = result.ok()
+        return ok, (
+            f"agent-notes op-log chain: {result.checked} ops checked, {result.failed} violation(s)"
+        )
+    except Exception as exc:
+        return False, f"chain verification error: {type(exc).__name__}"
+
+
+def _check_skills_installed() -> tuple[bool, str]:
+    """Detect whether the agent-notes skills are present in either harness."""
+    try:
+        from agent_notes.cli.skills import _discover_skills, _repo_skills_root
+
+        repo_skills = {p.parent.name for p in _discover_skills(_repo_skills_root())}
+    except Exception:
+        # Source unreadable: we cannot determine state, so skip (not a pass
+        # that hides a real gap, and not a fail that false-alarms an editable
+        # install whose repo root is elsewhere).
+        return None, "skills source unreadable (informational)"
+    # (install_dir, is_claude_layout) — the layout differs per harness.
+    layouts = [
+        (Path.home() / ".claude" / "skills", True),
+        (Path.home() / ".config" / "opencode" / "command", False),
+    ]
+    found: list[str] = []
+    for install_dir, is_claude in layouts:
+        for name in repo_skills:
+            target = install_dir / name / "SKILL.md" if is_claude else install_dir / f"{name}.md"
+            if target.exists():
+                found.append(name)
+    installed = sorted(set(found))
+    if not installed:
+        return False, "no skills installed (run 'agent-notes install-harness <harness>')"
+    return True, f"{len(installed)} skill(s) installed: {', '.join(installed)}"
+
+
+def _check_harness_wired() -> tuple[bool, str]:
+    """Detect whether install-harness left a manifest in either harness config."""
+    manifests = [
+        Path.home() / ".claude" / ".agent-notes-harness.json",
+        Path.home() / ".config" / "opencode" / ".agent-notes-harness.json",
+    ]
+    wired = [str(p) for p in manifests if p.exists()]
+    if not wired:
+        return False, "no harness manifest found (run 'agent-notes install-harness <harness>')"
+    return True, f"harness wired: {', '.join(wired)}"
 
 
 def _check_regista_face() -> tuple[bool, str]:
@@ -290,7 +417,11 @@ def _check_regista_face() -> tuple[bool, str]:
             f"pending_sync rows={pending_rows}",
         )
     except Exception as exc:
-        return True, f"regista face check skipped (informational): {exc}"
+        # An operational error (outbox unreadable, projection query failed,
+        # DB unreachable) is a real failure — surface it rather than masking
+        # the problem as a pass. Only the explicitly-disabled state above is a
+        # clean pass.
+        return False, f"regista face check error: {type(exc).__name__}"
 
 
 # Known console scripts shipped by this package (from pyproject.toml).
@@ -361,6 +492,154 @@ def _check_harness_configs() -> tuple[bool, str]:
     if stale_entries:
         return False, "Stale MCP entries found:\n    " + "\n    ".join(stale_entries)
     return True, "No stale MCP entries in harness configs"
+
+
+def _status_of(ok: bool | None) -> str:
+    """Map a check result to a suite status string.
+
+    ``True`` -> ``pass``, ``False`` -> ``fail``, ``None`` -> ``skip`` (the check
+    does not apply to this deployment shape — e.g. regista chain verify when
+    writes are off). A ``skip`` never fails the suite-doctor umbrella.
+    """
+    if ok is None:
+        return "skip"
+    return "pass" if ok else "fail"
+
+
+def run_json(check_embed: bool = False) -> tuple[dict, int]:
+    """Run all checks and return the suite-shape health object + exit code.
+
+    Emits the contract shape defined in Plan 017 WI-3.1 / blueprint §2.4::
+
+        {
+          "component": "agent-notes",
+          "version": "<dist-version>",
+          "status": "healthy" | "degraded" | "unhealthy",
+          "regista": {
+            "reachable": true|false|null,
+            "project": "<slug>",
+            "writes_enabled": bool,
+            "chain_ok": true|false|null,
+            "mode": "<coordination mode>"
+          },
+          "checks": [{"name": ..., "status": ..., "detail": ...}, ...]
+        }
+
+    ``status`` is ``healthy`` when every check passed/skipped AND regista is
+    reachable; ``degraded`` when no check failed but the spine is absent
+    (coordinator-absent / regista DSN not configured) — degrade mode is a safe,
+    fully-functional state, just not the full-suite posture, so the umbrella
+    gets a distinct signal; ``unhealthy`` when any check failed. Per Plan 017
+    WI-3.1 AC, degrade mode never makes the suite *unhealthy*.
+    """
+    checks: list[dict] = []
+    failed = False
+
+    def add(name: str, ok: bool | None, detail: str) -> None:
+        nonlocal failed
+        status = _status_of(ok)
+        if status == "fail":
+            failed = True
+        checks.append({"name": name, "status": status, "detail": detail})
+
+    cfg = reg_config.regista_config()
+
+    # --- native store checks (always run; the native op_log is the floor) ---
+    ok, msg = _check_dsn()
+    add("dsn_reachable", ok, msg)
+    dsn_ok = bool(ok)
+
+    ok, msg = _check_schema()
+    add("schema_up_to_date", ok, msg)
+    schema_ok = bool(ok)
+
+    ok, msg = _check_coordination_mode()
+    add("coordination_mode", ok, msg)
+    # Reuse the coordination-mode string for the regista block instead of
+    # calling get_coordination_mode() a second time.
+    mode = msg if ok else "unknown"
+
+    chain_ok: bool | None = None
+    if dsn_ok and schema_ok:
+        if check_embed:
+            ok, msg = _check_embedding()
+            add("embedding_model", ok, msg)
+        else:
+            add("embedding_model", None, "skipped (use --check-embed)")
+
+        ok, msg = _check_links_audit()
+        add("links_audit", ok, msg)
+
+        ok, msg = _check_vocab_integrity()
+        add("vocabulary_integrity", ok, msg)
+
+        ok, msg = _check_bridge_target()
+        add("bridge_target", ok, msg)
+
+        ok, msg = _check_harness_configs()
+        add("stale_mcp_entries", ok, msg)
+
+        ok, msg = _check_regista_face()
+        add("regista_face", ok, msg)
+
+        # agent-notes owns its op_log chain (the chain the write-through face
+        # replays into regista); verify it whenever the native store is up. It
+        # is independent of whether the regista face is wired.
+        chain_ok, chain_msg = _check_chain_ok()
+        add("chain_integrity", chain_ok, chain_msg)
+    else:
+        for name in (
+            "embedding_model",
+            "links_audit",
+            "vocabulary_integrity",
+            "bridge_target",
+            "stale_mcp_entries",
+            "regista_face",
+            "chain_integrity",
+        ):
+            add(name, None, "skipped (prerequisite dsn_reachable/schema_up_to_date failed)")
+
+    # --- suite-layer checks (run regardless of native DB reachability) ---
+    ok, msg = _check_skills_installed()
+    add("skills_installed", ok, msg)
+
+    ok, msg = _check_harness_wired()
+    add("harness_wired", ok, msg)
+
+    # --- regista block (the suite-shared facts) ---
+    reachable, reach_msg = _check_regista_reachable(cfg)
+    if reachable is False:
+        # Configured but unreachable is a real failure.
+        add("regista_reachable", False, reach_msg)
+    elif reachable is None:
+        add("regista_reachable", None, reach_msg)
+    else:
+        add("regista_reachable", True, reach_msg)
+
+    if failed:
+        overall = "unhealthy"
+    elif reachable is None:
+        # No check failed, but the spine is absent — degrade mode. Safe and
+        # functional, but not the full-suite posture; give the umbrella a
+        # distinct signal (Plan 017 WI-3.1 AC: not a failure).
+        overall = "degraded"
+    else:
+        overall = "healthy"
+
+    payload = {
+        "component": "agent-notes",
+        "version": _component_version(),
+        "status": overall,
+        "regista": {
+            "reachable": reachable,
+            "project": cfg.project,
+            "writes_enabled": cfg.writes_enabled,
+            "chain_ok": chain_ok,
+            "mode": mode,
+        },
+        "checks": checks,
+    }
+    return payload, (1 if failed else 0)
 
 
 def run(skip_embed: bool = False, check_embed: bool = False) -> int:
@@ -439,6 +718,39 @@ def run(skip_embed: bool = False, check_embed: bool = False) -> int:
     _print_result(ok, msg)
     all_ok = all_ok and ok
 
+    # Suite-layer checks (Plan 017 WI-3.1) — same surface as `doctor --json`,
+    # so the human-readable report does not silently miss a gap the JSON
+    # umbrella would catch.
+    ok, msg = _check_chain_ok()
+    _print_section("10. Op-Log Chain Integrity")
+    if ok is None:
+        print(f"  SKIP: {msg}")
+    else:
+        _print_result(ok, msg)
+        all_ok = all_ok and ok
+
+    ok, msg = _check_skills_installed()
+    _print_section("11. Skills Installed")
+    if ok is None:
+        print(f"  SKIP: {msg}")
+    else:
+        _print_result(ok, msg)
+        all_ok = all_ok and ok
+
+    ok, msg = _check_harness_wired()
+    _print_section("12. Harness Wired")
+    _print_result(ok, msg)
+    all_ok = all_ok and ok
+
+    cfg = reg_config.regista_config()
+    reachable, reach_msg = _check_regista_reachable(cfg)
+    _print_section("13. Regista Reachable")
+    if reachable is None:
+        print(f"  SKIP: {reach_msg}")
+    else:
+        _print_result(reachable, reach_msg)
+        all_ok = all_ok and reachable
+
     _print_section("Summary")
     if all_ok:
         print("All checks passed.")
@@ -453,6 +765,11 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="agent-notes health check")
     parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the suite-shape health object (Plan 017 WI-3.1) and exit.",
+    )
+    parser.add_argument(
         "--skip-embed",
         action="store_true",
         help="Deprecated; embedding check is now opt-in via --check-embed",
@@ -463,6 +780,10 @@ def main() -> None:
         help="Run embedding model check (~270MB model load, ~30s on first run)",
     )
     args = parser.parse_args()
+    if args.json:
+        payload, code = run_json(check_embed=args.check_embed)
+        print(json.dumps(payload, indent=2, default=str))
+        sys.exit(code)
     sys.exit(run(skip_embed=args.skip_embed, check_embed=args.check_embed))
 
 

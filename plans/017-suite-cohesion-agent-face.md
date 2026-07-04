@@ -238,3 +238,38 @@ overlay model awaits the suite per-user layer (WI-4.2). WI-2.2 (pin regista to a
 SHA in `SUITE.lock`) is not yet done. The plugin/skills path is repo-relative
 (works for the editable-install deployment model; a published wheel would need
 `integrations/` + `skills/` as package data — pre-existing, tracked separately).
+
+### WI-3.1 — `doctor --json` suite shape (implemented 2026-07-04)
+
+`scripts/doctor.py` gains `run_json()`, emitting the suite contract shape
+(blueprint §2.4): `{component, version, status, regista:{reachable, project,
+writes_enabled, chain_ok, mode}, checks:[{name, status, detail}]}`. Both the
+CLI (`agent-notes doctor --json`) and the standalone `agent-notes-doctor --json`
+use it. `status` is three-state: `healthy` (regista reachable, no failures),
+`degraded` (no failures but spine absent — coordinator-absent is the default
+safe mode, a non-failing named status per the AC), `unhealthy` (any check
+failed). A configured-but-unreachable regista is a real failure; an unconfigured
+regista is `degraded`, never `unhealthy`. The human-readable `run()` path now
+runs the same suite-layer checks (chain, skills, harness-wired, regista
+reachable) so both surfaces agree.
+
+Two independent adversarial reviews (Kimi-K2.7, GLM-5.2 — same-lineage,
+recorded honestly) drove the hardened shape: all exception details are
+secret-safe (`_sanitize_conn_error` returns only the type name, never
+`str(exc)`, so no DSN/username leaks into JSON/logs); `_check_chain_ok`
+verifies agent-notes' own op-log chain (the chain the write-through face
+replays into regista — regista's *own* event-log chain is regista's doctor
+job); the hermetic test fixture (`tests/conftest.py`) now clears the canonical
+`REGISTA_*` suite env vars, not just the legacy aliases (a host `REGISTA_DSN`
+previously enabled regista for every test).
+
+### WI-2.2 — `SUITE.lock` + pre-cache docs (implemented 2026-07-04)
+
+`SUITE.lock` records the regista git SHA + envelope/workflow versions this
+release is tested against (`d7d156c`, envelope v4, workflow v1). The
+`[tool.uv.sources]` editable mapping resolves regista from `../regista`;
+`SUITE.lock` is the SHA that pair is known-good at (a CI check comparing
+`git -C ../regista rev-parse HEAD` against the lock is a follow-on). The embed
+model pre-cache path is documented in `deploy/SUITE-INSTALL.md` (HF_HOME
+pre-population + `HF_HUB_OFFLINE=1 doctor --check-embed` confirmation), so a
+work install needs no model-download egress at first run.

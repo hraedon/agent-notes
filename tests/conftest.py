@@ -40,11 +40,19 @@ def _hermetic_config(tmp_path_factory):
     cfg.write_text("{}")
     keys = (
         "AGENT_NOTES_CONFIG",
+        # Legacy aliases (one-release back-compat, Plan 017 WI-1.1) ...
         "AGENT_NOTES_REGISTA_DSN",
         "AGENT_NOTES_REGISTA_HMAC_KEY_PATH",
         "AGENT_NOTES_REGISTA_PROJECT",
         "AGENT_NOTES_REGISTA_REQUIRE_SSL",
         "AGENT_NOTES_REGISTA_WRITES",
+        # ... and the canonical suite env vars the resolver prefers. Without
+        # clearing these, a host with REGISTA_DSN set enables regista for every
+        # test (the alias clearing above is a no-op when the canonical var is
+        # present), routing test writes to the production spine.
+        "REGISTA_DSN",
+        "REGISTA_KEY_PATH",
+        "REGISTA_REQUIRE_SSL",
     )
     saved = {k: os.environ.get(k) for k in keys}
     os.environ["AGENT_NOTES_CONFIG"] = str(cfg)

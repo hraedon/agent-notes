@@ -1,0 +1,39 @@
+# SUITE.lock — agent-notes face compatibility manifest (Plan 017 WI-2.2)
+#
+# Records the exact versions of the suite spine (regista) and the envelope /
+# workflow versions this release of agent-notes was tested against. A suite
+# release is green when every component's SUITE.lock agrees and the suite-
+# interop CI drives one work-item across both faces to `done` (blueprint §2.2).
+#
+# The spine is a local sibling repo (not published to a package index), so the
+# resolution for a fresh install is: clone regista at the locked SHA, then
+# `pip install -e ../regista` (or build a wheel from that SHA). The dev layout
+# uses an editable source (pyproject.toml [tool.uv.sources]); this file pins
+# the SHA that editable source must point at for a known-good pair.
+
+[component]
+name = "agent-notes"
+version = "1.0.0"
+
+[spine]
+name = "regista"
+# The git SHA of regista this agent-notes release was tested against.
+# Resolve with: git -C ../regista checkout <sha>
+sha = "d7d156c3841f7d0137c91be2f0558e697c35f4cc"
+describe = "v0.5.1-rc1-28-gd7d156c"
+pyproject_floor = "regista>=0.4.0"
+
+[envelope]
+# Regista event-envelope + canonical-workflow versions the face writes.
+# (Sourced from regista's own version surface; recorded here so a mismatch is
+# detectable without standing up the full interop CI.)
+envelope_version = "v4"
+canonical_workflow = "v1"
+
+[embedding]
+# Pre-cache target so a work install does no model-download egress on first run
+# (blueprint §4). Set HF_HOME to a persistent, pre-populated directory.
+model = "nomic-ai/nomic-embed-text-v1.5"
+dim = 768
+cache_env = "HF_HOME"
+precache_hint = "huggingface-cli download nomic-ai/nomic-embed-text-v1.5"
