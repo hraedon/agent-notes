@@ -315,7 +315,13 @@ def _check_regista_reachable(cfg: reg_config.RegistaConfig) -> tuple[bool | None
     try:
         import psycopg
 
-        dsn = cfg.dsn
+        from agent_notes.core import secrets as suite_secrets
+
+        # Resolve a backend ref (env:/vault:/...) to the real DSN before probing
+        # (Plan 017 WI-4.1) — cfg.dsn may hold the ref string, not the DSN.
+        dsn = suite_secrets.resolve_dsn(cfg.dsn)
+        if dsn is None:
+            return None, "regista DSN not configured (native op_log path — coordinator-absent)"
         # Honor require_ssl without mutating the caller's DSN string parsing —
         # only inject sslmode if the DSN does not already carry one.
         if cfg.require_ssl and "sslmode=" not in dsn:
@@ -398,6 +404,54 @@ def _check_harness_wired() -> tuple[bool, str]:
     if not wired:
         return False, "no harness manifest found (run 'agent-notes install-harness <harness>')"
     return True, f"harness wired: {', '.join(wired)}"
+
+
+def _check_secrets_backend(cfg: reg_config.RegistaConfig) -> tuple[bool | None, str]:
+    """Verify configured suite secret refs resolve (Plan 017 WI-4.1).
+
+    Only meaningful when a backend ref (``env:``/``vault:``/``azure:``/``file:``)
+    is configured for the regista DSN or signing key. A plaintext/file-path
+    deployment (the default) has nothing to verify → returns ``None`` (skipped,
+    not a failure). When a ref is present, this *contacts the backend* once to
+    confirm the secret is reachable and the material parses — a custody check a
+    regulated deployment wants before trusting writes. Failures surface the
+    exception type only (the message may echo partial material).
+
+    The key-set manifest, when materialized, leaves a 0600 temp file that is
+    scrubbed at interpreter exit; this check does not leave persistent state.
+    """
+    from agent_notes.core import secrets as suite_secrets
+
+    refs: list[tuple[str, str]] = []
+    if cfg.dsn and suite_secrets.is_backend_ref(cfg.dsn):
+        refs.append(("REGISTA_DSN", cfg.dsn))
+    if cfg.hmac_key_path and suite_secrets.is_backend_ref(cfg.hmac_key_path):
+        # Only remote refs (env/vault/azure) materialize a temp file; a file:
+        # ref is read directly. is_backend_ref covers both, which is fine — we
+        # resolve either way to confirm reachability.
+        refs.append(("REGISTA_KEY_PATH", cfg.hmac_key_path))
+    if not refs:
+        return None, "no backend refs configured (plaintext/file path)"
+
+    resolved = 0
+    for label, ref in refs:
+        try:
+            if label == "REGISTA_DSN":
+                suite_secrets.resolve_dsn(ref)
+            else:
+                path, cleanup = suite_secrets.materialize_key_manifest(ref)
+                # A bare/file: path is returned unread — confirm it actually
+                # exists so a missing manifest is a named failure, not a pass.
+                if cleanup is None and path is not None:
+                    if not Path(path).is_file():
+                        raise FileNotFoundError(path)
+                if cleanup is not None:
+                    cleanup()
+            resolved += 1
+        except Exception as exc:
+            return False, f"{label} ref unresolvable: {type(exc).__name__}"
+    names = ", ".join(label for label, _ in refs)
+    return True, f"{resolved} backend ref(s) resolved ({names})"
 
 
 def _check_regista_face() -> tuple[bool, str]:
@@ -606,6 +660,9 @@ def run_json(check_embed: bool = False) -> tuple[dict, int]:
     ok, msg = _check_harness_wired()
     add("harness_wired", ok, msg)
 
+    ok, msg = _check_secrets_backend(cfg)
+    add("secrets_backend", ok, msg)
+
     # --- regista block (the suite-shared facts) ---
     reachable, reach_msg = _check_regista_reachable(cfg)
     if reachable is False:
@@ -750,6 +807,14 @@ def run(skip_embed: bool = False, check_embed: bool = False) -> int:
     else:
         _print_result(reachable, reach_msg)
         all_ok = all_ok and reachable
+
+    ok, msg = _check_secrets_backend(cfg)
+    _print_section("14. Secrets Backend")
+    if ok is None:
+        print(f"  SKIP: {msg}")
+    else:
+        _print_result(ok, msg)
+        all_ok = all_ok and ok
 
     _print_section("Summary")
     if all_ok:

@@ -19,8 +19,8 @@ version = "1.0.0"
 name = "regista"
 # The git SHA of regista this agent-notes release was tested against.
 # Resolve with: git -C ../regista checkout <sha>
-sha = "d7d156c3841f7d0137c91be2f0558e697c35f4cc"
-describe = "v0.5.1-rc1-28-gd7d156c"
+sha = "ccf33044a65302a4903fcf3e17ff44c73d8cbce7"
+describe = "v0.5.1-rc1-30-gccf3304"
 pyproject_floor = "regista>=0.4.0"
 
 [envelope]

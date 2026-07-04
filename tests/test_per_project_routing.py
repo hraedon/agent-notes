@@ -39,7 +39,9 @@ def test_get_face_routes_and_caches_per_project(monkeypatch):
 
     def fake_build(cfg, project):
         built.append(project)
-        return SimpleNamespace(project=project, close=lambda: None)
+        # _build_face returns (face, cleanup) — Plan 017 WI-4.1 added the
+        # cleanup so a backend-sourced key manifest is scrubbed on reset.
+        return SimpleNamespace(project=project, close=lambda: None), None
 
     monkeypatch.setattr(face_factory, "regista_config", lambda: _cfg())
     monkeypatch.setattr(face_factory, "_build_face", fake_build)

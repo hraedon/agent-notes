@@ -273,3 +273,70 @@ release is tested against (`d7d156c`, envelope v4, workflow v1). The
 model pre-cache path is documented in `deploy/SUITE-INSTALL.md` (HF_HOME
 pre-population + `HF_HUB_OFFLINE=1 doctor --check-embed` confirmation), so a
 work install needs no model-download egress at first run.
+
+### WI-2.2 follow-on — SUITE.lock drift check (implemented 2026-07-04)
+
+`scripts/check_suite_lock.py` + `make check-suite-lock` compare the local
+sibling regista checkout against the `SUITE.lock` pin. Informational by
+default (exit 0); `make check-suite-lock-strict` fails on drift for a
+pre-release gate. CI is N/A (it installs regista from `@main`); this is a
+local-dev guard against a stale/moved sibling checkout. The `SUITE.lock` SHA
+was bumped to `ccf3304` (regista HEAD at WI-4.1 implementation, which ships
+the `_secrets.py` resolver this item consumes).
+
+### WI-4.1 — Resolve secrets through the backend (implemented 2026-07-04)
+
+`core/secrets.py` routes the suite's two shared secrets — the regista DSN and
+the signing key-set — through `regista.secrets` (regista Plan 025 WI-1.2), so
+neither must live in plaintext config. The blueprint (§2.5) makes this the
+custody contract for a regulated deployment.
+
+- **DSN** (`resolve_dsn`): a literal DSN passes through unchanged (no provider
+  prefix → no regista import, zero regression); a backend ref
+  (`env:VAR`/`vault:...`/`azure:...`/`file:/path`) resolves at use time. The
+  native `AGENT_NOTES_DSN` is routed through the same resolver for parity
+  (literal-safe). `config.resolve_dsn` now resolves *all* of its inputs
+  uniformly — explicit arg, env var, and file value.
+- **Key-set manifest** (`materialize_key_manifest`): regista's `KeySet` already
+  resolves per-key `secret_ref` from the backend, so the manifest itself need
+  not contain secrets. A bare path / `file:` ref is read by regista directly
+  (hot-reload works; `~` is expanded here because regista's KeySet does not).
+  A *remote* ref (`env:`/`vault:`/`azure:`) materializes to a 0600 temp file,
+  scrubbed at clean process exit and tracked per-face in `reset_face`.
+
+**Doctor** gains `_check_secrets_backend` (resolves configured refs once;
+`skip` when none configured). `_check_regista_reachable` now resolves the
+backend DSN before probing, so a `REGISTA_DSN=env:...` deployment reports
+reachability correctly.
+
+**Security posture (adversarial-review hardened).** Two independent review
+rounds (Kimi-K2.7 + GLM-5.2 round 1; Nemotron-3 round 2 — all same-lineage,
+recorded honestly per Plan 027) drove the hardened shape:
+
+- **Silent-literal-fallback guard.** When a remote provider's SDK is absent
+  (`hvac`/`azure-identity`), regista's `_detect_prefix` reclassifies the ref
+  as `literal` and returns the ref *string* unchanged. The DSN path now
+  detects this (`result == normalized` for a `_REMOTE_PROVIDERS` prefix) and
+  raises loudly; the manifest path's `_validate_manifest_bytes` rejects the
+  non-JSON ref string. `_REMOTE_PROVIDERS` is `{vault, azure}` only — `env`/
+  `file` are always registered and can never silently fall back.
+- **`__cause__` suppressed** (`from None`) so a logged traceback cannot echo
+  the original regista exception (which may include the ref / a Vault path).
+  All operator-facing messages are exception-type-only. This is a deliberate
+  security-over-debuggability trade (reproduce locally with the raw resolver
+  for full backend diagnostics).
+- **Prefix normalization.** regista's provider names are lowercase and its
+  `_detect_prefix` does not lowercase; `ENV:VAR` would be silently
+  reclassified as literal. `_normalize_for_regista` lowercases only the
+  prefix before the regista call, so any case is accepted.
+- **`akv:` unsupported.** regista registers no `akv` provider (only
+  file/env/literal/vault/azure); the blueprint's `akv:` syntax awaits a
+  regista-side provider. `azure:` is the supported prefix here.
+
+**Remaining WI-4.1 gaps (deferred):** Windows runtime validation is
+code-reviewed only (no Windows host in this session) — `mkstemp`/`%TEMP%`/
+0600-chmod-is-POSIX-only are handled, but a real Windows profile run is a
+follow-on. Vault/Azure integration tests are gated on the SDK being installed
+(skipped cleanly otherwise, mirroring regista's pattern). A startup sweep for
+orphaned `an-keys-*.json` temp files after an unclean shutdown is documented
+as a recommended operator step, not implemented here.

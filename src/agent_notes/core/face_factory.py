@@ -26,6 +26,7 @@ from __future__ import annotations
 import contextvars
 import dataclasses
 import threading
+from typing import Callable
 
 from agent_notes.core.actor import Actor, load_actor_config, resolve_actor
 from agent_notes.core.config import RegistaConfig, regista_config
@@ -34,6 +35,11 @@ from agent_notes.core.regista_face import RegistaFace
 _FACE_LOCK = threading.Lock()
 # Per-project face cache, keyed by regista project name (schema).
 _FACES: dict[str, RegistaFace] = {}
+# Cleanup callables for materialized key-set temp manifests (Plan 017 WI-4.1),
+# keyed by the same project name as ``_FACES``. Invoked from ``reset_face`` so a
+# backend-sourced manifest is scrubbed when its face is torn down, not just at
+# interpreter exit.
+_FACE_CLEANUPS: dict[str, Callable[[], None]] = {}
 # Test override: when set, get_face() returns this for ANY project.
 _TEST_FACE: RegistaFace | None = None
 _TEST_FACE_SET = False
@@ -72,23 +78,33 @@ def current_project() -> str | None:
     return _CURRENT_PROJECT.get()
 
 
-def _build_face(cfg: RegistaConfig, project: str) -> RegistaFace:
+def _build_face(
+    cfg: RegistaConfig, project: str
+) -> tuple[RegistaFace, Callable[[], None] | None]:
     import os
 
     import regista
 
+    from agent_notes.core import secrets as suite_secrets
+
+    # Resolve suite secrets through the backend (Plan 017 WI-4.1). A literal
+    # DSN / bare key path passes through unchanged (no regression); a backend
+    # ref resolves at use time. The key-set manifest may materialize to a
+    # 0600 temp file whose cleanup is tracked alongside the face.
+    dsn = suite_secrets.resolve_dsn(cfg.dsn)
+    key_path, cleanup = suite_secrets.materialize_key_manifest(cfg.hmac_key_path)
     reg = regista.Regista(
-        cfg.dsn,
+        dsn,
         project,
-        cfg.hmac_key_path,
+        key_path,
         require_ssl=cfg.require_ssl,
     )
     face: RegistaFace = RegistaFace(reg)
     if os.environ.get(_OUTBOX_ENV, "").lower() in {"1", "true", "yes"}:
         from agent_notes.core.outbox import OutboxAwareFace
 
-        return OutboxAwareFace(face, project=project)
-    return face
+        return OutboxAwareFace(face, project=project), cleanup
+    return face, cleanup
 
 
 def get_face() -> RegistaFace | None:
@@ -109,8 +125,10 @@ def get_face() -> RegistaFace | None:
     with _FACE_LOCK:
         cached = _FACES.get(target)
         if cached is None:
-            cached = _build_face(cfg, target)
+            cached, cleanup = _build_face(cfg, target)
             _FACES[target] = cached
+            if cleanup is not None:
+                _FACE_CLEANUPS[target] = cleanup
         return cached
 
 
@@ -158,6 +176,15 @@ def reset_face() -> None:
             except Exception:
                 pass
         _FACES.clear()
+        # Scrub materialized key-set temp files so a test that resets + rebuilds
+        # does not accumulate stale manifests (atexit would clean them only at
+        # interpreter exit).
+        for cleanup in _FACE_CLEANUPS.values():
+            try:
+                cleanup()
+            except Exception:
+                pass
+        _FACE_CLEANUPS.clear()
         if _TEST_FACE is not None:
             try:
                 _TEST_FACE.close()

@@ -100,17 +100,37 @@ def config_path() -> Path:
     return Path(base).expanduser() / "agent-notes" / "config.json"
 
 
+def _resolve_secret_value(value: str) -> str:
+    """Route a configured value through the suite secret resolver (Plan 017 WI-4.1).
+
+    A literal DSN (no provider prefix) is returned unchanged — zero regression
+    for plaintext deployments, and regista is not even imported for that case.
+    A backend ref (``env:``/``vault:``/``azure:``/``file:``) resolves to the
+    real DSN via ``regista.secrets.resolve_str``. Import is local so the common
+    literal path keeps this module import-light.
+    """
+    from agent_notes.core import secrets as suite_secrets
+
+    return suite_secrets.resolve_dsn(value)
+
+
 def resolve_dsn(explicit: str | None = None) -> str:
     """Return the Postgres DSN or raise RuntimeError with actionable guidance.
 
     Precedence: ``explicit`` arg > ``AGENT_NOTES_DSN`` env > config file.
+
+    A backend ref (``env:VAR`` / ``vault:...`` / ``file:/path``) is resolved
+    through ``regista.secrets`` (Plan 017 WI-4.1) so the DSN password need not
+    live in plaintext config; a literal DSN passes through unchanged. This
+    applies uniformly to the explicit arg, the env var, and the file value —
+    any of them may carry a backend ref.
     """
     if explicit:
-        return explicit
+        return _resolve_secret_value(explicit)
 
     env = os.environ.get(_DSN_ENV)
     if env:
-        return env
+        return _resolve_secret_value(env)
 
     path = config_path()
     if path.is_file():
@@ -120,7 +140,7 @@ def resolve_dsn(explicit: str | None = None) -> str:
             raise RuntimeError(f"agent-notes config at {path} could not be read: {exc}") from exc
         dsn = data.get("dsn")
         if dsn:
-            return dsn
+            return _resolve_secret_value(dsn)
 
     raise RuntimeError(
         "No Postgres DSN found. Set AGENT_NOTES_DSN, or create "
