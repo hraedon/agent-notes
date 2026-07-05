@@ -551,13 +551,15 @@ def _check_harness_configs() -> tuple[bool, str]:
 def _status_of(ok: bool | None) -> str:
     """Map a check result to a suite status string.
 
-    ``True`` -> ``pass``, ``False`` -> ``fail``, ``None`` -> ``skip`` (the check
+    ``True`` -> ``ok``, ``False`` -> ``fail``, ``None`` -> ``skip`` (the check
     does not apply to this deployment shape — e.g. regista chain verify when
-    writes are off). A ``skip`` never fails the suite-doctor umbrella.
+    writes are off). A ``skip`` never fails the suite-doctor umbrella. The
+    ``ok``/``fail``/``skip`` vocabulary matches regista's canonical doctor
+    contract (blueprint §2.4).
     """
     if ok is None:
         return "skip"
-    return "pass" if ok else "fail"
+    return "ok" if ok else "fail"
 
 
 def run_json(check_embed: bool = False) -> tuple[dict, int]:
@@ -568,6 +570,8 @@ def run_json(check_embed: bool = False) -> tuple[dict, int]:
         {
           "component": "agent-notes",
           "version": "<dist-version>",
+          "ok": bool,          # umbrella-read: false only when unhealthy
+          "degraded": bool,    # umbrella-read: healthy-but-spine-absent
           "status": "healthy" | "degraded" | "unhealthy",
           "regista": {
             "reachable": true|false|null,
@@ -686,6 +690,11 @@ def run_json(check_embed: bool = False) -> tuple[dict, int]:
     payload = {
         "component": "agent-notes",
         "version": _component_version(),
+        # The suite-doctor umbrella classifies a component from the top-level
+        # ``ok``/``degraded`` booleans (blueprint §2.4 / bootstrap-contract §3);
+        # ``status`` is kept as the richer human-facing tri-state.
+        "ok": overall != "unhealthy",
+        "degraded": overall == "degraded",
         "status": overall,
         "regista": {
             "reachable": reachable,

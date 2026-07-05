@@ -197,7 +197,7 @@ class TestDoctorJsonSuiteShape:
         coredb.add_vocabulary(ws.id, "memory_type", "note")
 
     def _required_top_keys(self):
-        return {"component", "version", "status", "regista", "checks"}
+        return {"component", "version", "ok", "degraded", "status", "regista", "checks"}
 
     def _required_regista_keys(self):
         return {"reachable", "project", "writes_enabled", "chain_ok", "mode"}
@@ -210,11 +210,16 @@ class TestDoctorJsonSuiteShape:
         assert payload["component"] == "agent-notes"
         assert payload["version"] != "unknown"
         assert payload["status"] in {"healthy", "degraded", "unhealthy"}
+        assert isinstance(payload["ok"], bool)
+        assert isinstance(payload["degraded"], bool)
+        # The umbrella-read booleans agree with the human-facing tri-state.
+        assert payload["ok"] == (payload["status"] != "unhealthy")
+        assert payload["degraded"] == (payload["status"] == "degraded")
         assert self._required_regista_keys() <= set(payload["regista"])
         assert isinstance(payload["checks"], list) and payload["checks"]
         for c in payload["checks"]:
             assert {"name", "status", "detail"} <= set(c)
-            assert c["status"] in {"pass", "fail", "skip"}
+            assert c["status"] in {"ok", "warn", "fail", "skip"}
 
     def test_degrade_mode_is_not_a_failure(self):
         """regista unconfigured (coordinator-absent) must not *fail* the suite.
