@@ -36,7 +36,8 @@ def _install_claude_session_hook(repo_root: str) -> tuple[str, bool]:
     `agent-notes orient`, so orientation is injected every session without the
     agent having to remember. Merges into existing settings; idempotent.
 
-    Returns (settings_path, changed).
+    Upgrades old-format commands (with POSIX-only ``2>/dev/null || true``) to
+    the cross-platform bare command. Returns (settings_path, changed).
     """
     settings_path = os.path.join(repo_root, ".claude", "settings.json")
     os.makedirs(os.path.dirname(settings_path), exist_ok=True)
@@ -48,21 +49,27 @@ def _install_claude_session_hook(repo_root: str) -> tuple[str, bool]:
             settings = {}
     hooks = settings.setdefault("hooks", {})
     session_start = hooks.setdefault("SessionStart", [])
-    command = f"agent-notes orient --path {repo_root} 2>/dev/null || true"
-    already = any(
-        isinstance(entry, dict)
-        and any(
-            h.get("command", "").startswith("agent-notes orient")
-            for h in entry.get("hooks", [])
-            if isinstance(h, dict)
-        )
-        for entry in session_start
-    )
-    if not already:
+    command = f"agent-notes orient --path {repo_root}"
+    changed = False
+    found = False
+    for entry in session_start:
+        if not isinstance(entry, dict):
+            continue
+        for h in entry.get("hooks", []):
+            if not isinstance(h, dict):
+                continue
+            cmd = h.get("command", "")
+            if cmd.startswith("agent-notes orient"):
+                found = True
+                if cmd != command:
+                    h["command"] = command
+                    changed = True
+    if not found:
         session_start.append({"hooks": [{"type": "command", "command": command}]})
+        changed = True
     with open(settings_path, "w", encoding="utf-8") as f:
         f.write(json.dumps(settings, indent=2) + "\n")
-    return settings_path, not already
+    return settings_path, changed
 
 
 def _install_claude_stop_hook(repo_root: str) -> tuple[str, bool]:
@@ -81,21 +88,27 @@ def _install_claude_stop_hook(repo_root: str) -> tuple[str, bool]:
             settings = {}
     hooks = settings.setdefault("hooks", {})
     stop = hooks.setdefault("Stop", [])
-    command = "agent-notes outbox reconcile >/dev/null || true"
-    already = any(
-        isinstance(entry, dict)
-        and any(
-            h.get("command", "").startswith("agent-notes outbox reconcile")
-            for h in entry.get("hooks", [])
-            if isinstance(h, dict)
-        )
-        for entry in stop
-    )
-    if not already:
+    command = "agent-notes outbox reconcile"
+    changed = False
+    found = False
+    for entry in stop:
+        if not isinstance(entry, dict):
+            continue
+        for h in entry.get("hooks", []):
+            if not isinstance(h, dict):
+                continue
+            cmd = h.get("command", "")
+            if cmd.startswith("agent-notes outbox reconcile"):
+                found = True
+                if cmd != command:
+                    h["command"] = command
+                    changed = True
+    if not found:
         stop.append({"hooks": [{"type": "command", "command": command}]})
+        changed = True
     with open(settings_path, "w", encoding="utf-8") as f:
         f.write(json.dumps(settings, indent=2) + "\n")
-    return settings_path, not already
+    return settings_path, changed
 
 
 def cmd_init(
@@ -106,13 +119,10 @@ def cmd_init(
     target = os.path.abspath(path or ".")
 
     git_root = target
-    while git_root != "/":
+    while git_root != os.path.dirname(git_root):
         if os.path.isdir(os.path.join(git_root, ".git")):
             break
-        parent = os.path.dirname(git_root)
-        if parent == git_root:
-            break
-        git_root = parent
+        git_root = os.path.dirname(git_root)
 
     if not os.path.isdir(os.path.join(git_root, ".git")):
         print(f"Note: no git repo found above {target}; using {target} as repo root.")

@@ -20,6 +20,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
+from pathlib import Path
 from typing import Protocol
 
 # ---------------------------------------------------------------------------
@@ -52,16 +54,11 @@ class LocalKeySigner:
     """
 
     def __init__(self, key_path: str | None = None) -> None:
-        from pathlib import Path
-
         self._key_path = Path(key_path or self._default_key_path())
         self._private_key, self._public_key = self._load_or_generate()
 
     @staticmethod
     def _default_key_path() -> str:
-        import os
-        from pathlib import Path
-
         base = os.environ.get("XDG_CONFIG_HOME") or "~/.config"
         return str(Path(base).expanduser() / "agent-notes" / "signing.key")
 
@@ -104,7 +101,8 @@ class LocalKeySigner:
                 }
             )
         )
-        self._key_path.chmod(0o600)
+        if os.name == "posix":
+            self._key_path.chmod(0o600)
         return private_bytes, public_bytes
 
     def sign(self, payload: bytes) -> bytes:

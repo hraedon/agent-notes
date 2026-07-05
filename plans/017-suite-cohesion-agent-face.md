@@ -2,11 +2,15 @@
 
 **Status:** In progress 2026-07-05 — WI-1.1 (config), WI-2.1/2.2/2.3
 (install-harness + SUITE.lock + opencode review bridge), WI-3.1 (doctor --json,
-suite `ok`/`degraded` shape), WI-4.1 (secret-backend resolution) landed and
-tested; WI-4.3 publication gate (identifier-gate + CI job + checklist) added,
-gate green. Remaining: WI-3.2 cutover doc-drift, WI-4.1 Windows live validation,
-WI-4.2 per-user `principal_id` from the shared identity source (awaits the suite
-identity source), WI-4.3 the public flip itself (owner-gated).
+suite `ok`/`degraded` shape), WI-3.2 (doc-drift cutover — regista-as-SoT
+confirmed, AGENTS.md updated, no physical breadcrumb write paths), WI-4.1
+(secret-backend resolution + Windows code-review validation) landed and tested;
+WI-4.3 publication gate (identifier-gate + CI job + checklist + dry-run audit
+report) added, gate green. Remaining: WI-4.1 Windows live host validation
+(code-reviewed only — no Windows host in this session), WI-4.2 per-user
+`principal_id` from the shared identity source (awaits the suite identity
+source), WI-4.3 the public flip itself (owner-gated — dry-run audit complete,
+destructive scrub not executed).
 **Author:** Claude (Fable 5), from the 2026-07-02 agent-suite deployment review
 **Strategic role:** agent-notes is the suite's agent face. For a suite deployment
 it must read the shared config, install its harness wiring (skills + hooks) as a
@@ -366,3 +370,72 @@ follow-on. Vault/Azure integration tests are gated on the SDK being installed
 (skipped cleanly otherwise, mirroring regista's pattern). A startup sweep for
 orphaned `an-keys-*.json` temp files after an unclean shutdown is documented
 as a recommended operator step, not implemented here.
+
+### WI-3.2 — Doc-drift cutover (implemented 2026-07-05)
+
+The cutover's three ACs are met: (1) **no code path writes physical breadcrumb
+files** — `breadcrumb file` creates a DB work item via `WorkItemModel`;
+`bc_files.py` is a one-time import path (files→DB), not a write path;
+`export-index` writes an index file but that is an export, not a source-of-truth
+file. (2) **AGENTS.md reflects regista-as-SoT** — the architecture paragraph
+now explicitly states "Regista is the source of truth for work items" and "No
+code path writes physical breadcrumb files." (3) **No physical breadcrumb
+files exist** in the agent-notes repo (it is the tool, not a consumer repo;
+the per-repo file removal was Plan 012 WI-2, already done for 4/6 repos with
+gates on the remaining 2).
+
+The "doc-drift" was the gap between AGENTS.md's "DB is the only source of
+truth" (correct but generic) and the actual state where regista is the
+specific SoT the CLI writes through. The architecture paragraph now names
+regista explicitly and notes the degrade path.
+
+### WI-4.1 — Windows code-review validation (implemented 2026-07-05)
+
+A thorough code review of all Windows-specific code paths (16 files) confirmed
+the core WI-4.1 surfaces (`secrets.py`, `harness.py`, `skills.py`, `config.py`,
+`embed.py`) are correctly written for cross-platform use. Three issues were
+found and fixed:
+
+- **`cli/__init__.py` hook commands (HIGH):** the `2>/dev/null || true` and
+  `>/dev/null || true` POSIX-shell syntax in Claude Code SessionStart/Stop
+  hooks would fail under `cmd.exe`/PowerShell on Windows. Fixed: the bare
+  commands (`agent-notes orient --path {root}`, `agent-notes outbox reconcile`)
+  work on both platforms; Claude Code's hook executor handles non-zero exits.
+- **`envelope.py` chmod (LOW):** `self._key_path.chmod(0o600)` was invoked
+  unconditionally — a harmless no-op on Windows but inconsistent with
+  `secrets.py`'s explicit `os.name == "posix"` guard. Fixed: added the same
+  guard.
+- **`tests/test_secrets.py` tilde-expansion test (LOW):** the test sets `HOME`
+  and asserts a POSIX path, but Windows `expanduser` prefers `USERPROFILE`.
+  Fixed: `pytest.mark.skipif(os.name != "posix")` guard added.
+
+Also fixed: the git-root walk in `cli/__init__.py` used `while git_root != "/"`
+(POSIX-only appearance, functionally correct via the `parent == git_root`
+guard). Replaced with the cross-platform `while git_root != os.path.dirname(git_root)`
+idiom (matching `src/agent_notes/scripts/init_project.py`).
+
+**Remaining WI-4.1 gap:** a real Windows host run is still needed to fully
+validate the AC. The code review confirms the *core* surfaces are ready; the
+gaps were in lifecycle-hook wiring and test portability, not in the
+secret-backend or install-harness machinery.
+
+### WI-4.3 — Publication-gate audit (implemented 2026-07-05)
+
+The identifier-gate denylist was expanded per the **adcs-lens WI-010 lesson**:
+the scrub must cover **all identifier forms** — CA common name (CN), CA
+hostname, NetBIOS domain name, real domain SID, certificate template names,
+service accounts, and personal email — not just DNS hostnames. The denylist
+sources are the samples from `adcs-lens` and `gpo-lens`.
+
+A `git filter-repo --dry-run` audit on a bare clone (110 commits) found:
+- **1 blob-content leak:** the personal email in the deleted
+  `scripts/identifier-gate.py` (commits `2747b9c`/`6200f07`).
+- **Author/committer identity:** the personal email across all 110 commits
+  (requires `--mailmap` scrub before the public flip).
+- **No other identifier forms** (CA CN, hostnames, domain SID, NetBIOS domain,
+  template names, service accounts) in any blob or commit message.
+
+The publication-review checklist (`docs/publication-review-checklist.md`) was
+updated with the full audit report (§0). The destructive scrub + repo recreate
++ public flip are **not executed** — dry-run + report only, per the task scope.
+The owner executes the scrub when ready.

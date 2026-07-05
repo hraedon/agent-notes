@@ -97,6 +97,7 @@ def test_manifest_bare_path_passes_through():
     assert cleanup is None
 
 
+@pytest.mark.skipif(os.name != "posix", reason="tilde expansion via HOME is POSIX-only")
 def test_manifest_tilde_path_is_expanded(monkeypatch):
     """``~`` is expanded because regista's KeySet does not expand it itself."""
     monkeypatch.setenv("HOME", "/home/test")
@@ -173,14 +174,22 @@ def test_manifest_vault_without_sdk_fails_cleanly(monkeypatch):
 def test_resolve_dsn_vault_without_sdk_raises_not_silent(monkeypatch):
     """BLOCKING B1: a vault: DSN with hvac absent must raise, not return the ref.
 
-    Without the silent-literal-fallback guard, regista returns the ref string
-    unchanged and it would be handed to psycopg as a bogus DSN. The guard must
-    turn that into a loud failure.
+    Two sub-cases, both acceptable:
+    - hvac absent + regista silently falls back: the ref string is returned
+      unchanged, our silent-literal-fallback guard detects it and raises
+      "did not resolve".
+    - hvac absent but regista raises RegistaError (newer regista versions):
+      our wrapper converts to RuntimeError("Failed to resolve DSN secret").
+    Either way the ref must not be returned as a usable DSN.
     """
     monkeypatch.delenv("VAULT_ADDR", raising=False)
     monkeypatch.delenv("VAULT_TOKEN", raising=False)
-    with pytest.raises(RuntimeError, match="did not resolve"):
+    with pytest.raises(RuntimeError) as exc_info:
         suite_secrets.resolve_dsn("vault:secret/agent-suite/regista#dsn")
+    msg = str(exc_info.value)
+    assert "did not resolve" in msg or "Failed to resolve" in msg
+    assert "secret/agent-suite/regista" not in msg
+    assert exc_info.value.__cause__ is None
 
 
 def test_resolve_dsn_azure_without_sdk_raises_not_silent(monkeypatch):

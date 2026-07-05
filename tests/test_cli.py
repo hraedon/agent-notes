@@ -90,6 +90,11 @@ def test_init_wires_session_hook_and_preserves_settings():
         assert any(
             c.startswith("agent-notes outbox reconcile") for c in _stop_reconcile_cmds(settings)
         )
+        # Hook commands must be cross-platform (no POSIX-only shell syntax).
+        for c in _session_orient_cmds(settings) + _stop_reconcile_cmds(settings):
+            assert "2>/dev/null" not in c, f"POSIX-only redirect in hook: {c}"
+            assert "|| true" not in c, f"POSIX-only fallback in hook: {c}"
+            assert ">/dev/null" not in c, f"POSIX-only redirect in hook: {c}"
         # Idempotent: re-running does not duplicate either hook.
         _run("init", str(repo), check=False)
         settings2 = json.loads((repo / ".claude" / "settings.json").read_text())
@@ -110,6 +115,33 @@ def test_init_no_hooks_skips_settings():
         (repo / ".git").mkdir()
         assert _run("init", str(repo), "--no-hooks", check=False).returncode == 0
         assert not (repo / ".claude" / "settings.json").exists()
+
+
+def test_init_upgrades_old_posix_hook_commands():
+    """Old-format hook commands (with POSIX-only shell syntax) are upgraded
+    to the cross-platform bare command on re-init."""
+    with tempfile.TemporaryDirectory() as td:
+        repo = Path(td) / "repo3"
+        (repo / ".claude").mkdir(parents=True)
+        (repo / ".git").mkdir()
+        old_orient = f"agent-notes orient --path {repo} 2>/dev/null || true"
+        old_reconcile = "agent-notes outbox reconcile >/dev/null || true"
+        (repo / ".claude" / "settings.json").write_text(json.dumps({
+            "hooks": {
+                "SessionStart": [{"hooks": [{"type": "command", "command": old_orient}]}],
+                "Stop": [{"hooks": [{"type": "command", "command": old_reconcile}]}],
+            }
+        }))
+        assert _run("init", str(repo), check=False).returncode == 0
+        settings = json.loads((repo / ".claude" / "settings.json").read_text())
+        orient_cmds = _session_orient_cmds(settings)
+        reconcile_cmds = _stop_reconcile_cmds(settings)
+        assert len(orient_cmds) == 1
+        assert len(reconcile_cmds) == 1
+        assert "2>/dev/null" not in orient_cmds[0]
+        assert "|| true" not in orient_cmds[0]
+        assert ">/dev/null" not in reconcile_cmds[0]
+        assert "|| true" not in reconcile_cmds[0]
 
 
 def test_resolve_not_configured():

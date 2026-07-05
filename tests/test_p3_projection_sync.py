@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +44,7 @@ def regista_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv("AGENT_NOTES_REGISTA_DSN", "postgresql://unused")
     monkeypatch.setenv("AGENT_NOTES_REGISTA_PROJECT", _REGPROJECT)
     monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-    monkeypatch.setenv("AGENT_NOTES_REGISTA_HMAC_KEY_PATH", "/dev/null")
+    monkeypatch.setenv("AGENT_NOTES_REGISTA_HMAC_KEY_PATH", os.devnull)
     monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "p3-test-agent")
     outbox_dir = tmp_path / "outbox"
     monkeypatch.setenv("AGENT_NOTES_OUTBOX_DIR", str(outbox_dir))

@@ -59,7 +59,7 @@ def _set_regista_env(dsn: str):
     os.environ["AGENT_NOTES_REGISTA_DSN"] = dsn
     os.environ["AGENT_NOTES_REGISTA_WRITES"] = "1"
     os.environ["AGENT_NOTES_REGISTA_PROJECT"] = "test_project"
-    os.environ["AGENT_NOTES_REGISTA_HMAC_KEY_PATH"] = "/dev/null"
+    os.environ["AGENT_NOTES_REGISTA_HMAC_KEY_PATH"] = os.devnull
     os.environ["AGENT_NOTES_ACTOR_ID"] = "test-agent"
 
 
