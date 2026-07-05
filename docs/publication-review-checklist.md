@@ -7,11 +7,20 @@ owner's decision, gated on this checklist being complete.
 
 ## 1. Identifier scrub
 
-- [ ] `python3 scripts/identifier-gate.py` exits 0 (no personal/internal
-      identifiers in tracked files)
-- [ ] The work-domain identifier(s) are added to `IDENTIFIERS` in the gate before
-      the flip (deliberately absent from the committed script so it carries no
-      secret) and the gate still passes
+The gate borrows the gpo-lens pattern: the denylist is **never committed**. It is
+supplied via the `AGENT_NOTES_FORBIDDEN_IDENTIFIERS` env var — from the
+gitignored `.identifiers-denylist.local` locally (also read by the pre-commit
+hook) and the repository secret of the same name in CI. The committed script
+`scripts/check_committed_identifiers.py` carries no identifiers.
+
+- [ ] `scripts/install-git-hooks.sh` has been run in this clone (activates the
+      pre-commit gate — catches a leak *before* it enters history, not after push)
+- [ ] `.identifiers-denylist.local` exists and lists the forbidden work-domain
+      and personal identifiers (borrowed from the gpo-lens denylist); it is
+      gitignored
+- [ ] The `AGENT_NOTES_FORBIDDEN_IDENTIFIERS` repository secret is set in CI
+- [ ] `AGENT_NOTES_FORBIDDEN_IDENTIFIERS="$(cat .identifiers-denylist.local)"
+      python3 scripts/check_committed_identifiers.py` exits 0 on the full tree
 - [ ] Git history rewritten via `git filter-repo` to scrub author/committer
       identity and any historical identifiers
 - [ ] No work-domain email in git log (`git log --format='%ae %ce' | sort -u`)

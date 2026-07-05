@@ -48,12 +48,20 @@ jobs:
       - name: Test
         run: pytest tests/ -v
 
-  # Pre-publication gate (Plan 017 WI-4.3 / blueprint §3): fail if scrubbed
-  # personal/internal identifiers reappear in tracked files. Cheap and dep-free
-  # so it runs on every push, keeping the repo publication-ready.
+  # Pre-publication gate (Plan 017 WI-4.3 / blueprint §3): fail if forbidden
+  # work-domain / personal identifiers reappear in tracked files. The denylist is
+  # never committed — it comes from the AGENT_NOTES_FORBIDDEN_IDENTIFIERS
+  # repository secret (borrowed from the gpo-lens gate pattern). The script exits
+  # 0 when the secret is unset, so the gate is a no-op until it is configured.
   identifier-gate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check for personal/internal identifiers
-        run: python3 scripts/identifier-gate.py
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Check for committed work-domain identifiers
+        env:
+          AGENT_NOTES_FORBIDDEN_IDENTIFIERS: ${{ secrets.AGENT_NOTES_FORBIDDEN_IDENTIFIERS }}
+        run: python3 scripts/check_committed_identifiers.py
