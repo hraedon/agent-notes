@@ -1,6 +1,12 @@
 # Plan 017 — Suite cohesion: the agent face, deployable
 
-**Status:** Proposed 2026-07-02
+**Status:** In progress 2026-07-05 — WI-1.1 (config), WI-2.1/2.2/2.3
+(install-harness + SUITE.lock + opencode review bridge), WI-3.1 (doctor --json,
+suite `ok`/`degraded` shape), WI-4.1 (secret-backend resolution) landed and
+tested; WI-4.3 publication gate (identifier-gate + CI job + checklist) added,
+gate green. Remaining: WI-3.2 cutover doc-drift, WI-4.1 Windows live validation,
+WI-4.2 per-user `principal_id` from the shared identity source (awaits the suite
+identity source), WI-4.3 the public flip itself (owner-gated).
 **Author:** Claude (Fable 5), from the 2026-07-02 agent-suite deployment review
 **Strategic role:** agent-notes is the suite's agent face. For a suite deployment
 it must read the shared config, install its harness wiring (skills + hooks) as a

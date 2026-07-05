@@ -47,3 +47,13 @@ jobs:
       # so no service block is needed here.
       - name: Test
         run: pytest tests/ -v
+
+  # Pre-publication gate (Plan 017 WI-4.3 / blueprint §3): fail if scrubbed
+  # personal/internal identifiers reappear in tracked files. Cheap and dep-free
+  # so it runs on every push, keeping the repo publication-ready.
+  identifier-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for personal/internal identifiers
+        run: python3 scripts/identifier-gate.py

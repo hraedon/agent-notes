@@ -15,7 +15,7 @@ cutover.
 
 ## Already done (2026-06-29)
 
-- **Store + data:** `regista` DB on mvmpostgres01, 16 per-project schemas,
+- **Store + data:** `regista` DB on the shared Postgres host, 16 per-project schemas,
   canonical workflow, 865 items migrated + verified (hash chains replay clean).
 - **Routing:** agent-notes per-project write routing (Plan 011), CI-green,
   live-validated.
