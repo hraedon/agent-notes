@@ -51,6 +51,20 @@ from agent_notes.cli.skills import (
 TOOL_NAME = "agent-notes"
 MANIFEST_FILENAME = ".agent-notes-harness.json"
 
+# Opencode subagent definitions to install from the repo tree. These live in
+# `.opencode/agents/` and are copied into `~/.config/opencode/agents/` so a
+# primary agent in an agent-notes context can invoke adversarial reviewers via
+# the Task tool. Kept separate from skills because opencode agents need a
+# distinct permission model (read-only review + limited `agent-notes` bash).
+_OPENCODE_AGENT_FILES: tuple[str, ...] = (
+    "adversarial-reviewer-glm.md",
+    "adversarial-reviewer-kimi.md",
+    "adversarial-reviewer-minimax-m3.md",
+    "adversarial-reviewer-nemotron-3-ultra.md",
+    "glm.md",
+    "kimi.md",
+)
+
 # Contract exit codes (install-harness-contract.md §7): 0 success/no-op,
 # 1 failure, 2 dry-run. Defined locally so the 2 = dry-run semantics are not
 # conflated with the EXIT_NOT_FOUND=2 used by project-resolution commands.
@@ -97,6 +111,20 @@ def _act(kind: str, keys: list[str], detail: str, status: str = "") -> dict:
     return a
 
 
+def _action_is_unchanged(a: dict) -> bool:
+    """True if an action represents an already-present managed object."""
+    detail = a.get("detail", "")
+    if detail.endswith("(unchanged)"):
+        return True
+    if a.get("status") == "unchanged":
+        return True
+    # merge_json details from env/plugin wiring use prose ending in
+    # "already set (unchanged)" / "plugin already registered (unchanged)".
+    if "(unchanged)" in detail:
+        return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # path helpers
 # ---------------------------------------------------------------------------
@@ -107,8 +135,18 @@ def _plugin_path() -> Path:
     return _repo_skills_root().parent / "integrations" / "opencode" / "index.js"
 
 
+def _opencode_agents_src_root() -> Path:
+    """Resolve the repo-local `.opencode/agents/` directory."""
+    return _repo_skills_root().parent / ".opencode" / "agents"
+
+
+def _opencode_agents_dest(home: Path | None = None) -> Path:
+    """Resolve the user-global opencode agents directory."""
+    return (home or Path.home()) / ".config" / "opencode" / "agents"
+
+
 def _harness_paths(harness: str, home: Path | None = None) -> dict[str, Path]:
-    """Return the config/skill/manifest paths for a harness target."""
+    """Return the config/skill/manifest/agent paths for a harness target."""
     home = home or Path.home()
     if harness == "claude":
         base = home / ".claude"
@@ -117,6 +155,7 @@ def _harness_paths(harness: str, home: Path | None = None) -> dict[str, Path]:
             "config": base / "settings.json",
             "manifest": base / MANIFEST_FILENAME,
             "agent_config": home / ".config" / "agent-notes" / "config.json",
+            "agents_dest": base / "agents",
         }
     # opencode
     base = home / ".config" / "opencode"
@@ -125,6 +164,7 @@ def _harness_paths(harness: str, home: Path | None = None) -> dict[str, Path]:
         "config": base / "opencode.json",
         "manifest": base / MANIFEST_FILENAME,
         "agent_config": home / ".config" / "agent-notes" / "config.json",
+        "agents_dest": base / "agents",
     }
 
 
@@ -229,6 +269,48 @@ def _install_skills(
         a = _act("create_file", [], f"install skill ({status})", status=status)
         a["path"] = str(dest)
         actions.append(a)
+    return actions, names
+
+
+def _install_opencode_agents(
+    src_root: Path,
+    dest_root: Path,
+    dry_run: bool,
+    prev_agents: list[str],
+) -> tuple[list[dict], list[str]]:
+    """Install repo-local opencode subagent definitions.
+
+    Copies the agent Markdown files from ``.opencode/agents/`` into the
+    user-global opencode agents directory. The adversarial reviewer agents
+    are read-only (edit denied) with limited ``agent-notes`` and ``git``
+    bash access so they can drive the review gate without mutating code.
+
+    Returns (action_dicts, installed_agent_names). Preserves
+    previously-managed agents still on disk but no longer in the repo so
+    uninstall can remove orphaned files (mirror of the skill preservation
+    logic).
+    """
+    actions: list[dict] = []
+    names: list[str] = []
+    for filename in _OPENCODE_AGENT_FILES:
+        src = src_root / filename
+        if not src.is_file():
+            continue
+        dest = dest_root / filename
+        names.append(Path(filename).stem)
+        src_content = src.read_text(encoding="utf-8")
+        status = _install_one(src_content, dest, dry_run)
+        a = _act("create_file", [], f"install agent ({status})", status=status)
+        a["path"] = str(dest)
+        actions.append(a)
+
+    for name in prev_agents:
+        if name in names:
+            continue
+        af = dest_root / f"{name}.md"
+        if af.is_file():
+            names.append(name)
+
     return actions, names
 
 
@@ -413,6 +495,17 @@ def _install_harness_one(
         if sf.is_file():
             skill_names.append(name)
 
+    # --- opencode agents (opencode only) ---
+    agent_actions: list[dict] = []
+    installed_agents: list[str] = []
+    if harness == "opencode":
+        agent_actions, installed_agents = _install_opencode_agents(
+            _opencode_agents_src_root(),
+            paths["agents_dest"],
+            dry_run,
+            prev.get("agents", []),
+        )
+
     if user and harness == "opencode":
         warns.append(
             "--user has no opencode config-file field yet (principal_id resolves "
@@ -478,15 +571,10 @@ def _install_harness_one(
         if not dry_run and config:
             _save_json(config_path, config)
 
-    all_actions = skill_actions + config_actions
-    no_op = (
-        all(
-            a.get("detail", "").endswith("(unchanged)") or a.get("status") == "unchanged"
-            for a in all_actions
-        )
-        and not env_newly
-        and not plugin_newly
-    )
+    all_actions = skill_actions + config_actions + agent_actions
+    agents_newly = any(a.get("status") in ("created", "updated") for a in agent_actions)
+    any_newly = bool(env_newly or plugin_newly or agents_newly)
+    no_op = all(_action_is_unchanged(a) for a in all_actions) and not any_newly
 
     # --- manifest: record what install-harness manages (survives re-installs) ---
     if not dry_run:
@@ -497,16 +585,19 @@ def _install_harness_one(
         except Exception:
             ver = "unknown"
 
+        manifest_payload: dict = {
+            "tool": TOOL_NAME,
+            "version": ver,
+            "harness": harness,
+            "env_keys": env_managed,
+            "skills": skill_names,
+            "plugin": plugin_managed,
+        }
+        if harness == "opencode":
+            manifest_payload["agents"] = installed_agents
         _write_manifest(
             paths["manifest"],
-            {
-                "tool": TOOL_NAME,
-                "version": ver,
-                "harness": harness,
-                "env_keys": env_managed,
-                "skills": skill_names,
-                "plugin": plugin_managed,
-            },
+            manifest_payload,
         )
 
     result = {
@@ -539,6 +630,19 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
             },
             [],
         )
+
+    # If the user added the plugin manually before install-harness ran, we treat
+    # it as managed so uninstall remains safe. Detect by checking whether the
+    # plugin path is present in the live config without a prior manifest record.
+    if harness == "opencode" and not manifest.get("plugin"):
+        oc_cfg = _load_json(paths["config"])
+        plugins = oc_cfg.get("plugin", [])
+        ppath = str(_plugin_path())
+        if any(
+            p == ppath or (isinstance(p, list) and p and p[0] == ppath)
+            for p in (plugins if isinstance(plugins, list) else [])
+        ):
+            manifest["plugin"] = True
 
     # --- remove env keys ---
     env_keys: list[str] = manifest.get("env_keys", [])
@@ -591,6 +695,18 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
                 a["path"] = str(paths["config"])
                 actions.append(a)
                 _save_json(paths["config"], oc_cfg)
+
+    # --- remove opencode agents (opencode only) ---
+    agent_names: list[str] = manifest.get("agents", [])
+    if harness == "opencode" and agent_names:
+        agents_dest = paths["agents_dest"]
+        for name in agent_names:
+            agent_file = agents_dest / f"{name}.md"
+            if agent_file.is_file():
+                agent_file.unlink()
+                a = _act("remove_file", [], "removed agent")
+                a["path"] = str(agent_file)
+                actions.append(a)
 
     # --- remove skills ---
     skill_names: list[str] = manifest.get("skills", [])

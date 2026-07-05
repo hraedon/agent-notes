@@ -48,6 +48,21 @@ def _make_skill_tree(td: Path, name: str = "demo") -> Path:
     return src
 
 
+def _make_opencode_agents(td: Path, *extra: str) -> Path:
+    """Create a stub .opencode/agents/ tree alongside the skills source.
+
+    ``install-harness --source <skills-root>`` resolves the repo root as
+    ``<skills-root>.parent``, so agents live at ``td/.opencode/agents/``.
+    """
+    agents_dir = td / ".opencode" / "agents"
+    agents_dir.mkdir(parents=True)
+    for filename in ("glm.md", "kimi.md", *extra):
+        (agents_dir / filename).write_text(
+            "---\ndescription: stub\nmode: subagent\n---\nstub\n"
+        )
+    return agents_dir
+
+
 # ---------------------------------------------------------------------------
 # claude target
 # ---------------------------------------------------------------------------
@@ -234,6 +249,7 @@ def test_opencode_install_writes_config_file_and_plugin():
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         src = _make_skill_tree(td)
+        _make_opencode_agents(td)
         result = _run(
             "install-harness",
             "opencode",
@@ -264,6 +280,7 @@ def test_opencode_reinstall_noop_and_uninstall():
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         src = _make_skill_tree(td)
+        _make_opencode_agents(td)
         common = ["install-harness", "opencode", "--source", str(src), "--home", str(td), "--json"]
         _run(*common, env=_SUITE_ENV, check=False)
         # Idempotent
@@ -297,6 +314,7 @@ def test_all_target_wires_both_harnesses():
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         src = _make_skill_tree(td)
+        _make_opencode_agents(td)
         result = _run(
             "install-harness",
             "all",
@@ -461,6 +479,7 @@ def test_opencode_no_clobber_keeps_existing_different_value():
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         src = _make_skill_tree(td)
+        _make_opencode_agents(td)
         # Pre-populate the agent-notes config with a user-set regista.dsn.
         (td / ".config" / "agent-notes").mkdir(parents=True)
         (td / ".config" / "agent-notes" / "config.json").write_text(
@@ -494,6 +513,7 @@ def test_user_flag_warns_for_opencode():
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         src = _make_skill_tree(td)
+        _make_opencode_agents(td)
         result = _run(
             "install-harness",
             "opencode",

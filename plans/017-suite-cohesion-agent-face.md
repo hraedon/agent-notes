@@ -175,6 +175,14 @@ discovery + per-target dest paths + file-level idempotency are done and reusable
   regress an existing opencode config (blueprint §4). The `adversarial-review` skill
   should record the reviewer's lineage (regista Plan 027) so a same-model review is
   logged honestly rather than counted as independent.
+- **WI-2.3 — opencode adversarial-review bridge (implemented 2026-07-05):**
+  `install-harness opencode` now installs the `adversarial-review` skill *and*
+  the opencode subagent definitions under `.opencode/agents/`. The coding
+  subagents (`glm`, `kimi`) are granted `task: adversarial-reviewer-*` so they can
+  dispatch reviewers; the adversarial reviewers are read-only with limited
+  `agent-notes`/`git` bash access so they can drive the review gate without
+  mutating code. This closes the last gap between the CLI review-gate surface
+  (Plan 016) and opencode subagent invocation.
 - Depends on regista Plan 025 WI-1.1 (config) + WI-1.2 (secrets) + WI-2.1
   (`provision` + service role).
 - **WI-2.1 (`install-harness`) is the highest-leverage item** for the blueprint —
@@ -232,12 +240,24 @@ keys still present in the config but no longer in `env_values` (user unset a var
 between installs) are preserved so uninstall removes them (review B1). The same
 preservation applies to skills removed from the repo between installs.
 
+**Decision D3 — opencode subagents ship in `.opencode/agents/` and are
+installed by `install-harness`.** Skills describe *what* to do; opencode
+subagents define *who* can do it with which tool permissions. The four
+adversarial reviewer agents are read-only (`edit: deny`) with limited bash
+(`agent-notes*`, `git log*`, `git diff*`, `git status*`) so they can execute
+the review workflow without mutating code. The coding agents (`glm`, `kimi`) are
+granted `task: adversarial-reviewer-*` so a working agent can dispatch a reviewer
+from inside an agent-notes session. This matches the Claude Code
+`adversarial-review` skill but adds the opencode subagent invocation seam. The
+agent files are tracked in the harness manifest so `uninstall` removes them.
+
 **Remaining WI-2.1 gaps (deferred):** `--user` for opencode is a warned no-op
 (principal_id resolves from git config per `core/actor.py`); the full per-user
 overlay model awaits the suite per-user layer (WI-4.2). WI-2.2 (pin regista to a
-SHA in `SUITE.lock`) is not yet done. The plugin/skills path is repo-relative
-(works for the editable-install deployment model; a published wheel would need
-`integrations/` + `skills/` as package data — pre-existing, tracked separately).
+SHA in `SUITE.lock`) is not yet done. The plugin/skills/agent paths are
+repo-relative (works for the editable-install deployment model; a published wheel
+would need `integrations/` + `skills/` + `.opencode/` as package data —
+pre-existing, tracked separately).
 
 ### WI-3.1 — `doctor --json` suite shape (implemented 2026-07-04)
 

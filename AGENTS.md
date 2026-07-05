@@ -61,14 +61,35 @@ Add it to the relevant numbered decision in `plans/001-architecture-and-implemen
 
 Agent-facing workflows ship as skills under `skills/`:
 `file-breadcrumb`, `update-breadcrumb`, `find-breadcrumb`, `add-memory`,
-`start`, `reflect`, `end`. Each is a Markdown SKILL.md that shells to
-`agent-notes <noun> <verb> --json` and carries the per-workflow
-judgment in prose. Install with `agent-notes install-skills --target
-{claude,opencode}` (skills only) or `agent-notes install-harness
-{claude|opencode|all}` (skills + env wiring + opencode plugin — Plan 017
-WI-2.1, the repeatable bootstrap step). Both are idempotent; `--dry-run` /
-`--uninstall` supported. See Plan 017 §Implementation log for the
-opencode env-via-config-file decision (D1).
+`adversarial-review`, `start`, `reflect`, `end`. Each is a Markdown
+SKILL.md that shells to `agent-notes <noun> <verb> --json` and carries
+the per-workflow judgment in prose. Install with `agent-notes
+install-skills --target {claude,opencode}` (skills only) or
+`agent-notes install-harness {claude|opencode|all}` (skills + env wiring
++ opencode plugin + opencode subagent definitions — Plan 017 WI-2.1 and
+WI-2.3). Both are idempotent; `--dry-run` / `--uninstall` supported. See
+Plan 017 §Implementation log for the opencode env-via-config-file
+decision (D1).
+
+## Opencode adversarial-review subagents
+
+`install-harness opencode` (and `all`) copies the agent definitions from
+`.opencode/agents/` into `~/.config/opencode/agents/` and tracks them
+in the harness manifest:
+
+- `glm` / `kimi` coding subagents get `task: adversarial-reviewer-*`
+  permission so they can dispatch review subagents.
+- `adversarial-reviewer-glm`, `adversarial-reviewer-kimi`,
+  `adversarial-reviewer-minimax-m3`, and
+  `adversarial-reviewer-nemotron-3-ultra` are read-only
+  (`edit: deny`) with limited bash access (`agent-notes*`, `git log*`,
+  `git diff*`, `git status*`) so they can read work items, inspect git
+  history, and drive `agent-notes work-item review ...` gate transitions
+  without mutating code.
+
+This is the bridge that lets an agent working inside agent-notes invoke a
+subagent to perform adversarial review. In Claude Code the equivalent is the
+`adversarial-review` skill (already installed in `~/.claude/skills/`).
 
 **Opencode plugin** (Plan 007 Piece 2): `integrations/opencode/index.js`
 uses `experimental.chat.system.transform` to inject `agent-notes orient`
