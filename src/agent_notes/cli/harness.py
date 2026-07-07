@@ -47,6 +47,7 @@ from agent_notes.cli.skills import (
     _repo_skills_root,
     _to_opencode_body,
 )
+from agent_notes.core.config import config_path as _config_path
 
 TOOL_NAME = "agent-notes"
 MANIFEST_FILENAME = ".agent-notes-harness.json"
@@ -147,23 +148,24 @@ def _opencode_agents_dest(home: Path | None = None) -> Path:
 
 def _harness_paths(harness: str, home: Path | None = None) -> dict[str, Path]:
     """Return the config/skill/manifest/agent paths for a harness target."""
-    home = home or Path.home()
+    resolved = home or Path.home()
+    agent_config = _config_path(home=home)
     if harness == "claude":
-        base = home / ".claude"
+        base = resolved / ".claude"
         return {
             "skills_dest": base / "skills",
             "config": base / "settings.json",
             "manifest": base / MANIFEST_FILENAME,
-            "agent_config": home / ".config" / "agent-notes" / "config.json",
+            "agent_config": agent_config,
             "agents_dest": base / "agents",
         }
     # opencode
-    base = home / ".config" / "opencode"
+    base = resolved / ".config" / "opencode"
     return {
         "skills_dest": base / "command",
         "config": base / "opencode.json",
         "manifest": base / MANIFEST_FILENAME,
-        "agent_config": home / ".config" / "agent-notes" / "config.json",
+        "agent_config": agent_config,
         "agents_dest": base / "agents",
     }
 

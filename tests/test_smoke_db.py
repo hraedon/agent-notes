@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import docker.errors
 import psycopg
 import pytest
 from testcontainers.postgres import PostgresContainer
@@ -28,8 +29,15 @@ def _apply_schema(dsn: str) -> None:
 
 @pytest.fixture(scope="module")
 def pg():
-    with PostgresContainer("pgvector/pgvector:pg17") as pg:
-        dsn = pg.get_connection_url().replace("postgresql+psycopg2://", "postgresql://")
+    container = PostgresContainer("pgvector/pgvector:pg17")
+    try:
+        docker.from_env().ping()
+    except (docker.errors.DockerException, OSError) as exc:
+        pytest.skip(f"Docker unavailable: {exc}")
+
+    container.start()
+    try:
+        dsn = container.get_connection_url().replace("postgresql+psycopg2://", "postgresql://")
         _apply_schema(dsn)
         old = os.environ.get("AGENT_NOTES_DSN")
         os.environ["AGENT_NOTES_DSN"] = dsn
@@ -43,6 +51,8 @@ def pg():
         if coredb._pool is not None:
             coredb._pool.close()
             coredb._pool = None
+    finally:
+        container.stop()
 
 
 class TestWorkspaces:

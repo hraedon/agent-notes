@@ -6,8 +6,12 @@ priority — Claude Code injects it via settings.json, CI passes it as env, and
 the import scripts swap it per-invocation. But the env var is *not* reliably
 propagated everywhere (e.g. a non-interactive shell skips ~/.bashrc, so an
 opencode session launched that way never sees the export). A config file under
-``~/.config/agent-notes/`` is the durable default beneath the env var, mirroring
-agent-wake's ``~/.config/agent-wake/config.json`` convention.
+the platform config dir (``~/.config/agent-notes/`` on Linux,
+``%APPDATA%/agent-notes/`` on Windows) is the durable default beneath the env
+var, mirroring agent-wake's ``~/.config/agent-wake/config.json`` convention.
+The config file *path* itself resolves via ``AGENT_NOTES_CONFIG`` (explicit
+override) or the platformdirs default (honoring ``XDG_CONFIG_HOME`` on Linux,
+``%APPDATA%`` on Windows); no other suite env var affects the path.
 
 Precedence: explicit argument > AGENT_NOTES_DSN env > config file ``dsn`` key.
 
@@ -35,6 +39,8 @@ import json
 import os
 import warnings
 from pathlib import Path
+
+import platformdirs
 
 _DSN_ENV = "AGENT_NOTES_DSN"
 _CONFIG_ENV = "AGENT_NOTES_CONFIG"  # override the config file path
@@ -91,13 +97,25 @@ def _aliased_env(canonical_env: str, legacy_env: str) -> str | None:
     return None
 
 
-def config_path() -> Path:
-    """Return the config file path (``AGENT_NOTES_CONFIG`` overrides, else XDG)."""
+def config_path(home: Path | None = None) -> Path:
+    """Return the config file path.
+
+    ``AGENT_NOTES_CONFIG`` overrides, else the platformdirs default
+    (``~/.config/agent-notes/config.json`` on Linux,
+    ``%APPDATA%/agent-notes/config.json`` on Windows). When ``home`` is
+    given, the platformdirs default is constructed under it (test
+    redirection); the override is skipped so the path is deterministic.
+    """
     override = os.environ.get(_CONFIG_ENV)
-    if override:
+    if override and home is None:
         return Path(override).expanduser()
-    base = os.environ.get("XDG_CONFIG_HOME") or "~/.config"
-    return Path(base).expanduser() / "agent-notes" / "config.json"
+    real = Path(platformdirs.user_config_dir("agent-notes"))
+    if home is not None:
+        try:
+            real = home / real.relative_to(Path.home())
+        except ValueError:
+            pass
+    return real / "config.json"
 
 
 def _resolve_secret_value(value: str) -> str:

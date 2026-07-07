@@ -24,6 +24,8 @@ import os
 from pathlib import Path
 from typing import Protocol
 
+import platformdirs
+
 # ---------------------------------------------------------------------------
 # Signer interface
 # ---------------------------------------------------------------------------
@@ -59,8 +61,7 @@ class LocalKeySigner:
 
     @staticmethod
     def _default_key_path() -> str:
-        base = os.environ.get("XDG_CONFIG_HOME") or "~/.config"
-        return str(Path(base).expanduser() / "agent-notes" / "signing.key")
+        return str(Path(platformdirs.user_config_dir("agent-notes")) / "signing.key")
 
     def _load_or_generate(self) -> tuple[bytes, bytes]:
         if self._key_path.exists():

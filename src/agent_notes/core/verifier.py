@@ -15,8 +15,8 @@ Design:
   library.
 - P1 ships built-in Python policies; OPA/Rego integration is P1+ (optional
   capability behind the same interface).
-- Public keys are loaded from a directory (``~/.config/agent-notes/keys/``)
-  or passed explicitly.
+- Public keys are loaded from a directory (``~/.config/agent-notes/keys/`` on
+  Linux, ``%APPDATA%/agent-notes/keys/`` on Windows) or passed explicitly.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from __future__ import annotations
 import base64
 from dataclasses import dataclass, field
 
+import platformdirs
 import psycopg
 from psycopg.rows import dict_row
 
@@ -751,17 +752,16 @@ def _verify_gate_integrity(conn: psycopg.Connection, entity_id: str | None) -> V
 def load_public_key(key_id: str) -> bytes | None:
     """Load a public key from the key store by its key_id (first 16 hex chars).
 
-    Key store: ``~/.config/agent-notes/keys/<key_id>.pub``
+    Key store: ``<platform-config-dir>/agent-notes/keys/<key_id>.pub``
+    (``~/.config/agent-notes/keys/`` on Linux, ``%APPDATA%/agent-notes/keys/`` on Windows).
     """
-    import os
     import re
     from pathlib import Path
 
     if not re.match(r"^[a-fA-F0-9]{4,64}$", key_id):
         return None
 
-    base = os.environ.get("XDG_CONFIG_HOME") or "~/.config"
-    key_dir = Path(base).expanduser() / "agent-notes" / "keys"
+    key_dir = Path(platformdirs.user_config_dir("agent-notes")) / "keys"
     key_file = key_dir / f"{key_id}.pub"
     if key_file.is_file():
         return base64.b64decode(key_file.read_text().strip())

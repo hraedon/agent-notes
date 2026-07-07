@@ -4,8 +4,9 @@ When regista is unreachable, write operations are captured as signed DSSE
 envelopes in a per-project, per-session JSONL file.  ``reconcile`` replays
 them in order, verifying every signature and blocking on conflicts.
 
-Location: ``$XDG_STATE_HOME/regista/outbox/<project>/<session>.jsonl``
-(default ``~/.local/state/regista/outbox/``); env override
+Location: the platform state dir plus ``regista/outbox/<project>/<session>.jsonl``
+(``~/.local/state/regista/outbox/`` on Linux, where ``$XDG_STATE_HOME`` overrides;
+``%LOCALAPPDATA%/regista/outbox/`` on Windows); env override
 ``AGENT_NOTES_OUTBOX_DIR``.
 """
 
@@ -18,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+import platformdirs
 import psycopg
 from psycopg_pool import PoolTimeout
 
@@ -65,8 +67,7 @@ def outbox_dir() -> Path:
     override = os.environ.get("AGENT_NOTES_OUTBOX_DIR")
     if override:
         return Path(override)
-    base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
-    return Path(base) / "regista" / "outbox"
+    return Path(platformdirs.user_state_dir("regista")) / "outbox"
 
 
 def _session_id() -> str:

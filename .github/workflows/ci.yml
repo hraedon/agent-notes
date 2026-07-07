@@ -65,3 +65,31 @@ jobs:
         env:
           AGENT_NOTES_FORBIDDEN_IDENTIFIERS: ${{ secrets.AGENT_NOTES_FORBIDDEN_IDENTIFIERS }}
         run: python3 scripts/check_committed_identifiers.py
+
+  # Plan 003 WI-5.1 — prove agent-notes imports and unit tests pass on native
+  # Windows. Postgres-dependent tests (testcontainers) skip cleanly when Docker
+  # is unavailable; unit tests (config, outbox, secrets, lifecycle, etc.) run
+  # without a DB.
+  windows-test:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "regista @ git+https://github.com/hraedon/regista.git@main"
+          pip install ruff
+          pip install -e ".[test]"
+
+      - name: Lint
+        run: ruff check src/ tests/
+
+      - name: Test
+        run: pytest --tb=short -q

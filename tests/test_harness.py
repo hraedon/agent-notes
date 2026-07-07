@@ -15,6 +15,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from agent_notes.core.config import config_path
+
 _CLI = [sys.executable, "-m", "agent_notes.cli"]
 
 _SUITE_ENV = {
@@ -263,7 +265,7 @@ def test_opencode_install_writes_config_file_and_plugin():
         )
         assert result.returncode == 0, result.stderr
         # env -> agent-notes config file (opencode.json has no env block)
-        cfg = json.loads((td / ".config" / "agent-notes" / "config.json").read_text())
+        cfg = json.loads(config_path(home=td).read_text())
         assert cfg["regista"]["dsn"] == "postgresql://suite/x"
         assert cfg["regista"]["hmac_key_path"] == "/suite/key"
         assert cfg["regista"]["require_ssl"] is True  # coerced to bool
@@ -298,7 +300,7 @@ def test_opencode_reinstall_noop_and_uninstall():
             check=False,
         )
         assert result.returncode == 0
-        cfg = json.loads((td / ".config" / "agent-notes" / "config.json").read_text())
+        cfg = json.loads(config_path(home=td).read_text())
         assert "dsn" not in cfg
         assert cfg.get("regista", {}) == {}
         oc = json.loads((td / ".config" / "opencode" / "opencode.json").read_text())
@@ -332,7 +334,7 @@ def test_all_target_wires_both_harnesses():
         assert len(data["results"]) == 2
         # Both wired
         assert (td / ".claude" / "settings.json").exists()
-        assert (td / ".config" / "agent-notes" / "config.json").exists()
+        assert config_path(home=td).exists()
         assert (td / ".config" / "opencode" / "opencode.json").exists()
 
 
@@ -481,8 +483,9 @@ def test_opencode_no_clobber_keeps_existing_different_value():
         src = _make_skill_tree(td)
         _make_opencode_agents(td)
         # Pre-populate the agent-notes config with a user-set regista.dsn.
-        (td / ".config" / "agent-notes").mkdir(parents=True)
-        (td / ".config" / "agent-notes" / "config.json").write_text(
+        _cfg = config_path(home=td)
+        _cfg.parent.mkdir(parents=True, exist_ok=True)
+        _cfg.write_text(
             json.dumps({"regista": {"dsn": "postgresql://user-set/x"}})
         )
         result = _run(
@@ -498,7 +501,7 @@ def test_opencode_no_clobber_keeps_existing_different_value():
         )
         assert result.returncode == 0
         assert "no clobber" in result.stderr
-        cfg = json.loads((td / ".config" / "agent-notes" / "config.json").read_text())
+        cfg = json.loads(config_path(home=td).read_text())
         # User value kept.
         assert cfg["regista"]["dsn"] == "postgresql://user-set/x"
         # Other keys written.

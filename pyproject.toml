@@ -12,6 +12,7 @@ dependencies = [
     "fastapi>=0.100",
     "uvicorn>=0.20",
     "cryptography>=42.0",
+    "platformdirs>=4.0",
     "regista>=0.4.0",
 ]
 
