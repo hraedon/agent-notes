@@ -310,7 +310,7 @@ def test_opencode_reinstall_noop_and_uninstall():
 # ---------------------------------------------------------------------------
 
 
-def test_all_target_wires_both_harnesses():
+def test_all_target_wires_all_harnesses():
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         src = _make_skill_tree(td)
@@ -329,11 +329,12 @@ def test_all_target_wires_both_harnesses():
         assert result.returncode == 0, result.stderr
         data = json.loads(result.stdout)
         assert data["harness"] == "all"
-        assert len(data["results"]) == 2
-        # Both wired
+        assert len(data["results"]) == 3
+        # All three wired
         assert (td / ".claude" / "settings.json").exists()
         assert (td / ".config" / "agent-notes" / "config.json").exists()
         assert (td / ".config" / "opencode" / "opencode.json").exists()
+        assert (td / ".hermes" / ".env").exists()
 
 
 def test_user_flag_sets_principal_id():
@@ -553,3 +554,203 @@ def test_no_env_vars_still_installs_skills_with_warning():
         # Manifest with empty env_keys.
         man = json.loads((td / ".claude" / ".agent-notes-harness.json").read_text())
         assert man["env_keys"] == []
+
+
+# ---------------------------------------------------------------------------
+# hermes target
+# ---------------------------------------------------------------------------
+
+
+def test_hermes_install_wires_env_and_skills():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        result = _run(
+            "install-harness",
+            "hermes",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            env=_SUITE_ENV,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        data = json.loads(result.stdout)
+        assert data["tool"] == "agent-notes"
+        assert data["harness"] == "hermes"
+        assert data["no_op"] is False
+        # .env file populated with sentinel-wrapped managed block
+        env_content = (td / ".hermes" / ".env").read_text()
+        assert "REGISTA_DSN=postgresql://suite/x" in env_content
+        assert "REGISTA_KEY_PATH=/suite/key" in env_content
+        assert "AGENT_NOTES_DSN=postgresql://native/x" in env_content
+        assert "# BEGIN agent-notes-harness-managed" in env_content
+        assert "# END agent-notes-harness-managed" in env_content
+        # skills installed (directory-based SKILL.md, same as claude)
+        assert (td / ".hermes" / "skills" / "demo" / "SKILL.md").is_file()
+        # manifest written
+        man = json.loads((td / ".hermes" / ".agent-notes-harness.json").read_text())
+        assert "REGISTA_DSN" in man["env_keys"]
+        assert man["plugin"] is False
+        # No agents key for hermes (unlike opencode)
+        assert "agents" not in man
+
+
+def test_hermes_reinstall_is_noop_and_manifest_preserved():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        common = ["install-harness", "hermes", "--source", str(src), "--home", str(td), "--json"]
+        _run(*common, env=_SUITE_ENV, check=False)
+        # Re-install
+        result = _run(*common, env=_SUITE_ENV, check=False)
+        assert result.returncode == 0
+        data = json.loads(result.stdout)
+        assert data["no_op"] is True
+        # Manifest must still list all managed keys
+        man = json.loads((td / ".hermes" / ".agent-notes-harness.json").read_text())
+        assert "REGISTA_DSN" in man["env_keys"]
+        assert "AGENT_NOTES_DSN" in man["env_keys"]
+
+
+def test_hermes_uninstall_removes_managed_block_and_preserves_user_entries():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        _run(
+            "install-harness",
+            "hermes",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            env=_SUITE_ENV,
+            check=False,
+        )
+        # Add a user-authored entry outside the managed block.
+        env_path = td / ".hermes" / ".env"
+        content = env_path.read_text()
+        # Prepend a user entry before the managed block.
+        content = "USER_KEY=keep-me\n" + content
+        env_path.write_text(content)
+
+        result = _run(
+            "install-harness",
+            "hermes",
+            "--uninstall",
+            "--home",
+            str(td),
+            "--json",
+            check=False,
+        )
+        assert result.returncode == 0
+        env_content = env_path.read_text()
+        # Managed block removed
+        assert "# BEGIN agent-notes-harness-managed" not in env_content
+        assert "REGISTA_DSN" not in env_content
+        # User entry preserved
+        assert "USER_KEY=keep-me" in env_content
+        # Skills removed
+        assert not (td / ".hermes" / "skills" / "demo" / "SKILL.md").exists()
+        # Manifest removed
+        assert not (td / ".hermes" / ".agent-notes-harness.json").exists()
+
+
+def test_hermes_uninstall_on_clean_profile_is_noop():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        result = _run(
+            "install-harness",
+            "hermes",
+            "--uninstall",
+            "--home",
+            str(td),
+            "--json",
+            check=False,
+        )
+        assert result.returncode == 0
+        data = json.loads(result.stdout)
+        assert data["no_op"] is True
+        assert data["actions"] == []
+
+
+def test_hermes_no_clobber_keeps_existing_different_value():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        # Pre-populate .env with a user-set REGISTA_DSN outside the managed block.
+        (td / ".hermes").mkdir(parents=True)
+        (td / ".hermes" / ".env").write_text("REGISTA_DSN=postgresql://user-set/x\n")
+        result = _run(
+            "install-harness",
+            "hermes",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            env=_SUITE_ENV,
+            check=False,
+        )
+        assert result.returncode == 0
+        assert "no clobber" in result.stderr
+        env_content = (td / ".hermes" / ".env").read_text()
+        # User value kept
+        assert "REGISTA_DSN=postgresql://user-set/x" in env_content
+        # Other keys written in managed block
+        assert "REGISTA_KEY_PATH=/suite/key" in env_content
+        # Manifest does NOT track the clobbered key
+        man = json.loads((td / ".hermes" / ".agent-notes-harness.json").read_text())
+        assert "REGISTA_DSN" not in man["env_keys"]
+        assert "REGISTA_KEY_PATH" in man["env_keys"]
+
+
+def test_hermes_dry_run_mutates_nothing_exit_2():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        result = _run(
+            "install-harness",
+            "hermes",
+            "--dry-run",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            env=_SUITE_ENV,
+            check=False,
+        )
+        assert result.returncode == 2
+        data = json.loads(result.stdout)
+        assert data["harness"] == "hermes"
+        assert isinstance(data["actions"], list)
+        # Nothing written
+        assert not (td / ".hermes" / ".env").exists()
+        assert not (td / ".hermes" / ".agent-notes-harness.json").exists()
+        assert not (td / ".hermes" / "skills").exists()
+
+
+def test_hermes_reinstall_with_fewer_env_vars_preserves_manifest_tracking():
+    """Re-installing after unsetting an env var must not drop the key from the
+    manifest — uninstall must still remove the value (review B1).
+    """
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        full = ["install-harness", "hermes", "--source", str(src), "--home", str(td), "--json"]
+        # Install with full env.
+        _run(*full, env=_SUITE_ENV, check=False)
+        # Re-install with REGISTA_DSN unset.
+        reduced = {k: v for k, v in _SUITE_ENV.items() if k != "REGISTA_DSN"}
+        _run(*full, env=reduced, check=False)
+        # Manifest must still track REGISTA_DSN (still in .env managed block).
+        man = json.loads((td / ".hermes" / ".agent-notes-harness.json").read_text())
+        assert "REGISTA_DSN" in man["env_keys"]
+        # Uninstall must remove it.
+        _run("install-harness", "hermes", "--uninstall", "--home", str(td), "--json", check=False)
+        env_content = (td / ".hermes" / ".env").read_text()
+        assert "REGISTA_DSN" not in env_content

@@ -24,6 +24,12 @@ Env-var wiring per harness (decision: respect each harness's schema):
   ``opencode.json["plugin"]`` (schema-supported); the two transform hooks
   (``experimental.chat.system.transform`` / ``experimental.session.compacting``)
   ship *inside* the plugin, so registering the path wires them.
+* **hermes** — ``~/.hermes/.env`` is a ``KEY=VALUE`` file (not JSON). Env vars
+  are written between sentinel comments (``# BEGIN agent-notes-harness-managed``
+  / ``# END agent-notes-harness-managed``). Idempotent: if sentinels exist the
+  managed block is replaced. No-clobber: keys outside the block with a different
+  value are warned and skipped. Skills use the same ``SKILL.md`` directory layout
+  as claude. No plugin or agents for hermes.
 
 Idempotency + uninstall: a sidecar manifest (``.agent-notes-harness.json`` next
 to each harness config) records exactly what install-harness wrote (env keys,
@@ -70,7 +76,7 @@ _OPENCODE_AGENT_FILES: tuple[str, ...] = (
 # conflated with the EXIT_NOT_FOUND=2 used by project-resolution commands.
 EXIT_DRY_RUN = 2
 
-_HARNESS_TARGETS = ("claude", "opencode")
+_HARNESS_TARGETS = ("claude", "opencode", "hermes")
 
 # Canonical suite env vars to propagate, each with its legacy alias (Plan 017
 # WI-1.1). The canonical name is what gets written into the harness config so
@@ -153,6 +159,15 @@ def _harness_paths(harness: str, home: Path | None = None) -> dict[str, Path]:
         return {
             "skills_dest": base / "skills",
             "config": base / "settings.json",
+            "manifest": base / MANIFEST_FILENAME,
+            "agent_config": home / ".config" / "agent-notes" / "config.json",
+            "agents_dest": base / "agents",
+        }
+    if harness == "hermes":
+        base = home / ".hermes"
+        return {
+            "skills_dest": base / "skills",
+            "config": base / ".env",
             "manifest": base / MANIFEST_FILENAME,
             "agent_config": home / ".config" / "agent-notes" / "config.json",
             "agents_dest": base / "agents",
@@ -259,7 +274,7 @@ def _install_skills(
         name = src.parent.name
         names.append(name)
         src_content = src.read_text(encoding="utf-8")
-        if target == "claude":
+        if target in ("claude", "hermes"):
             dest = dest_root / name / "SKILL.md"
             payload = src_content
         else:
@@ -406,6 +421,160 @@ def _wire_env_opencode(
 
 
 # ---------------------------------------------------------------------------
+# env wiring — hermes (.env KEY=VALUE with sentinel block)
+# ---------------------------------------------------------------------------
+
+_BEGIN_SENTINEL = f"# BEGIN {TOOL_NAME}-harness-managed"
+_END_SENTINEL = f"# END {TOOL_NAME}-harness-managed"
+
+
+def _parse_env_file(content: str) -> list[tuple[str, str]]:
+    """Parse a .env file into an ordered list of (key, value) pairs.
+
+    Lines outside the managed block are returned as-is. Sentinel comments are
+    *not* included — they are structural markers re-inserted by
+    :func:`_serialize_env_file`.
+    """
+    pairs: list[tuple[str, str]] = []
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        if not stripped:
+            continue
+        if "=" in stripped:
+            key, _, val = stripped.partition("=")
+            pairs.append((key.strip(), val.strip()))
+    return pairs
+
+
+def _serialize_env_file(
+    outside: list[tuple[str, str]],
+    managed: list[tuple[str, str]],
+) -> str:
+    """Serialize a .env file: outside lines first, then a sentinel-wrapped managed block."""
+    lines: list[str] = []
+    for key, val in outside:
+        lines.append(f"{key}={val}")
+    if managed:
+        lines.append("")
+        lines.append(_BEGIN_SENTINEL)
+        for key, val in managed:
+            lines.append(f"{key}={val}")
+        lines.append(_END_SENTINEL)
+    if not lines or lines[-1] != "":
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def _wire_env_hermes(
+    env_path: Path, env_values: dict[str, str], dry_run: bool
+) -> tuple[list[dict], list[str], list[str], list[str]]:
+    """Merge env vars into ~/.hermes/.env using a sentinel-wrapped managed block.
+
+    Returns (actions, newly_written, matching, warnings).
+
+    * If the .env file doesn't exist, it is created with the managed block.
+    * If sentinels already exist, the managed block is replaced (idempotent).
+    * If a key exists *outside* the managed block with a *different* value, warn
+      and skip (no clobber, contract §3 rule 3).
+    * If a key exists outside with the *same* value, it is treated as matching
+      (not re-written).
+    """
+    existing_content = ""
+    if env_path.is_file():
+        existing_content = env_path.read_text(encoding="utf-8")
+
+    # Split existing content into managed and outside sections.
+    all_pairs = _parse_env_file(existing_content)
+
+    # Identify managed pairs by locating the sentinel block in the raw content.
+    lines = existing_content.splitlines()
+    in_block = False
+    managed_keys_existing: set[str] = set()
+    managed_map_existing: dict[str, str] = {}
+    for line in lines:
+        if line.strip() == _BEGIN_SENTINEL:
+            in_block = True
+            continue
+        if line.strip() == _END_SENTINEL:
+            in_block = False
+            continue
+        if in_block and "=" in line:
+            k, _, v = line.strip().partition("=")
+            k = k.strip()
+            managed_keys_existing.add(k)
+            managed_map_existing[k] = v.strip()
+
+    outside_pairs = [(k, v) for k, v in all_pairs if k not in managed_keys_existing]
+    outside_map = dict(outside_pairs)
+
+    actions: list[dict] = []
+    newly: list[str] = []
+    matching: list[str] = []
+    warns: list[str] = []
+    managed_pairs: list[tuple[str, str]] = []
+
+    for name, value in env_values.items():
+        if name in outside_map:
+            if outside_map[name] == value:
+                actions.append(_act("merge_env", [name], "already set (unchanged)"))
+                matching.append(name)
+            else:
+                warns.append(
+                    f"{name}: existing value differs; kept existing (no clobber)"
+                )
+                actions.append(_act("merge_env", [name], "kept existing (no clobber)"))
+        elif name in managed_map_existing:
+            # Key already in the managed block — check if value matches.
+            if managed_map_existing[name] == value:
+                actions.append(_act("merge_env", [name], "already set (unchanged)"))
+                matching.append(name)
+            else:
+                # Value changed — update it (we own the managed block).
+                managed_pairs.append((name, value))
+                newly.append(name)
+                actions.append(_act("merge_env", [name], "updated suite env var"))
+        else:
+            managed_pairs.append((name, value))
+            newly.append(name)
+            actions.append(_act("merge_env", [name], "set suite env var"))
+
+    if not dry_run and newly:
+        # Only write when there are new or updated entries.
+        # Preserve previously-managed keys that are no longer in env_values but
+        # still in the old managed block (review B1: manifest drift).
+        prev_managed_map: dict[str, str] = {}
+        in_block = False
+        for line in lines:
+            if line.strip() == _BEGIN_SENTINEL:
+                in_block = True
+                continue
+            if line.strip() == _END_SENTINEL:
+                in_block = False
+                continue
+            if in_block and "=" in line:
+                k, _, v = line.strip().partition("=")
+                prev_managed_map[k.strip()] = v.strip()
+
+        # Merge: new values override, preserve old ones not in env_values.
+        final_managed: dict[str, str] = {}
+        final_managed.update(prev_managed_map)
+        for k, v in managed_pairs:
+            final_managed[k] = v
+
+        # Only keep managed entries that are still relevant (either in
+        # env_values or in prev_managed_map and not clobbered by outside).
+        managed_list = [(k, v) for k, v in final_managed.items() if k not in outside_map]
+
+        content = _serialize_env_file(outside_pairs, managed_list)
+        env_path.parent.mkdir(parents=True, exist_ok=True)
+        env_path.write_text(content, encoding="utf-8")
+
+    return actions, newly, matching, warns
+
+
+# ---------------------------------------------------------------------------
 # plugin wiring (opencode only)
 # ---------------------------------------------------------------------------
 
@@ -491,7 +660,11 @@ def _install_harness_one(
     for name in prev_skills:
         if name in skill_names:
             continue
-        sf = skills_dest / name / "SKILL.md" if harness == "claude" else skills_dest / f"{name}.md"
+        sf = (
+            skills_dest / name / "SKILL.md"
+            if harness in ("claude", "hermes")
+            else skills_dest / f"{name}.md"
+        )
         if sf.is_file():
             skill_names.append(name)
 
@@ -513,7 +686,8 @@ def _install_harness_one(
         )
 
     # --- config + env + plugin ---
-    config = _load_json(config_path)
+    # Hermes config is a .env file (not JSON); _wire_env_hermes handles it directly.
+    config = _load_json(config_path) if harness != "hermes" else {}
     config_actions: list[dict] = []
     env_managed: list[str] = []
     env_newly: list[str] = []
@@ -537,6 +711,32 @@ def _install_harness_one(
         warns += w
         if not dry_run and config:
             _save_json(config_path, config)
+    elif harness == "hermes":
+        # Hermes uses a .env KEY=VALUE file with sentinel-wrapped managed block
+        # (not JSON). The file is written atomically by _wire_env_hermes.
+        ha, hnewly, hmatching, hw = _wire_env_hermes(config_path, env_values, dry_run)
+        for a in ha:
+            a["path"] = str(config_path)
+        config_actions += ha
+        env_newly = hnewly
+        env_managed = hnewly + [k for k in hmatching if k in prev_env_keys]
+        # Preserve previously-managed env keys still in the .env managed block
+        # but no longer propagated — review B1.
+        if config_path.is_file():
+            content = config_path.read_text(encoding="utf-8")
+            in_block = False
+            for line in content.splitlines():
+                if line.strip() == _BEGIN_SENTINEL:
+                    in_block = True
+                    continue
+                if line.strip() == _END_SENTINEL:
+                    in_block = False
+                    continue
+                if in_block and "=" in line:
+                    k = line.strip().partition("=")[0].strip()
+                    if k not in env_managed:
+                        env_managed.append(k)
+        warns += hw
     else:  # opencode
         # env -> agent-notes config file (the harness-independent fallback)
         agent_cfg = _load_json(agent_config_path)
@@ -658,6 +858,35 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
                     actions.append(a)
         if actions:
             _save_json(paths["config"], settings)
+    elif harness == "hermes":
+        # Hermes .env: remove the sentinel-wrapped managed block entirely.
+        env_path = paths["config"]
+        if env_path.is_file():
+            content = env_path.read_text(encoding="utf-8")
+            lines = content.splitlines()
+            in_block = False
+            new_lines: list[str] = []
+            removed_any = False
+            for line in lines:
+                if line.strip() == _BEGIN_SENTINEL:
+                    in_block = True
+                    removed_any = True
+                    continue
+                if line.strip() == _END_SENTINEL:
+                    in_block = False
+                    continue
+                if in_block:
+                    continue
+                new_lines.append(line)
+            if removed_any:
+                # Clean up trailing blank lines left by block removal.
+                while new_lines and new_lines[-1].strip() == "":
+                    new_lines.pop()
+                result_content = "\n".join(new_lines) + "\n" if new_lines else ""
+                env_path.write_text(result_content, encoding="utf-8")
+                a = _act("remove_key", ["managed-block"], "removed managed env block")
+                a["path"] = str(env_path)
+                actions.append(a)
     else:  # opencode: env lives in the agent-notes config file
         agent_cfg = _load_json(paths["agent_config"])
         for key_path in env_keys:
@@ -712,7 +941,7 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
     skill_names: list[str] = manifest.get("skills", [])
     skills_dest = paths["skills_dest"]
     for name in skill_names:
-        if harness == "claude":
+        if harness in ("claude", "hermes"):
             skill_file = skills_dest / name / "SKILL.md"
         else:
             skill_file = skills_dest / f"{name}.md"
@@ -721,9 +950,9 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
             a = _act("remove_file", [], "removed skill")
             a["path"] = str(skill_file)
             actions.append(a)
-            # Clean up empty parent dir (claude lays out <name>/SKILL.md).
+            # Clean up empty parent dir (claude/hermes lay out <name>/SKILL.md).
             parent = skill_file.parent
-            if harness == "claude" and parent.is_dir() and not any(parent.iterdir()):
+            if harness in ("claude", "hermes") and parent.is_dir() and not any(parent.iterdir()):
                 parent.rmdir()
 
     _remove_manifest(paths["manifest"])
@@ -764,7 +993,11 @@ def cmd_install_harness(args: argparse.Namespace) -> int:
 
     targets = _targets_for(harness)
     if not targets:
-        print(f"Unknown harness: {harness!r} (expected: claude|opencode|all)", file=sys.stderr)
+        print(
+            f"Unknown harness: {harness!r} "
+            f"(expected: claude|opencode|hermes|all)",
+            file=sys.stderr,
+        )
         return EXIT_GENERIC
 
     all_warns: list[str] = []
@@ -820,7 +1053,7 @@ def register_harness_parser(sub: argparse._SubParsersAction) -> None:
     )
     # harness is validated in cmd_install_harness (not via choices=) so an
     # unknown value exits 1 (failure) per the contract, not argparse's 2.
-    p.add_argument("harness", help="claude | opencode | all")
+    p.add_argument("harness", help="claude | opencode | hermes | all")
     p.add_argument(
         "--dry-run",
         action="store_true",
