@@ -381,6 +381,7 @@ def _check_skills_installed() -> tuple[bool, str]:
     layouts = [
         (Path.home() / ".claude" / "skills", True),
         (Path.home() / ".config" / "opencode" / "command", False),
+        (Path.home() / ".hermes" / "skills", True),
     ]
     found: list[str] = []
     for install_dir, is_claude in layouts:
@@ -399,6 +400,7 @@ def _check_harness_wired() -> tuple[bool, str]:
     manifests = [
         Path.home() / ".claude" / ".agent-notes-harness.json",
         Path.home() / ".config" / "opencode" / ".agent-notes-harness.json",
+        Path.home() / ".hermes" / ".agent-notes-harness.json",
     ]
     wired = [str(p) for p in manifests if p.exists()]
     if not wired:
