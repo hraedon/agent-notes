@@ -93,7 +93,7 @@ def test_manifest_none_and_empty():
 def test_manifest_bare_path_passes_through():
     """Today's default — a filesystem path regista reads directly."""
     path, cleanup = suite_secrets.materialize_key_manifest("/etc/regista/keys.json")
-    assert path == "/etc/regista/keys.json"
+    assert path == str(Path("/etc/regista/keys.json"))
     assert cleanup is None
 
 

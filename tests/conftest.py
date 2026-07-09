@@ -107,7 +107,15 @@ def ephemeral_db():
     except (docker.errors.DockerException, OSError) as exc:
         pytest.skip(f"Docker unavailable: {exc}")
 
-    container.start()
+    try:
+        container.start()
+    except Exception as exc:
+        # testcontainers (the ryuk sidecar + the docker.sock volume mount)
+        # cannot start on hosts whose Docker is present but Linux-container-
+        # hostile — notably GitHub windows-latest runners reject the
+        # ``/var/run/docker.sock`` volume spec. Skip cleanly rather than
+        # erroring the whole suite (matches the documented Plan 003 intent).
+        pytest.skip(f"Postgres test container could not start: {exc}")
     try:
         dsn = container.get_connection_url().replace(
             "postgresql+psycopg2://", "postgresql://"
