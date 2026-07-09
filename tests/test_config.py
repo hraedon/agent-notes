@@ -10,7 +10,7 @@ from agent_notes.core import config
 
 
 @pytest.fixture(autouse=True)
-def _clean_env(monkeypatch):
+def _clean_env(monkeypatch, tmp_path):
     monkeypatch.delenv("AGENT_NOTES_DSN", raising=False)
     monkeypatch.delenv("AGENT_NOTES_CONFIG", raising=False)
     for v in (
@@ -22,8 +22,14 @@ def _clean_env(monkeypatch):
         config._REGISTA_KEY_ENV,
         config._REGISTA_WRITES_ENV,
         config._REGISTA_SSL_ENV,
+        config._SUITE_PROJECT_ENV,
     ):
         monkeypatch.delenv(v, raising=False)
+    # Isolate from host suite.env files (Plan 017 WI-4.2): point both paths
+    # at a non-existent file so tests control their own suite.env content.
+    suite_env = tmp_path / "suite.env"
+    monkeypatch.setenv("AGENT_SUITE_CONFIG", str(suite_env))
+    monkeypatch.setenv("AGENT_SUITE_SYSTEM_CONFIG", str(suite_env))
     # Reset the one-shot deprecation-warning guard so each test can observe it.
     config._WARNED_LEGACY.clear()
 

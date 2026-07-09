@@ -1,16 +1,18 @@
 # Plan 017 — Suite cohesion: the agent face, deployable
 
-**Status:** In progress 2026-07-05 — WI-1.1 (config), WI-2.1/2.2/2.3
+**Status:** In progress 2026-07-09 — WI-1.1 (config), WI-2.1/2.2/2.3
 (install-harness + SUITE.lock + opencode review bridge), WI-3.1 (doctor --json,
 suite `ok`/`degraded` shape), WI-3.2 (doc-drift cutover — regista-as-SoT
 confirmed, AGENTS.md updated, no physical breadcrumb write paths), WI-4.1
 (secret-backend resolution + Windows code-review validation) landed and tested;
-WI-4.3 publication gate (identifier-gate + CI job + checklist + dry-run audit
-report) added, gate green. Remaining: WI-4.1 Windows live host validation
-(code-reviewed only — no Windows host in this session), WI-4.2 per-user
-`principal_id` from the shared identity source (awaits the suite identity
-source), WI-4.3 the public flip itself (owner-gated — dry-run audit complete,
-destructive scrub not executed).
+WI-4.2 per-user config layering + `principal_id` resolution seam implemented
+(suite.env reader + `resolve_principal_id` with local dev fallback; live IdP
+binding environment-gated); WI-4.3 publication gate (identifier-gate + CI job +
+checklist + dry-run audit report) added, gate green. Remaining: WI-4.1 Windows
+live host validation (code-reviewed only — no Windows host in this session),
+WI-4.2 live LDAP/Entra `principal_id` binding (environment-gated — requires a
+live IdP connection), WI-4.3 the public flip itself (owner-gated — dry-run audit
+complete, destructive scrub not executed).
 **Author:** Claude (Fable 5), from the 2026-07-02 agent-suite deployment review
 **Strategic role:** agent-notes is the suite's agent face. For a suite deployment
 it must read the shared config, install its harness wiring (skills + hooks) as a
@@ -262,12 +264,13 @@ from inside an agent-notes session. This matches the Claude Code
 agent files are tracked in the harness manifest so `uninstall` removes them.
 
 **Remaining WI-2.1 gaps (deferred):** `--user` for opencode is a warned no-op
-(principal_id resolves from git config per `core/actor.py`); the full per-user
-overlay model awaits the suite per-user layer (WI-4.2). WI-2.2 (pin regista to a
-SHA in `SUITE.lock`) is not yet done. The plugin/skills/agent paths are
-repo-relative (works for the editable-install deployment model; a published wheel
-would need `integrations/` + `skills/` + `.opencode/` as package data —
-pre-existing, tracked separately).
+(principal_id now resolves from suite.env + git config per `core/actor.py`
+WI-4.2, but the opencode config-file field for `principal_id` is not yet wired
+— the per-user suite.env overlay is the canonical path, not the harness config).
+WI-2.2 (pin regista to a SHA in `SUITE.lock`) is not yet done. The
+plugin/skills/agent paths are repo-relative (works for the editable-install
+deployment model; a published wheel would need `integrations/` + `skills/` +
+`.opencode/` as package data — pre-existing, tracked separately).
 
 ### WI-3.1 — `doctor --json` suite shape (implemented 2026-07-04)
 
@@ -439,3 +442,77 @@ The publication-review checklist (`docs/publication-review-checklist.md`) was
 updated with the full audit report (§0). The destructive scrub + repo recreate
 + public flip are **not executed** — dry-run + report only, per the task scope.
 The owner executes the scrub when ready.
+
+### WI-4.2 — Per-user config + `principal_id` resolution (implemented 2026-07-09)
+
+The multi-user keystone: each human's agents attribute to *their*
+`principal_id`, sourced from the suite config layering (blueprint §2.6). Two
+new modules + two modified modules implement the full precedence chain:
+
+**`core/suite_env.py`** (new) reads the suite-wide `suite.env` files that
+`agent-suite bootstrap` writes, providing the per-user overlay layer between
+process env and the tool-specific config file. The precedence (blueprint §2.6 /
+bootstrap-contract §2):
+
+```
+process env  >  per-user suite.env  >  system suite.env  >  tool default
+```
+
+The per-user file is at `~/.config/agent-suite/suite.env` (Linux) or
+`%APPDATA%/agent-suite/suite.env` (Windows), overridable via
+`AGENT_SUITE_CONFIG` (same as regista's `_config.py`). The system file is at
+`/etc/agent-suite/suite.env` (Linux) or `%ProgramData%/agent-suite/suite.env`
+(Windows), overridable via `AGENT_SUITE_SYSTEM_CONFIG` (agent-notes test
+isolation). `load_suite_env()` returns a merged dict (per-user > system);
+missing files are silently skipped. The parser mirrors regista's
+`_parse_env_file` (comments, `export` prefix, quote unwrapping).
+
+**`core/config.py`** (modified) — `RegistaConfig.__init__` now resolves the
+shared suite facts (DSN, key path, SSL flag) through the full chain: process env
+(canonical > legacy alias) > suite.env (canonical > legacy alias) > tool config
+file. The project slug resolves `AGENT_NOTES_PROJECT` (suite canonical,
+blueprint §2.6) > `AGENT_NOTES_REGISTA_PROJECT` (legacy) > suite.env > default.
+A new `_env_or_suite()` helper encapsulates the env > suite.env precedence;
+`_aliased_suite()` handles the legacy-alias fallback within the suite.env layer
+(one-shot deprecation warning, same as the env layer).
+
+**`core/actor.py`** (modified) — `resolve_principal_id()` is the principal_id
+resolution seam. Precedence:
+
+1. `AGENT_NOTES_PRINCIPAL_ID` env var (tool-specific override, highest)
+2. `REGISTA_PRINCIPAL_ID` env var (suite canonical, process env)
+3. `REGISTA_PRINCIPAL_ID` from per-user suite.env
+4. `REGISTA_PRINCIPAL_ID` from system suite.env
+5. git config `user.email` (local dev fallback)
+6. `None`
+
+`load_actor_config()` calls `resolve_principal_id()` so the actor's
+`on_behalf_of.principal_id` is sourced from the suite layering. The
+`principal_display_name` still falls back to git config `user.name`.
+
+**Live IdP binding (environment-gated).** The live LDAP/Entra binding — where
+`principal_id` is resolved from the authenticated session (dossier binds LDAP;
+agent-notes adopts the one-identity-source binding) — is a **seam**, not yet
+wired. `resolve_principal_id()` is the extension point: a live IdP resolver
+would be inserted between the suite.env layer and the git-config fallback (or
+replace the fallback entirely in a production deployment). The binding is
+environment-gated: it requires a live LDAP/Entra connection, the `ldap3`/
+`msgraph` SDK, and a configured identity-source endpoint — none of which are
+available in this session. The local source (suite.env + git config) is the
+dev/default path and is fully functional.
+
+**AC verification.** The AC ("two users' agents writing to the same shared
+project produce distinctly attributed events; the per-user overlay sets
+`principal_id` without touching the system config; no cross-user attribution
+bleed") is verified by `tests/test_suite_env.py`:
+`test_no_cross_user_attribution_bleed` — two users with different per-user
+suite.env overlays produce distinct principal_ids.
+`test_per_user_overlay_does_not_touch_system` — the per-user overlay sets
+principal_id without modifying the system file.
+
+**Conftest isolation.** `tests/conftest.py` now isolates from host suite.env
+files: `AGENT_SUITE_CONFIG` and `AGENT_SUITE_SYSTEM_CONFIG` are pointed at
+non-existent paths, and `REGISTA_PRINCIPAL_ID` / `AGENT_NOTES_PRINCIPAL_ID` are
+cleared, so a host `/etc/agent-suite/suite.env` or the operator's
+`~/.config/agent-suite/suite.env` does not leak into tests (routing test writes
+to production or attributing them to the operator's principal_id).

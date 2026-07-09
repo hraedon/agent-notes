@@ -10,7 +10,23 @@ work-item universe.
 
 from __future__ import annotations
 
+import pytest
+
 from agent_notes.core.actor import Actor, load_actor_config, resolve_actor
+
+
+@pytest.fixture(autouse=True)
+def _clean_actor_env(monkeypatch, tmp_path):
+    for v in (
+        "AGENT_NOTES_MODEL_LINEAGE",
+        "AGENT_NOTES_PRINCIPAL_ID",
+        "AGENT_NOTES_PRINCIPAL_DISPLAY_NAME",
+        "REGISTA_PRINCIPAL_ID",
+    ):
+        monkeypatch.delenv(v, raising=False)
+    suite_env = tmp_path / "suite.env"
+    monkeypatch.setenv("AGENT_SUITE_CONFIG", str(suite_env))
+    monkeypatch.setenv("AGENT_SUITE_SYSTEM_CONFIG", str(suite_env))
 
 
 def test_resolve_actor_reads_model_lineage_from_env(monkeypatch):

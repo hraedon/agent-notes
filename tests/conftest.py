@@ -39,8 +39,16 @@ def _hermetic_config(tmp_path_factory):
     """
     cfg = tmp_path_factory.mktemp("cfg") / "empty.json"
     cfg.write_text("{}")
+    # Isolate from host suite.env files (Plan 017 WI-4.2): point both the
+    # per-user and system suite.env paths at non-existent files so a host
+    # /etc/agent-suite/suite.env or ~/.config/agent-suite/suite.env does not
+    # leak into tests (routing test writes to production or attributing them
+    # to the operator's principal_id).
+    suite_cfg = tmp_path_factory.mktemp("suite") / "suite.env"
     keys = (
         "AGENT_NOTES_CONFIG",
+        "AGENT_SUITE_CONFIG",
+        "AGENT_SUITE_SYSTEM_CONFIG",
         # Legacy aliases (one-release back-compat, Plan 017 WI-1.1) ...
         "AGENT_NOTES_REGISTA_DSN",
         "AGENT_NOTES_REGISTA_HMAC_KEY_PATH",
@@ -54,10 +62,15 @@ def _hermetic_config(tmp_path_factory):
         "REGISTA_DSN",
         "REGISTA_KEY_PATH",
         "REGISTA_REQUIRE_SSL",
+        # Principal_id (Plan 017 WI-4.2) — clear so tests control their own.
+        "AGENT_NOTES_PRINCIPAL_ID",
+        "REGISTA_PRINCIPAL_ID",
     )
     saved = {k: os.environ.get(k) for k in keys}
     os.environ["AGENT_NOTES_CONFIG"] = str(cfg)
-    for k in keys[1:]:
+    os.environ["AGENT_SUITE_CONFIG"] = str(suite_cfg)
+    os.environ["AGENT_SUITE_SYSTEM_CONFIG"] = str(suite_cfg)
+    for k in keys[3:]:
         os.environ.pop(k, None)
     try:
         yield

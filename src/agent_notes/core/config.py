@@ -42,6 +42,8 @@ from pathlib import Path
 
 import platformdirs
 
+from agent_notes.core.suite_env import load_suite_env
+
 _DSN_ENV = "AGENT_NOTES_DSN"
 _CONFIG_ENV = "AGENT_NOTES_CONFIG"  # override the config file path
 
@@ -52,9 +54,15 @@ _SUITE_REGISTA_DSN_ENV = "REGISTA_DSN"
 _SUITE_REGISTA_KEY_ENV = "REGISTA_KEY_PATH"
 _SUITE_REGISTA_SSL_ENV = "REGISTA_REQUIRE_SSL"
 
+# Canonical suite var for the per-consumer project slug (blueprint §2.6 /
+# bootstrap-contract §2: "per-consumer <TOOL>_PROJECT"). The per-user suite.env
+# overlay sets this (multi-user-onboarding §3). The legacy
+# AGENT_NOTES_REGISTA_PROJECT is kept as a fallback alias.
+_SUITE_PROJECT_ENV = "AGENT_NOTES_PROJECT"
+
 # Legacy aliases (retained for one release — emit DeprecationWarning when used).
 _REGISTA_DSN_ENV = "AGENT_NOTES_REGISTA_DSN"
-_REGISTA_PROJECT_ENV = "AGENT_NOTES_REGISTA_PROJECT"  # per-tool slug, stays
+_REGISTA_PROJECT_ENV = "AGENT_NOTES_REGISTA_PROJECT"  # legacy alias for project
 _REGISTA_KEY_ENV = "AGENT_NOTES_REGISTA_HMAC_KEY_PATH"
 _REGISTA_SSL_ENV = "AGENT_NOTES_REGISTA_REQUIRE_SSL"
 # Tool-specific (not a shared fact) — keeps its AGENT_NOTES_* name.
@@ -95,6 +103,41 @@ def _aliased_env(canonical_env: str, legacy_env: str) -> str | None:
         _warn_legacy_alias(legacy_env, canonical_env)
         return legacy
     return None
+
+
+def _aliased_suite(
+    suite: dict[str, str], canonical_env: str, legacy_env: str
+) -> str | None:
+    """Resolve a var from the suite.env dict (per-user > system merge).
+
+    Prefers the canonical suite name, falling back to the legacy alias with a
+    one-shot deprecation warning. This is the suite.env-file layer of the
+    precedence chain (process env is checked separately by :func:`_aliased_env`
+    with higher precedence).
+    """
+    val = suite.get(canonical_env)
+    if val:
+        return val
+    legacy = suite.get(legacy_env)
+    if legacy:
+        _warn_legacy_alias(legacy_env, canonical_env)
+        return legacy
+    return None
+
+
+def _env_or_suite(
+    canonical_env: str, legacy_env: str, suite: dict[str, str]
+) -> str | None:
+    """Resolve a shared suite fact through the full precedence chain.
+
+    Precedence: process env (canonical > legacy) > suite.env (canonical > legacy).
+    The caller supplies the suite.env dict (already merged per-user > system).
+    The tool-specific config file is a further fallback handled by the caller.
+    """
+    val = _aliased_env(canonical_env, legacy_env)
+    if val:
+        return val
+    return _aliased_suite(suite, canonical_env, legacy_env)
 
 
 def config_path(home: Path | None = None) -> Path:
@@ -211,25 +254,46 @@ class RegistaConfig:
 
     ``enabled`` is True only when a regista DSN is configured AND the writes gate
     is on. When False, the legacy op_log path is used unchanged. Each field
-    resolves env var > ``regista`` block in the config file (Plan 012 WI-1).
+    resolves through the suite precedence (Plan 017 WI-1.1 + WI-4.2):
+
+        process env (canonical > legacy alias)
+        > per-user suite.env  (canonical > legacy alias)
+        > system suite.env    (canonical > legacy alias)
+        > tool config file    (``regista`` block in config.json)
+
+    The suite.env layer is the per-user overlay (blueprint §2.6): each human's
+    ``principal_id`` and default project live there, layered on the system-wide
+    shared facts (DSN host, secret-backend pointers).
     """
 
     def __init__(self) -> None:
         file_cfg = regista_config_from_file()
+        suite = load_suite_env()
 
-        # DSN / key resolve canonical suite env > legacy alias (warn) > file
-        # (Plan 017 WI-1.1). An empty env var falls through to the file value.
-        env_dsn = _aliased_env(_SUITE_REGISTA_DSN_ENV, _REGISTA_DSN_ENV)
+        # DSN / key / SSL resolve: process env > suite.env > config file
+        # (Plan 017 WI-1.1 + WI-4.2). An empty env var falls through.
+        env_dsn = _env_or_suite(_SUITE_REGISTA_DSN_ENV, _REGISTA_DSN_ENV, suite)
         file_dsn = file_cfg.get("dsn")
         self.dsn: str | None = env_dsn or (file_dsn if isinstance(file_dsn, str) else None)
-        self.project: str = os.environ.get(_REGISTA_PROJECT_ENV) or _REGISTA_PROJECT_DEFAULT
-        env_key = _aliased_env(_SUITE_REGISTA_KEY_ENV, _REGISTA_KEY_ENV)
+
+        # Project slug: canonical AGENT_NOTES_PROJECT (suite) > legacy
+        # AGENT_NOTES_REGISTA_PROJECT > suite.env > default. The per-user
+        # overlay sets AGENT_NOTES_PROJECT (multi-user-onboarding §3).
+        self.project: str = (
+            os.environ.get(_SUITE_PROJECT_ENV)
+            or os.environ.get(_REGISTA_PROJECT_ENV)
+            or suite.get(_SUITE_PROJECT_ENV)
+            or suite.get(_REGISTA_PROJECT_ENV)
+            or _REGISTA_PROJECT_DEFAULT
+        )
+
+        env_key = _env_or_suite(_SUITE_REGISTA_KEY_ENV, _REGISTA_KEY_ENV, suite)
         file_key = file_cfg.get("hmac_key_path")
         self.hmac_key_path: str | None = env_key or (
             file_key if isinstance(file_key, str) else None
         )
 
-        ssl_env = _aliased_env(_SUITE_REGISTA_SSL_ENV, _REGISTA_SSL_ENV)
+        ssl_env = _env_or_suite(_SUITE_REGISTA_SSL_ENV, _REGISTA_SSL_ENV, suite)
         self.require_ssl: bool = _parse_bool(ssl_env, file_cfg.get("require_ssl", False))
         gate = _parse_bool(
             os.environ.get(_REGISTA_WRITES_ENV), file_cfg.get("writes_enabled", False)
