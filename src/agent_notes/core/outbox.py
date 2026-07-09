@@ -294,6 +294,8 @@ class OutboxAwareFace:
         actor: Actor,
         work_item_id: Any,
         expected_state: str | None,
+        *,
+        _kind: str = "work_item",
         **kwargs: Any,
     ) -> None:
         args: dict[str, Any] = {"actor": _actor_to_dict(actor), **kwargs}
@@ -306,7 +308,10 @@ class OutboxAwareFace:
         enqueue(self._project, op, self._signer)
         self.last_op_outboxed = True
         if work_item_id is not None:
-            self._maybe_set_pending(work_item_id, True)
+            if _kind == "note":
+                self._maybe_set_note_pending(work_item_id, True)
+            else:
+                self._maybe_set_pending(work_item_id, True)
 
     @staticmethod
     def _maybe_set_pending(work_item_id: Any, pending: bool) -> None:
@@ -333,6 +338,26 @@ class OutboxAwareFace:
                 conn.commit()
         except Exception:
             pass
+
+    @staticmethod
+    def _maybe_set_note_pending(entity_id: Any, pending: bool) -> None:
+        try:
+            from agent_notes.core.db import _conn
+
+            with _conn() as conn:
+                conn.execute(
+                    "UPDATE memories SET pending_sync = %s WHERE regista_note_id = %s",
+                    (pending, str(entity_id)),
+                )
+                conn.commit()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _maybe_clear_note_pending(entity_id: Any) -> None:
+        if entity_id is None:
+            return
+        OutboxAwareFace._maybe_set_note_pending(entity_id, False)
 
     def create_breadcrumb(
         self,
@@ -458,6 +483,47 @@ class OutboxAwareFace:
         except _TRANSPORT_ERRORS:
             self._enqueue_op("comment", actor, work_item_id, None, **kwargs)
             return None
+
+    # ------------------------------------------------------------------
+    # Note entities (Plan 018 WI-1.2): the write-through path mirrors the
+    # breadcrumb outbox contract. ``append_note`` captures to the outbox when
+    # regista is unreachable (the entity_id is known up front, so it doubles as
+    # the pending-sync key on the local ``memories`` row). Reads
+    # (``read_note_events`` / ``list_note_entities``) have no durable side effect
+    # and delegate straight to the base face.
+    # ------------------------------------------------------------------
+    def append_note(
+        self,
+        actor: Actor,
+        entity_id: Any,
+        *,
+        transition: str,
+        payload: dict | None = None,
+    ) -> Any:
+        kwargs = dict(transition=transition, payload=payload)
+        if self._is_unreachable():
+            self._enqueue_op(
+                "note_append", actor, entity_id, None, _kind="note", **kwargs
+            )
+            return None
+        try:
+            result = self._base.append_note(
+                actor, entity_id, transition=transition, payload=payload
+            )
+            self.last_op_outboxed = False
+            self._maybe_clear_note_pending(entity_id)
+            return result
+        except _TRANSPORT_ERRORS:
+            self._enqueue_op(
+                "note_append", actor, entity_id, None, _kind="note", **kwargs
+            )
+            return None
+
+    def read_note_events(self, entity_id: Any) -> list[Any]:
+        return self._base.read_note_events(entity_id)
+
+    def list_note_entities(self) -> list[Any]:
+        return self._base.list_note_entities()
 
     # ------------------------------------------------------------------
     # Lease axis (Plan 010 WI-2): claims are a liveness/concurrency primitive,

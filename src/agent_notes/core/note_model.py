@@ -16,6 +16,7 @@ breadcrumb-vs-memory/reflection split decision.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
@@ -26,8 +27,9 @@ from agent_notes.core import face_factory
 from agent_notes.core.change_log import write_change
 from agent_notes.core.db import _conn
 
+_log = logging.getLogger(__name__)
+
 KIND = "memory"
-NOTE_KIND = "note"
 
 _NOTE_FILED = "note_filed"
 _NOTE_UPDATED = "note_updated"
@@ -69,16 +71,17 @@ def _mirror_note_to_projection(
     regista_note_id: uuid.UUID | None,
     active: bool = True,
     supersedes: int | None = None,
+    pending_sync: bool = False,
 ) -> dict:
     cur = conn.cursor(row_factory=dict_row)
     cur.execute(
         """
         INSERT INTO memories
             (workspace_id, project_id, name, memory_type, body, embedding,
-             active, supersedes, attributes, regista_note_id)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             active, supersedes, attributes, regista_note_id, pending_sync)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id, workspace_id, project_id, name, memory_type, body,
-                  active, supersedes, attributes, regista_note_id,
+                  active, supersedes, attributes, regista_note_id, pending_sync,
                   created_at, updated_at
         """,
         (
@@ -92,6 +95,7 @@ def _mirror_note_to_projection(
             supersedes,
             psycopg.types.json.Jsonb(attributes or {}),
             regista_note_id,
+            pending_sync,
         ),
     )
     return dict(cur.fetchone())
@@ -122,12 +126,15 @@ def add_memory(
     embedding: Any | None = None,
 ) -> dict:
     """Write a memory as a signed note entity, then mirror to local projection."""
+    from agent_notes.core.memory_model import _auto_create_wikilinks
+
     actor = face_factory.default_actor()
     note_uuid = uuid.uuid4()
     note_subtype = _note_subtype_for(memory_type)
 
     payload: dict[str, Any] = {
         "note_subtype": note_subtype,
+        "memory_type": memory_type,
         "name": name,
         "body": body,
         "attributes": attributes or {},
@@ -135,6 +142,7 @@ def add_memory(
     }
 
     face = face_factory.get_face()
+    note_outboxed = False
     if face is not None:
         face.append_note(
             actor,
@@ -142,6 +150,7 @@ def add_memory(
             transition=_NOTE_FILED,
             payload=payload,
         )
+        note_outboxed = getattr(face, "last_op_outboxed", False)
 
     with _conn() as conn:
         ws_id = _resolve_workspace(conn, project_id)
@@ -157,6 +166,8 @@ def add_memory(
                     transition=_NOTE_SUPERSEDED,
                     payload={"superseded_by": str(note_uuid)},
                 )
+                if getattr(face, "last_op_outboxed", False):
+                    _mark_note_pending(conn, existing["regista_note_id"], True)
 
         row = _mirror_note_to_projection(
             conn,
@@ -169,7 +180,9 @@ def add_memory(
             embedding=embedding,
             regista_note_id=note_uuid if face is not None else None,
             supersedes=old_id,
+            pending_sync=note_outboxed,
         )
+        _auto_create_wikilinks(conn, ws_id, project_id, name, body)
         write_change(
             conn,
             kind=KIND,
@@ -182,6 +195,15 @@ def add_memory(
         conn.commit()
 
     return row
+
+
+def _mark_note_pending(
+    conn: psycopg.Connection, regista_note_id: Any, pending: bool
+) -> None:
+    conn.execute(
+        "UPDATE memories SET pending_sync = %s WHERE regista_note_id = %s",
+        (pending, regista_note_id),
+    )
 
 
 def update_memory(
@@ -209,6 +231,7 @@ def update_memory(
         if face is not None and note_id is not None:
             payload: dict[str, Any] = {
                 "note_subtype": _note_subtype_for(existing["memory_type"]),
+                "memory_type": existing["memory_type"],
                 "name": name,
             }
             if body is not None:
@@ -307,6 +330,20 @@ def delete_memory(
         return dict(row)
 
 
+def _resolve_memory_type(folded: dict) -> str:
+    """Resolve the full local memory_type from a folded note state.
+
+    The note entity stores the full local ``memory_type`` in its payload
+    (alongside the coarse ``note_subtype``). Notes written before that field
+    existed fall back to the subtype, mapped back to a valid vocabulary value
+    (``memory`` subtype -> ``note``; ``reflection`` -> ``reflection``).
+    """
+    memory_type = folded.get("memory_type")
+    if memory_type:
+        return memory_type
+    return "reflection" if folded.get("note_subtype") == "reflection" else "note"
+
+
 def rebuild_from_regista(
     face: Any,
     *,
@@ -318,7 +355,10 @@ def rebuild_from_regista(
     Reads all note entities from regista, folds each event log to reconstruct
     the current state, and upserts into the local ``memories`` table. The
     pgvector index is rebuilt as part of this (embeddings are recomputed from
-    the note body).
+    the note body). The local ``memory_type`` is restored from the payload
+    (round-tripping the full vocabulary, not just the coarse subtype), and the
+    ``supersedes`` revision chain is reconstructed from ``note_superseded``
+    events. Per-entity failures are logged at WARNING (not swallowed silently).
 
     Returns a summary dict with counts.
     """
@@ -329,19 +369,25 @@ def rebuild_from_regista(
     created = 0
     skipped = 0
     failed = 0
+    # replacement entity_id -> superseded entity_id (str); inverted from each
+    # note entity's `superseded_by`. After all rows are upserted we point the
+    # newer row's `supersedes` at the older row's local id.
+    supersede_of: dict[str, str] = {}
 
     for latest_evt in note_events:
+        entity_id = latest_evt.effective_entity_id
         try:
-            entity_id = latest_evt.effective_entity_id
             events = face.read_note_events(entity_id)
             if not events:
                 skipped += 1
                 continue
 
             folded = _fold_note_events(events)
-            if folded is None:
-                skipped += 1
-                continue
+            memory_type = _resolve_memory_type(folded)
+
+            superseded_by = folded.get("superseded_by")
+            if superseded_by:
+                supersede_of[str(superseded_by)] = str(entity_id)
 
             with _get_conn() as conn:
                 ws_id = _resolve_workspace(conn, project_id)
@@ -361,11 +407,13 @@ def rebuild_from_regista(
                     cur.execute(
                         """
                         UPDATE memories SET
-                            body = %s, attributes = %s, embedding = COALESCE(%s, embedding),
+                            memory_type = %s, body = %s, attributes = %s,
+                            embedding = COALESCE(%s, embedding),
                             active = %s, updated_at = now()
                         WHERE id = %s
                         """,
-                        (body, psycopg.types.json.Jsonb(folded["attributes"]),
+                        (memory_type, body,
+                         psycopg.types.json.Jsonb(folded["attributes"]),
                          embedding, folded["active"], local["id"]),
                     )
                     mirrored += 1
@@ -377,7 +425,7 @@ def rebuild_from_regista(
                              embedding, active, attributes, regista_note_id)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
-                        (ws_id, project_id, folded["name"], folded["note_subtype"],
+                        (ws_id, project_id, folded["name"], memory_type,
                          body, embedding, folded["active"],
                          psycopg.types.json.Jsonb(folded["attributes"]), entity_id),
                     )
@@ -385,32 +433,77 @@ def rebuild_from_regista(
                 conn.commit()
         except Exception:
             failed += 1
+            _log.warning(
+                "note rebuild failed for entity %s", entity_id, exc_info=True
+            )
+
+    _restore_supersedes_chain(project_id, supersede_of)
 
     return {"mirrored": mirrored, "created": created, "skipped": skipped, "failed": failed}
 
 
-def _fold_note_events(events: list[Any]) -> dict | None:
+def _restore_supersedes_chain(project_id: int, supersede_of: dict[str, str]) -> None:
+    """Point each newer memory's ``supersedes`` at the local id of the memory it
+    replaced, using the inverted ``note_superseded`` map.
+
+    ``supersede_of`` maps replacement entity_id -> superseded entity_id. Runs
+    after all rows are upserted so the FK target exists; a missing older row
+    sets ``supersedes`` to NULL (no constraint violation).
+    """
+    if not supersede_of:
+        return
+    from agent_notes.core.db import _conn as _get_conn
+
+    try:
+        with _get_conn() as conn:
+            for newer_entity, older_entity in supersede_of.items():
+                conn.execute(
+                    """
+                    UPDATE memories AS m
+                    SET supersedes = sub.old_id
+                    FROM (SELECT id AS old_id FROM memories
+                          WHERE project_id = %s AND regista_note_id = %s) AS sub
+                    WHERE m.project_id = %s AND m.regista_note_id = %s
+                    """,
+                    (project_id, older_entity, project_id, newer_entity),
+                )
+            conn.commit()
+    except Exception:
+        _log.warning("supersedes chain restore failed", exc_info=True)
+
+
+def _fold_note_events(events: list[Any]) -> dict:
     """Fold a note entity's event log into its current state.
 
-    Returns None if the note was deleted (and should not be rebuilt).
+    Deleted/superseded notes fold to ``active=False`` but are still returned
+    (their row is rebuilt inactive so the revision chain stays intact).
+    ``superseded_by`` carries the replacement entity_id, if any, so the rebuild
+    can restore the local ``supersedes`` chain.
     """
     sorted_events = sorted(events, key=lambda e: e.event_seq)
     state: dict[str, Any] = {
         "note_subtype": "memory",
+        "memory_type": None,
         "name": "",
         "body": "",
         "attributes": {},
         "active": True,
+        "superseded_by": None,
     }
     for evt in sorted_events:
         transition = evt.transition
         payload = evt.payload or {}
         if transition == _NOTE_FILED:
             state["note_subtype"] = payload.get("note_subtype", "memory")
+            state["memory_type"] = payload.get("memory_type")
             state["name"] = payload.get("name", "")
             state["body"] = payload.get("body", "")
             state["attributes"] = payload.get("attributes", {})
         elif transition == _NOTE_UPDATED:
+            if "memory_type" in payload:
+                state["memory_type"] = payload["memory_type"]
+            if "note_subtype" in payload:
+                state["note_subtype"] = payload["note_subtype"]
             if "body" in payload:
                 state["body"] = payload["body"]
             if "attributes" in payload:
@@ -419,6 +512,7 @@ def _fold_note_events(events: list[Any]) -> dict | None:
                 state["name"] = payload["name"]
         elif transition == _NOTE_SUPERSEDED:
             state["active"] = False
+            state["superseded_by"] = payload.get("superseded_by")
         elif transition == _NOTE_DELETED:
             state["active"] = False
     return state

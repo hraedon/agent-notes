@@ -83,6 +83,22 @@ def _maybe_clear_pending_sync(work_item_id: Any) -> None:
         pass
 
 
+def _maybe_clear_note_pending_sync(entity_id: Any) -> None:
+    if entity_id is None:
+        return
+    try:
+        from agent_notes.core.db import _conn
+
+        with _conn() as conn:
+            conn.execute(
+                "UPDATE memories SET pending_sync = FALSE WHERE regista_note_id = %s",
+                (str(entity_id),),
+            )
+            conn.commit()
+    except Exception:
+        pass
+
+
 def _parse_wid(wid_str: str | None) -> uuid.UUID | None:
     if not wid_str:
         return None
@@ -184,7 +200,10 @@ def reconcile(
             raise
 
         outbox.remove_ops(project, entry.session, {entry.client_seq})
-        _maybe_clear_pending_sync(wid)
+        if op_type == "note_append":
+            _maybe_clear_note_pending_sync(wid)
+        else:
+            _maybe_clear_pending_sync(wid)
         replayed += 1
 
     return ReconcileReport(
@@ -228,5 +247,9 @@ def _dispatch(
     elif op_type == "comment":
         body = args.pop("body")
         face.comment(actor, wid, body)
+    elif op_type == "note_append":
+        transition = args.pop("transition")
+        payload = args.pop("payload", None)
+        face.append_note(actor, wid, transition=transition, payload=payload)
     else:
         raise ValueError(f"unknown op type: {op_type!r}")

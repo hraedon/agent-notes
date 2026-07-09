@@ -381,3 +381,158 @@ class TestLegacyPathUnchanged:
             assert mem.get("regista_note_id") is None
         finally:
             reset_face()
+
+
+class TestMemoryTypeRoundTrip:
+    """The fine-grained local memory_type round-trips through the note entity,
+    not just the coarse note_subtype (review fix #2)."""
+
+    def test_fine_memory_type_stored_and_restored(
+        self, default_project, hmac_key_path, monkeypatch
+    ):
+        """A fine memory_type ('decision') is stored in the payload alongside the
+        coarse subtype and restored verbatim on rebuild (not collapsed)."""
+        monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+
+        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        face = RegistaFace(reg)
+        reset_face()
+        set_face_for_test(face)
+        try:
+            mem = add_memory(
+                workspace_id=default_project.workspace_id,
+                project_id=default_project.id,
+                name="rt-decision",
+                memory_type="decision",
+                body="A decision worth remembering",
+                embedding=[0.0] * 768,
+            )
+            note_id = mem["regista_note_id"]
+
+            filed = face.read_note_events(note_id)[0]
+            assert filed.payload["note_subtype"] == "memory"
+            assert filed.payload["memory_type"] == "decision"
+
+            from agent_notes.core.db import _conn
+            from agent_notes.core.note_model import rebuild_from_regista
+
+            with _conn() as conn:
+                conn.execute(
+                    "DELETE FROM memories WHERE project_id = %s AND name = %s",
+                    (default_project.id, "rt-decision"),
+                )
+                conn.commit()
+
+            report = rebuild_from_regista(
+                face, project_id=default_project.id, embed_fn=lambda _: [0.0] * 768
+            )
+            assert report["created"] >= 1
+
+            with _conn() as conn:
+                cur = conn.cursor(row_factory=dict_row)
+                cur.execute(
+                    "SELECT memory_type FROM memories "
+                    "WHERE regista_note_id = %s AND active = true",
+                    (note_id,),
+                )
+                row = cur.fetchone()
+            assert row is not None
+            assert row["memory_type"] == "decision"
+        finally:
+            reset_face()
+            reg.close()
+
+    def test_reflection_subtype_round_trips(
+        self, default_project, hmac_key_path, monkeypatch
+    ):
+        """A reflection stays 'reflection' across the round-trip."""
+        monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+
+        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        face = RegistaFace(reg)
+        reset_face()
+        set_face_for_test(face)
+        try:
+            mem = add_memory(
+                workspace_id=default_project.workspace_id,
+                project_id=default_project.id,
+                name="rt-reflection",
+                memory_type="reflection",
+                body="## Session reflection\n\nRound-trip test.",
+                embedding=[0.0] * 768,
+            )
+            note_id = mem["regista_note_id"]
+
+            from agent_notes.core.db import _conn
+            from agent_notes.core.note_model import rebuild_from_regista
+
+            with _conn() as conn:
+                conn.execute(
+                    "DELETE FROM memories WHERE project_id = %s AND name = %s",
+                    (default_project.id, "rt-reflection"),
+                )
+                conn.commit()
+
+            rebuild_from_regista(
+                face, project_id=default_project.id, embed_fn=lambda _: [0.0] * 768
+            )
+
+            with _conn() as conn:
+                cur = conn.cursor(row_factory=dict_row)
+                cur.execute(
+                    "SELECT memory_type FROM memories "
+                    "WHERE regista_note_id = %s AND active = true",
+                    (note_id,),
+                )
+                row = cur.fetchone()
+            assert row is not None
+            assert row["memory_type"] == "reflection"
+        finally:
+            reset_face()
+            reg.close()
+
+
+class TestWikilinksOnRegistaPath:
+    """The regista write path auto-creates [[wikilink]] relates_to links,
+    matching the legacy local-only path (review fix #3)."""
+
+    def test_wikilinks_created_on_regista_path(
+        self, default_project, hmac_key_path, monkeypatch
+    ):
+        monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+
+        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        face = RegistaFace(reg)
+        reset_face()
+        set_face_for_test(face)
+        try:
+            add_memory(
+                workspace_id=default_project.workspace_id,
+                project_id=default_project.id,
+                name="links-source",
+                memory_type="note",
+                body="See [[other-note]] and [[another]] for context.",
+                embedding=[0.0] * 768,
+            )
+
+            from agent_notes.core.db import _conn
+
+            with _conn() as conn:
+                cur = conn.cursor(row_factory=dict_row)
+                cur.execute(
+                    "SELECT to_identifier, relationship FROM links "
+                    "WHERE from_kind = 'memory' AND from_project = %s "
+                    "AND from_identifier = %s",
+                    (default_project.id, "links-source"),
+                )
+                rows = cur.fetchall()
+
+            targets = {r["to_identifier"] for r in rows}
+            assert {"other-note", "another"} <= targets
+            assert all(r["relationship"] == "relates_to" for r in rows)
+        finally:
+            reset_face()
+            reg.close()

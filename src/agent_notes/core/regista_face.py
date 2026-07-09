@@ -276,6 +276,13 @@ class RegistaFace:
     # just a signed event log. See docs/note-entity-contract.md.
     # ------------------------------------------------------------------
     NOTE_ENTITY_KIND = "note"
+    # regista's `read_events` API has no store-level `entity_kind` filter, and its
+    # `before_seq` pagination requires a `work_item_id` (so it cannot page the
+    # global event stream). Until regista adds an entity-kind filter on
+    # `read_events` (tracked in Plan 018), `list_note_entities` scans the whole
+    # event log up to this limit and filters client-side. At very high event
+    # volumes this becomes the bottleneck — the proper fix is server-side.
+    NOTE_LIST_LIMIT = 10_000
 
     def append_note(
         self,
@@ -304,8 +311,15 @@ class RegistaFace:
         """List all note entities by scanning events with entity_kind='note'.
 
         Returns the latest event for each distinct entity_id, deduplicated.
+
+        regista's ``read_events`` API exposes no ``entity_kind`` filter and its
+        ``before_seq`` cursor requires a ``work_item_id`` (so the *global* stream
+        cannot be paged). This therefore reads up to ``NOTE_LIST_LIMIT`` events
+        and filters client-side — fine at homelab scale, a known linear-scan
+        bottleneck at high volume. A server-side entity-kind filter is the
+        proper fix (Plan 018 follow-up).
         """
-        all_events = self._reg.read_events(limit=10_000)
+        all_events = self._reg.read_events(limit=self.NOTE_LIST_LIMIT)
         seen: dict[Any, Any] = {}
         for evt in all_events:
             if getattr(evt, "entity_kind", "work_item") != self.NOTE_ENTITY_KIND:
