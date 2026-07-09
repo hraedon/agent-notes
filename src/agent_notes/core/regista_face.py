@@ -270,6 +270,52 @@ class RegistaFace:
         return list(self._reg.read_events(work_item_id=work_item_id, limit=10_000))
 
     # ------------------------------------------------------------------
+    # Note entities (Plan 018 WI-1.1/1.2): non-workflow knowledge entities
+    # (memories, reflections) written as signed regista entities with
+    # entity_kind="note". No workflow, no state machine, no review gate —
+    # just a signed event log. See docs/note-entity-contract.md.
+    # ------------------------------------------------------------------
+    NOTE_ENTITY_KIND = "note"
+
+    def append_note(
+        self,
+        actor: Actor,
+        entity_id: Any,
+        *,
+        transition: str,
+        payload: dict | None = None,
+    ) -> Any:
+        ac = self._ac(actor)
+        return self._reg.append_event(
+            entity_id,
+            ac["actor_id"],
+            actor_kind=ac["actor_kind"],
+            actor_metadata=ac["actor_metadata"],
+            transition=transition,
+            payload=payload,
+            on_behalf_of=ac["on_behalf_of"],
+            entity_kind=self.NOTE_ENTITY_KIND,
+        )
+
+    def read_note_events(self, entity_id: Any) -> list[Any]:
+        return list(self._reg.read_events(work_item_id=entity_id, limit=10_000))
+
+    def list_note_entities(self) -> list[Any]:
+        """List all note entities by scanning events with entity_kind='note'.
+
+        Returns the latest event for each distinct entity_id, deduplicated.
+        """
+        all_events = self._reg.read_events(limit=10_000)
+        seen: dict[Any, Any] = {}
+        for evt in all_events:
+            if getattr(evt, "entity_kind", "work_item") != self.NOTE_ENTITY_KIND:
+                continue
+            eid = evt.effective_entity_id
+            if eid not in seen or evt.event_seq > seen[eid].event_seq:
+                seen[eid] = evt
+        return list(seen.values())
+
+    # ------------------------------------------------------------------
     # Lease axis (Plan 010 WI-2): regista claims, NOT lifecycle state.
     # claim/release/heartbeat are concurrency + liveness primitives, orthogonal
     # to the canonical workflow. The lifecycle does not move to `claimed`.

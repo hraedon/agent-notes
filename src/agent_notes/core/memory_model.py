@@ -63,6 +63,15 @@ def add_memory(
 ) -> dict:
     _validate_memory_type(workspace_id, memory_type)
 
+    from agent_notes.core import face_factory
+
+    if face_factory.get_face() is not None:
+        from agent_notes.core import note_model
+
+        return note_model.add_memory(
+            workspace_id, project_id, name, memory_type, body, attributes, embedding
+        )
+
     with _conn() as conn:
         cur = conn.cursor(row_factory=dict_row)
 
@@ -300,6 +309,13 @@ def search_memory_with_body(
 
 def delete_memory(workspace_id: int, project_id: int, name: str) -> dict | None:
     """Soft-delete a memory (sets active=false). Returns the deleted row or None."""
+    from agent_notes.core import face_factory
+
+    if face_factory.get_face() is not None:
+        from agent_notes.core import note_model
+
+        return note_model.delete_memory(workspace_id, project_id, name)
+
     with _conn() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -338,6 +354,13 @@ def update_memory(
 
     Raises ValueError if the memory is not found or not active.
     """
+    from agent_notes.core import face_factory
+
+    if face_factory.get_face() is not None:
+        from agent_notes.core import note_model
+
+        return note_model.update_memory(workspace_id, project_id, name, body, attributes)
+
     with _conn() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
