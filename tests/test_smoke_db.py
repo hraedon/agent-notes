@@ -35,7 +35,10 @@ def pg():
     except (docker.errors.DockerException, OSError) as exc:
         pytest.skip(f"Docker unavailable: {exc}")
 
-    container.start()
+    try:
+        container.start()
+    except Exception as exc:
+        pytest.skip(f"Postgres test container could not start: {exc}")
     try:
         dsn = container.get_connection_url().replace("postgresql+psycopg2://", "postgresql://")
         _apply_schema(dsn)
