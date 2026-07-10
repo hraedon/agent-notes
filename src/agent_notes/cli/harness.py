@@ -166,12 +166,12 @@ def _harness_paths(harness: str, home: Path | None = None) -> dict[str, Path]:
             "agents_dest": base / "agents",
         }
     if harness == "hermes":
-        base = home / ".hermes"
+        base = resolved / ".hermes"
         return {
             "skills_dest": base / "skills",
             "config": base / ".env",
             "manifest": base / MANIFEST_FILENAME,
-            "agent_config": home / ".config" / "agent-notes" / "config.json",
+            "agent_config": resolved / ".config" / "agent-notes" / "config.json",
             "agents_dest": base / "agents",
         }
     # opencode

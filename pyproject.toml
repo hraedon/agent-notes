@@ -48,6 +48,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_notes"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"skills" = "agent_notes/skills"
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

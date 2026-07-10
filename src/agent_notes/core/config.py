@@ -178,7 +178,8 @@ def _resolve_secret_value(value: str) -> str:
 def resolve_dsn(explicit: str | None = None) -> str:
     """Return the Postgres DSN or raise RuntimeError with actionable guidance.
 
-    Precedence: ``explicit`` arg > ``AGENT_NOTES_DSN`` env > config file.
+    Precedence: ``explicit`` arg > ``AGENT_NOTES_DSN`` env > config file >
+    ``REGISTA_DSN`` from suite.env.
 
     A backend ref (``env:VAR`` / ``vault:...`` / ``file:/path``) is resolved
     through ``regista.secrets`` (Plan 017 WI-4.1) so the DSN password need not
@@ -203,8 +204,12 @@ def resolve_dsn(explicit: str | None = None) -> str:
         if dsn:
             return _resolve_secret_value(dsn)
 
+    suite_dsn = _env_or_suite(_SUITE_REGISTA_DSN_ENV, _REGISTA_DSN_ENV, load_suite_env())
+    if suite_dsn:
+        return _resolve_secret_value(suite_dsn)
+
     raise RuntimeError(
-        "No Postgres DSN found. Set AGENT_NOTES_DSN, or create "
+        "No Postgres DSN found. Set AGENT_NOTES_DSN or REGISTA_DSN, or create "
         f'{config_path()} containing {{"dsn": "postgresql://user:pass@host/agent_notes"}}.'
     )
 

@@ -16,12 +16,13 @@ from agent_notes.cli.common import (
 def _repo_skills_root(override: Path | None = None) -> Path:
     """Resolve the directory containing skill subdirectories.
 
-    Defaults to `<repo-root>/skills/` (sibling of `src/`). The override
-    is used by tests to point at a fixture tree.
+    Defaults to the ``skills/`` directory inside the installed package
+    (``agent_notes/skills/``). The override is used by tests to point at a
+    fixture tree.
     """
     if override is not None:
         return override
-    return Path(__file__).resolve().parents[3] / "skills"
+    return Path(__file__).resolve().parent.parent / "skills"
 
 
 def _discover_skills(src_root: Path) -> list[Path]:
