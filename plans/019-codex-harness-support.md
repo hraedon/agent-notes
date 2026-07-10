@@ -19,9 +19,9 @@ target.
   locations.
 - Codex `SessionStart` can add developer context, while `Stop` requires valid
   JSON on successful stdout. Hooks require explicit user trust review.
-- Repository-level `skills/` are not currently guaranteed as installed wheel
-  package data; a clean non-editable install may therefore expose a pre-existing
-  distribution gap.
+- The 2026-07-10 deployment fix now includes repository-level `skills/` as
+  installed wheel package data. Codex acceptance must verify that fix rather
+  than recreate it.
 - Scope is local Codex clients. Hosted Codex tasks do not automatically inherit
   the operator's home directory, suite network, or secret backend.
 
@@ -75,7 +75,7 @@ with source and installed hashes.
 
 ### WI-1.3 — `all` semantics
 
-Align with agent-suite Plan 006: stable `all` expands to Claude, OpenCode, and
+Align with agent-suite Plan 007: stable `all` expands to Claude, OpenCode, and
 Codex. Keep Hermes available as an explicit target until the suite formally
 promotes it.
 
@@ -142,14 +142,14 @@ syntax, tool names, or environment injection.
 - Harness-specific prose is normalized: Codex invocation and GPT lineage are
   documented without removing valid Claude/OpenCode guidance.
 
-### WI-3.3 — Distribution completeness
+### WI-3.3 — Distribution completeness regression proof
 
-Make canonical skills available to the supported installation form (package
-data/resource loading), or explicitly gate `install-harness` to an editable
-source tree with an actionable error. Prefer packaging the required assets.
+Verify the newly landed package-data/resource loading through a built wheel and
+keep an actionable failure if required assets are ever absent.
 
 **AC:** a clean wheel install can run `install-harness codex` without depending
-on the source checkout, or fails before mutation with a documented remediation.
+on the source checkout; a regression fails before mutation with a documented
+remediation.
 
 ## Phase 4 — Proof and docs
 
