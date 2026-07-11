@@ -80,8 +80,11 @@ EXIT_DRY_RUN = 2
 _HARNESS_TARGETS = ("claude", "opencode", "hermes")
 
 # Canonical suite env vars to propagate, each with its legacy alias (Plan 017
-# WI-1.1). The canonical name is what gets written into the harness config so
-# the resolver reads it without a deprecation warning.
+# WI-1.1). The canonical name is preferred (checked first) and is what gets
+# written into the harness config so the resolver reads it without a
+# deprecation warning. The legacy ``AGENT_NOTES_REGISTA_*`` alias is retained
+# as a deprecated fallback for one release; it is read only when the canonical
+# var is unset.
 _SUITE_ENV_VARS: list[tuple[str, str]] = [
     ("REGISTA_DSN", "AGENT_NOTES_REGISTA_DSN"),
     ("REGISTA_KEY_PATH", "AGENT_NOTES_REGISTA_HMAC_KEY_PATH"),

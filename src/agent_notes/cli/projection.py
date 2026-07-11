@@ -29,7 +29,7 @@ def cmd_projection_rebuild(args: argparse.Namespace) -> int:
 
     face = get_face()
     if face is None:
-        msg = "regista writes not enabled; set AGENT_NOTES_REGISTA_DSN/WRITES"
+        msg = "regista writes not enabled; set REGISTA_DSN and AGENT_NOTES_REGISTA_WRITES=1"
         if use_json:
             print(json.dumps({"error": msg}, indent=2))
         else:

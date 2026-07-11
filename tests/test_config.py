@@ -64,6 +64,35 @@ def test_raises_when_nothing_set(monkeypatch, tmp_path):
         config.resolve_dsn()
 
 
+def test_regista_dsn_does_not_fallback_to_native(monkeypatch, tmp_path):
+    """F-5: REGISTA_DSN must NOT satisfy the native agent-notes DSN.
+
+    The deployment model uses separate regista and agent-notes databases.
+    A missing AGENT_NOTES_DSN must be an actionable failure, not a silent
+    connection to the regista database.
+    """
+    monkeypatch.setenv(config._SUITE_REGISTA_DSN_ENV, "postgresql://regista/db")
+    monkeypatch.setenv(config._REGISTA_DSN_ENV, "postgresql://legacy-regista/db")
+    monkeypatch.setenv("AGENT_NOTES_CONFIG", str(tmp_path / "missing.json"))
+    with pytest.raises(RuntimeError, match="No Postgres DSN found") as exc_info:
+        config.resolve_dsn()
+    assert "REGISTA_DSN" not in exc_info.value.args[0]
+    assert "AGENT_NOTES_REGISTA_DSN" not in exc_info.value.args[0]
+
+
+def test_legacy_regista_dsn_alone_does_not_satisfy_native(monkeypatch, tmp_path):
+    """F-5 (legacy alias): AGENT_NOTES_REGISTA_DSN alone must NOT satisfy the
+    native agent-notes DSN either. Only REGISTA_DSN is set here (not the
+    canonical), confirming the legacy alias is equally insufficient.
+    """
+    monkeypatch.setenv(config._REGISTA_DSN_ENV, "postgresql://legacy-regista/db")
+    monkeypatch.setenv("AGENT_NOTES_CONFIG", str(tmp_path / "missing.json"))
+    with pytest.raises(RuntimeError, match="No Postgres DSN found") as exc_info:
+        config.resolve_dsn()
+    assert "AGENT_NOTES_REGISTA_DSN" not in exc_info.value.args[0]
+    assert "REGISTA_DSN" not in exc_info.value.args[0]
+
+
 def test_malformed_config_raises(monkeypatch, tmp_path):
     cfg = tmp_path / "config.json"
     cfg.write_text("{not valid json")

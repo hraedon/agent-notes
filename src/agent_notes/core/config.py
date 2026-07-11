@@ -31,6 +31,12 @@ also use. Each retains its ``AGENT_NOTES_REGISTA_*`` predecessor as a back-compa
 alias for one release; using the alias emits a ``DeprecationWarning``. The
 per-tool slug (``AGENT_NOTES_REGISTA_PROJECT``) and the writes gate
 (``AGENT_NOTES_REGISTA_WRITES``) are tool-specific and keep their names.
+
+Note: ``REGISTA_DSN`` is used only by the optional regista face; the native
+agent-notes DSN (``AGENT_NOTES_DSN``) does not fall back to it. The deployment
+model uses separate regista and agent-notes databases, so a missing
+``AGENT_NOTES_DSN`` is an actionable failure, not a silent connection to the
+regista database.
 """
 
 from __future__ import annotations
@@ -178,8 +184,7 @@ def _resolve_secret_value(value: str) -> str:
 def resolve_dsn(explicit: str | None = None) -> str:
     """Return the Postgres DSN or raise RuntimeError with actionable guidance.
 
-    Precedence: ``explicit`` arg > ``AGENT_NOTES_DSN`` env > config file >
-    ``REGISTA_DSN`` from suite.env.
+    Precedence: ``explicit`` arg > ``AGENT_NOTES_DSN`` env > config file ``dsn`` key.
 
     A backend ref (``env:VAR`` / ``vault:...`` / ``file:/path``) is resolved
     through ``regista.secrets`` (Plan 017 WI-4.1) so the DSN password need not
@@ -204,12 +209,8 @@ def resolve_dsn(explicit: str | None = None) -> str:
         if dsn:
             return _resolve_secret_value(dsn)
 
-    suite_dsn = _env_or_suite(_SUITE_REGISTA_DSN_ENV, _REGISTA_DSN_ENV, load_suite_env())
-    if suite_dsn:
-        return _resolve_secret_value(suite_dsn)
-
     raise RuntimeError(
-        "No Postgres DSN found. Set AGENT_NOTES_DSN or REGISTA_DSN, or create "
+        "No Postgres DSN found. Set AGENT_NOTES_DSN or create "
         f'{config_path()} containing {{"dsn": "postgresql://user:pass@host/agent_notes"}}.'
     )
 
