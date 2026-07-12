@@ -20,6 +20,7 @@ from agent_notes.cli.export import register_export_parsers
 from agent_notes.cli.harness import register_harness_parser
 from agent_notes.cli.links import register_link_parsers
 from agent_notes.cli.memory import register_memory_parsers
+from agent_notes.cli.memory_provider import register_memory_provider_parsers
 from agent_notes.cli.orient import register_orient_parser
 from agent_notes.cli.outbox import register_outbox_parsers
 from agent_notes.cli.projection import register_projection_parsers
@@ -223,6 +224,7 @@ def main() -> int:
     register_breadcrumb_parsers(sub)
     register_work_item_parsers(sub)
     register_memory_parsers(sub)
+    register_memory_provider_parsers(sub)
     register_link_parsers(sub)
     register_search_parsers(sub)
     register_vocabulary_parsers(sub)

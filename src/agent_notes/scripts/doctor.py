@@ -456,6 +456,46 @@ def _check_secrets_backend(cfg: reg_config.RegistaConfig) -> tuple[bool | None, 
     return True, f"{resolved} backend ref(s) resolved ({names})"
 
 
+def _check_memory_provider() -> tuple[bool | None, str]:
+    """Check the configured memory engine's health (Plan 020 WI-3.1).
+
+    The native engine's health is covered by ``dsn_reachable`` — native uses
+    the same pgvector database — so a native engine reports as ``skip``
+    (informational, never a failure).  An external engine (hindsight, etc.)
+    that is configured-but-unreachable is a real failure: the operator wired
+    an engine the system cannot reach.  A not-configured external engine
+    (env var set, URL missing) is a ``skip`` — the operator's intent is clear
+    but incomplete, and native remains the fallback.
+    """
+    try:
+        from typing import assert_never
+
+        from agent_notes.core.memory_engine import EngineHealthState, get_engine
+
+        engine = get_engine()
+        health = engine.describe()
+        state = health.state
+
+        if engine.engine_name == "native":
+            return None, f"native engine (state={state.value}; covered by dsn_reachable)"
+
+        match state:
+            case EngineHealthState.HEALTHY:
+                return True, f"{engine.engine_name} engine healthy: {health.detail}"
+            case EngineHealthState.DEGRADED:
+                return True, f"{engine.engine_name} engine degraded: {health.detail}"
+            case EngineHealthState.UNREACHABLE:
+                return False, f"{engine.engine_name} engine unreachable: {health.detail}"
+            case EngineHealthState.NOT_CONFIGURED:
+                return None, f"{engine.engine_name} engine not configured: {health.detail}"
+            case EngineHealthState.UNAVAILABLE:
+                return False, f"{engine.engine_name} engine unavailable: {health.detail}"
+            case other:
+                assert_never(other)
+    except Exception as exc:
+        return False, f"memory provider check error: {type(exc).__name__}"
+
+
 def _check_regista_face() -> tuple[bool, str]:
     try:
         cfg = reg_config.regista_config()
@@ -669,6 +709,9 @@ def run_json(check_embed: bool = False) -> tuple[dict, int]:
     ok, msg = _check_secrets_backend(cfg)
     add("secrets_backend", ok, msg)
 
+    ok, msg = _check_memory_provider()
+    add("memory_provider", ok, msg)
+
     # --- regista block (the suite-shared facts) ---
     reachable, reach_msg = _check_regista_reachable(cfg)
     if reachable is False:
@@ -821,6 +864,14 @@ def run(skip_embed: bool = False, check_embed: bool = False) -> int:
 
     ok, msg = _check_secrets_backend(cfg)
     _print_section("14. Secrets Backend")
+    if ok is None:
+        print(f"  SKIP: {msg}")
+    else:
+        _print_result(ok, msg)
+        all_ok = all_ok and ok
+
+    ok, msg = _check_memory_provider()
+    _print_section("15. Memory Provider")
     if ok is None:
         print(f"  SKIP: {msg}")
     else:
