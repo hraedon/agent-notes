@@ -4,6 +4,10 @@ Consolidates what the /start skill does in three calls (open breadcrumbs +
 recent changes + memories) into a single structured query. Cheap and
 embedding-free by design: it is the payload a SessionStart hook injects on
 every session, so it must not pay the embedding-model cold-load tax.
+
+Plan 020 WI-3.2: ``--recall`` optionally queries the configured memory
+engine for learned context. The recall is bounded, additive, and never
+blocks — orient always succeeds even if recall fails.
 """
 
 from __future__ import annotations
@@ -11,7 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, assert_never
 
 from agent_notes.cli.common import (
     EXIT_NOT_CONFIGURED,
@@ -23,6 +27,22 @@ from agent_notes.cli.common import (
 from agent_notes.core import config as reg_config
 from agent_notes.core import outbox, projection
 from agent_notes.core.db import _conn
+from agent_notes.core.memory_engine import OriginClass
+
+
+def _origin_label(origin: OriginClass) -> str:
+    """Human-readable provenance label for a recalled result's origin class."""
+    match origin:
+        case OriginClass.RAW:
+            return "exact source (verbatim)"
+        case OriginClass.EXTRACTED:
+            return "extracted fact"
+        case OriginClass.DERIVED:
+            return "derived observation"
+        case OriginClass.SYNTHESIZED:
+            return "synthesized (LLM-generated — untrusted)"
+        case other:
+            assert_never(other)
 
 
 def cmd_orient(args: argparse.Namespace) -> int:
@@ -76,6 +96,75 @@ def cmd_orient(args: argparse.Namespace) -> int:
         with _conn() as conn:
             regista_sync["pending_sync_rows"] = projection.count_pending(conn, proj_id)
 
+    # Plan 020 WI-3.2: optional bounded recall from the configured memory
+    # engine. Additive and never-blocking — orient always succeeds even if
+    # recall fails. Lazy imports keep the default (no --recall) path cheap.
+    recall_notes: list[str] = []
+    learned_context: dict[str, Any] | None = None
+
+    if getattr(args, "recall", False):
+        from agent_notes.core.memory_engine import (
+            EngineHealthState,
+            MemoryScope,
+            RecallQuery,
+            get_engine,
+        )
+
+        try:
+            engine = get_engine()
+        except ValueError:
+            recall_notes.append("recall: skipped (unknown engine configuration)")
+        except Exception as exc:
+            recall_notes.append(f"recall: failed — {type(exc).__name__}")
+        else:
+            try:
+                health = engine.describe()
+            except Exception:
+                health = None
+
+            if health is not None and health.state == EngineHealthState.NOT_CONFIGURED:
+                pass  # skip silently — same as native
+            elif health is not None and health.state == EngineHealthState.UNREACHABLE:
+                recall_notes.append("recall: engine unreachable")
+            elif engine.engine_name == "native":
+                recall_notes.append(
+                    "recall: skipped (native engine — memories already listed above)"
+                )
+            else:
+                try:
+                    rq = RecallQuery(
+                        query=(
+                            f"important context for project {proj_slug}: "
+                            "recent decisions, open work items, and key memories"
+                        ),
+                        scope=MemoryScope(
+                            project_slug=proj_slug,
+                            workspace_slug=ws_slug,
+                        ),
+                        budget="low",
+                        max_tokens=2048,
+                    )
+                    response = engine.recall(rq)
+
+                    if response.usage.get("error"):
+                        recall_notes.append(
+                            f"recall: degraded — {response.usage['error']}"
+                        )
+                    elif not response.results:
+                        recall_notes.append("recall: no learned context found")
+                    else:
+                        capped = response.results[:8]
+                        learned_context = {
+                            "engine": response.engine,
+                            "results": [r.to_dict() for r in capped],
+                            "total_results": len(response.results),
+                            "capped": len(response.results) > len(capped),
+                            "usage": response.usage,
+                            "error": None,
+                        }
+                except Exception as exc:
+                    recall_notes.append(f"recall: failed — {type(exc).__name__}")
+
     payload = {
         "project": proj_slug,
         "workspace": ws_slug,
@@ -105,6 +194,9 @@ def cmd_orient(args: argparse.Namespace) -> int:
         ],
         "regista_sync": regista_sync,
     }
+
+    if learned_context is not None:
+        payload["learned_context"] = learned_context
 
     if use_json:
         print(json.dumps(payload, indent=2, default=str))
@@ -140,6 +232,14 @@ def cmd_orient(args: argparse.Namespace) -> int:
         print(f"\nMemories ({len(memories)}):")
         for m in memories:
             print(f"  - {m['name']} ({m['memory_type']})")
+        for note in recall_notes:
+            print(f"\n{note}")
+        if learned_context is not None:
+            print(f"\nLearned context ({learned_context['engine']}):")
+            for r in learned_context["results"]:
+                origin = OriginClass(r["origin"])
+                label = _origin_label(origin)
+                print(f"  - [{label}] {r['text']}")
     return EXIT_SUCCESS
 
 
@@ -155,6 +255,12 @@ def register_orient_parser(sub: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Also scan git history for open breadcrumbs already resolved in a "
         "commit (read-only; off by default). Ideal in the SessionStart hook.",
+    )
+    orient.add_argument(
+        "--recall",
+        action="store_true",
+        help="Query the configured memory engine for learned context (Plan 020 "
+        "WI-3.2). Bounded and additive — never blocks. Off by default.",
     )
     _add_common(orient)
     orient.set_defaults(func=cmd_orient)
