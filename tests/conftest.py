@@ -101,11 +101,12 @@ def ephemeral_db():
     Skips cleanly when Docker is unavailable (e.g. windows-latest CI) so
     Postgres-dependent tests skip rather than error (Plan 003 WI-5.1).
     """
-    container = PostgresContainer("pgvector/pgvector:pg17")
     try:
         docker.from_env().ping()
     except (docker.errors.DockerException, OSError) as exc:
         pytest.skip(f"Docker unavailable: {exc}")
+
+    container = PostgresContainer("pgvector/pgvector:pg17")
 
     try:
         container.start()
