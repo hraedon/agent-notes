@@ -234,6 +234,168 @@ def list_memories(
         return [dict(r) for r in cur.fetchall()]
 
 
+def browse_knowledge(
+    workspace_id: int,
+    project_id: int | None = None,
+    memory_type: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict]:
+    """Rich, paginated read model for the public knowledge provider."""
+    conditions = ["active = true", "workspace_id = %s"]
+    params: list[Any] = [workspace_id]
+    if project_id is not None:
+        conditions.append("project_id = %s")
+        params.append(project_id)
+    if memory_type is not None:
+        conditions.append("memory_type = %s")
+        params.append(memory_type)
+    params.extend([min(max(limit, 0), 200), max(offset, 0)])
+
+    with _conn() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT id, workspace_id, project_id, name, memory_type,
+                   LEFT(body, 240) AS body_preview, attributes, regista_note_id,
+                   pending_sync, created_at, updated_at
+            FROM memories
+            WHERE {" AND ".join(conditions)}
+            ORDER BY updated_at DESC
+            LIMIT %s OFFSET %s
+            """,
+            params,
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_knowledge_memory(workspace_id: int, project_id: int, name: str) -> dict | None:
+    """Return the rich exact-note shape used by the public provider."""
+    with _conn() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT id, workspace_id, project_id, name, memory_type, body, attributes,
+                   supersedes, regista_note_id, pending_sync, created_at, updated_at
+            FROM memories WHERE project_id = %s AND workspace_id = %s
+            AND name = %s AND active = true
+            """,
+            (project_id, workspace_id, name),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def search_memories_exact(
+    workspace_id: int,
+    query: str,
+    project_id: int | None = None,
+    memory_type: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """Search exact projected note text without loading the embedding model.
+
+    This is intentionally a simple PostgreSQL lexical/substring search. It is
+    deterministic and useful for the human knowledge browser, but it is not a
+    relevance-ranked full-text or semantic search engine.
+    """
+    conditions = [
+        "active = true",
+        "workspace_id = %s",
+        "(name ILIKE %s ESCAPE E'\\\\' OR body ILIKE %s ESCAPE E'\\\\')",
+    ]
+    escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pattern = f"%{escaped_query}%"
+    params: list[Any] = [workspace_id, pattern, pattern]
+    if project_id is not None:
+        conditions.append("project_id = %s")
+        params.append(project_id)
+    if memory_type is not None:
+        conditions.append("memory_type = %s")
+        params.append(memory_type)
+    params.append(min(max(limit, 0), 100))
+
+    with _conn() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT id, workspace_id, project_id, name, memory_type, body,
+                   attributes, regista_note_id, pending_sync, created_at, updated_at
+            FROM memories
+            WHERE {" AND ".join(conditions)}
+            ORDER BY
+                CASE WHEN lower(name) = lower(%s) THEN 0 ELSE 1 END,
+                updated_at DESC, name
+            LIMIT %s
+            """,
+            [*params[:-1], query, params[-1]],
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def knowledge_index_health(
+    workspace_id: int,
+    project_id: int | None = None,
+) -> dict:
+    """Return exact-projection and vector-index coverage for active notes."""
+    conditions = ["active = true", "workspace_id = %s"]
+    params: list[Any] = [workspace_id]
+    if project_id is not None:
+        conditions.append("project_id = %s")
+        params.append(project_id)
+
+    with _conn() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT count(*) AS total,
+                   count(*) FILTER (WHERE embedding IS NOT NULL) AS vector_indexed,
+                   count(*) FILTER (WHERE pending_sync) AS pending_sync,
+                   count(*) FILTER (WHERE regista_note_id IS NOT NULL) AS signed,
+                   max(updated_at) AS latest_update
+            FROM memories
+            WHERE {" AND ".join(conditions)}
+            """,
+            params,
+        )
+        return dict(cur.fetchone())
+
+
+def search_knowledge_semantic(
+    workspace_id: int,
+    query_vec: Any,
+    project_id: int | None = None,
+    memory_type: str | None = None,
+    limit: int = 10,
+) -> list[dict]:
+    """Semantic search shape for the public provider, including authority posture."""
+    conditions = ["active = true", "workspace_id = %s", "embedding IS NOT NULL"]
+    params: list[Any] = [workspace_id]
+    if project_id is not None:
+        conditions.append("project_id = %s")
+        params.append(project_id)
+    if memory_type:
+        conditions.append("memory_type = %s")
+        params.append(memory_type)
+
+    with _conn() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT id, workspace_id, project_id, name, memory_type, body,
+                   attributes, regista_note_id, pending_sync,
+                   1 - (embedding <=> %s::vector) AS score,
+                   created_at, updated_at
+            FROM memories
+            WHERE {" AND ".join(conditions)}
+            ORDER BY embedding <=> %s::vector
+            LIMIT %s
+            """,
+            [query_vec, *params, query_vec, min(max(limit, 0), 50)],
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
 def search_memory(
     workspace_id: int,
     query_vec: Any,

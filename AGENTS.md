@@ -12,6 +12,10 @@ Conventions and quick reference for agents (and humans) working on agent-notes.
 4. **Then:** `plans/007-lifecycle-enforcement-spine.md` for the lifecycle enforcement and cross-harness instantiation (Piece 0–2 complete).
 5. **Then:** `plans/008-work-log-coordination-kernel.md` for the op-CRDT work log, provenance, and cross-project coordination (P0–P4 complete; Tier A shipped — regista coordinator is an optional L3 layer, not yet attached).
 6. **Then:** `plans/016-review-gate-cli-and-work-item-split.md` for the `work-item review` CLI surface and the `core/work_item/` subpackage split (`work_item_model.py` is now a thin dispatch facade).
+7. **For the next architecture arcs:** `plans/020-pluggable-memory-engine.md`
+   separates exact signed knowledge from replaceable learned recall, and
+   `plans/021-work-provider-and-coordination-ux.md` finishes the existing work
+   provider seam without adopting a new control plane.
 
 ## Build / test / lint
 

@@ -19,16 +19,16 @@ version = "1.0.0"
 name = "regista"
 # The git SHA of regista this agent-notes release was tested against.
 # Resolve with: git -C ../regista checkout <sha>
-sha = "ccf33044a65302a4903fcf3e17ff44c73d8cbce7"
-describe = "v0.5.1-rc1-30-gccf3304"
+sha = "24aa820a9e56a17e3d46498e1d874906d465769e"
+describe = "v0.5.1-rc1-62-g24aa820"
 pyproject_floor = "regista>=0.4.0"
 
 [envelope]
 # Regista event-envelope + canonical-workflow versions the face writes.
 # (Sourced from regista's own version surface; recorded here so a mismatch is
 # detectable without standing up the full interop CI.)
-envelope_version = "v4"
-canonical_workflow = "v1"
+envelope_version = "v5"
+canonical_workflow = "v2"
 
 [embedding]
 # Pre-cache target so a work install does no model-download egress on first run
