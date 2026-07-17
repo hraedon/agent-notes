@@ -89,6 +89,7 @@ def test_claude_install_wires_env_and_skills():
         data = json.loads(result.stdout)
         assert data["tool"] == "agent-notes"
         assert data["harness"] == "claude"
+        assert data["status"] == "installed"
         assert data["no_op"] is False
         # settings.json env block populated
         settings = json.loads((td / ".claude" / "settings.json").read_text())
@@ -312,7 +313,7 @@ def test_opencode_reinstall_noop_and_uninstall():
 # ---------------------------------------------------------------------------
 
 
-def test_all_target_wires_all_harnesses():
+def test_all_target_expands_supported_public_targets_only():
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         src = _make_skill_tree(td)
@@ -320,6 +321,7 @@ def test_all_target_wires_all_harnesses():
         result = _run(
             "install-harness",
             "all",
+            "--dry-run",
             "--source",
             str(src),
             "--home",
@@ -328,15 +330,52 @@ def test_all_target_wires_all_harnesses():
             env=_SUITE_ENV,
             check=False,
         )
-        assert result.returncode == 0, result.stderr
+        assert result.returncode == 2, result.stderr
         data = json.loads(result.stdout)
         assert data["harness"] == "all"
-        assert len(data["results"]) == 3
-        # All three wired
-        assert (td / ".claude" / "settings.json").exists()
-        assert config_path(home=td).exists()
-        assert (td / ".config" / "opencode" / "opencode.json").exists()
-        assert (td / ".hermes" / ".env").exists()
+        assert len(data["results"]) == 2
+        assert [item["harness"] for item in data["results"]] == [
+            "claude",
+            "opencode",
+        ]
+        assert not (td / ".hermes").exists()
+        assert not (td / ".claude").exists()
+        assert not (td / ".config" / "opencode").exists()
+
+
+def test_codex_is_contract_shaped_unsupported_and_changes_nothing():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        result = _run(
+            "install-harness",
+            "codex",
+            "--home",
+            str(td),
+            "--json",
+            check=False,
+        )
+
+        assert result.returncode == 1
+        data = json.loads(result.stdout)
+        assert data == {
+            "tool": "agent-notes",
+            "harness": "codex",
+            "user": None,
+            "status": "unsupported",
+            "actions": [
+                {
+                    "kind": "unsupported",
+                    "path": "",
+                    "keys": [],
+                    "detail": (
+                        "Codex adapter is not implemented; no harness wiring "
+                        "was changed (Plan 019)"
+                    ),
+                }
+            ],
+            "no_op": False,
+        }
+        assert list(td.iterdir()) == []
 
 
 def test_user_flag_sets_principal_id():

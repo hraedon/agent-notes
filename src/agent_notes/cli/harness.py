@@ -72,12 +72,19 @@ _OPENCODE_AGENT_FILES: tuple[str, ...] = (
     "kimi.md",
 )
 
-# Contract exit codes (install-harness-contract.md §7): 0 success/no-op,
+# Contract exit codes (install-harness-contract.md): 0 success/no-op,
 # 1 failure, 2 dry-run. Defined locally so the 2 = dry-run semantics are not
 # conflated with the EXIT_NOT_FOUND=2 used by project-resolution commands.
 EXIT_DRY_RUN = 2
 
-_HARNESS_TARGETS = ("claude", "opencode", "hermes")
+_STABLE_HARNESS_TARGETS = ("claude", "opencode")
+_CANDIDATE_HARNESS_TARGETS = ("codex",)
+_PRIVATE_HARNESS_TARGETS = ("hermes",)
+_HARNESS_TARGETS = (
+    _STABLE_HARNESS_TARGETS
+    + _CANDIDATE_HARNESS_TARGETS
+    + _PRIVATE_HARNESS_TARGETS
+)
 
 # Canonical suite env vars to propagate, each with its legacy alias (Plan 017
 # WI-1.1). The canonical name is preferred (checked first) and is what gets
@@ -809,6 +816,7 @@ def _install_harness_one(
         "tool": TOOL_NAME,
         "harness": harness,
         "user": user,
+        "status": "installed",
         "actions": all_actions,
         "no_op": no_op,
     }
@@ -829,6 +837,7 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
                 "tool": TOOL_NAME,
                 "harness": harness,
                 "user": None,
+                "status": "installed",
                 "actions": [],
                 "no_op": True,
                 "uninstalled": True,
@@ -966,6 +975,7 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
         "tool": TOOL_NAME,
         "harness": harness,
         "user": None,
+        "status": "installed",
         "actions": actions,
         "no_op": not actions,
         "uninstalled": True,
@@ -980,7 +990,7 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
 
 def _targets_for(harness: str) -> list[str]:
     if harness == "all":
-        return list(_HARNESS_TARGETS)
+        return list(_STABLE_HARNESS_TARGETS)
     if harness in _HARNESS_TARGETS:
         return [harness]
     return []
@@ -1000,7 +1010,7 @@ def cmd_install_harness(args: argparse.Namespace) -> int:
     if not targets:
         print(
             f"Unknown harness: {harness!r} "
-            f"(expected: claude|opencode|hermes|all)",
+            f"(expected: claude|opencode|codex|hermes|all)",
             file=sys.stderr,
         )
         return EXIT_GENERIC
@@ -1008,6 +1018,28 @@ def cmd_install_harness(args: argparse.Namespace) -> int:
     all_warns: list[str] = []
     results: list[dict] = []
     for tgt in targets:
+        if tgt == "codex":
+            results.append(
+                {
+                    "tool": TOOL_NAME,
+                    "harness": tgt,
+                    "user": user,
+                    "status": "unsupported",
+                    "actions": [
+                        {
+                            "kind": "unsupported",
+                            "path": "",
+                            "keys": [],
+                            "detail": (
+                                "Codex adapter is not implemented; no harness wiring "
+                                "was changed (Plan 019)"
+                            ),
+                        }
+                    ],
+                    "no_op": False,
+                }
+            )
+            continue
         if uninstall:
             try:
                 res, warns = _uninstall_one(tgt, home=home)
@@ -1023,7 +1055,12 @@ def cmd_install_harness(args: argparse.Namespace) -> int:
         results.append(res)
         all_warns += warns
 
-    exit_code = EXIT_DRY_RUN if dry_run else EXIT_SUCCESS
+    has_unsupported = any(res.get("status") == "unsupported" for res in results)
+    exit_code = (
+        EXIT_GENERIC
+        if has_unsupported
+        else (EXIT_DRY_RUN if dry_run else EXIT_SUCCESS)
+    )
 
     if use_json or dry_run:
         # Contract §4: JSON to stdout.
@@ -1035,6 +1072,11 @@ def cmd_install_harness(args: argparse.Namespace) -> int:
     else:
         # Human-readable summary.
         for res in results:
+            if res.get("status") == "unsupported":
+                print(f"[{res['harness']}] unsupported (not wired).")
+                for action in res["actions"]:
+                    print(f"  {action['kind']}: {action.get('detail', '')}")
+                continue
             verb = "Uninstalled" if uninstall else "Installed"
             if res["no_op"]:
                 print(f"[{res['harness']}] already wired (no-op).")
@@ -1058,7 +1100,7 @@ def register_harness_parser(sub: argparse._SubParsersAction) -> None:
     )
     # harness is validated in cmd_install_harness (not via choices=) so an
     # unknown value exits 1 (failure) per the contract, not argparse's 2.
-    p.add_argument("harness", help="claude | opencode | hermes | all")
+    p.add_argument("harness", help="claude | opencode | codex | hermes | all")
     p.add_argument(
         "--dry-run",
         action="store_true",
