@@ -343,39 +343,84 @@ def test_all_target_expands_supported_public_targets_only():
         assert not (td / ".config" / "opencode").exists()
 
 
-def test_codex_is_contract_shaped_unsupported_and_changes_nothing():
+def test_codex_install_writes_skills_only_no_config():
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
+        src = _make_skill_tree(td)
         result = _run(
             "install-harness",
             "codex",
+            "--source",
+            str(src),
             "--home",
             str(td),
             "--json",
+            env=_SUITE_ENV,
             check=False,
         )
-
-        assert result.returncode == 1
+        assert result.returncode == 0, result.stderr
         data = json.loads(result.stdout)
-        assert data == {
-            "tool": "agent-notes",
-            "harness": "codex",
-            "user": None,
-            "status": "unsupported",
-            "actions": [
-                {
-                    "kind": "unsupported",
-                    "path": "",
-                    "keys": [],
-                    "detail": (
-                        "Codex adapter is not implemented; no harness wiring "
-                        "was changed (Plan 019)"
-                    ),
-                }
-            ],
-            "no_op": False,
-        }
-        assert list(td.iterdir()) == []
+        assert data["harness"] == "codex"
+        assert data["status"] == "installed"
+        assert data["no_op"] is False
+        # Skills land in Codex's own auto-discovery dir, SKILL.md layout.
+        assert (td / ".codex" / "skills" / "demo" / "SKILL.md").is_file()
+        # Decision 4: Codex config is never written (no secret/config leak).
+        assert not (td / ".codex" / "config.toml").exists()
+        # No env leaked into the agent-notes config file either.
+        assert not config_path(home=td).exists()
+        # Manifest records the installed skill and no env/plugin.
+        man = json.loads((td / ".codex" / ".agent-notes-harness.json").read_text())
+        assert man["skills"] == ["demo"]
+        assert man["env_keys"] == []
+        assert man["plugin"] is False
+
+
+def test_codex_reinstall_is_noop():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        common = ["install-harness", "codex", "--source", str(src), "--home", str(td), "--json"]
+        _run(*common, env=_SUITE_ENV, check=False)
+        result = _run(*common, env=_SUITE_ENV, check=False)
+        assert result.returncode == 0
+        assert json.loads(result.stdout)["no_op"] is True
+
+
+def test_codex_dry_run_writes_nothing():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        result = _run(
+            "install-harness", "codex", "--dry-run",
+            "--source", str(src), "--home", str(td), "--json",
+            env=_SUITE_ENV, check=False,
+        )
+        assert result.returncode == 2
+        assert not (td / ".codex").exists()
+
+
+def test_codex_uninstall_removes_skills_and_manifest():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        _run(
+            "install-harness", "codex", "--source", str(src), "--home", str(td), "--json",
+            env=_SUITE_ENV, check=False,
+        )
+        # A user's own skill must survive uninstall (only tracked files removed).
+        user_skill = td / ".codex" / "skills" / "mine" / "SKILL.md"
+        user_skill.parent.mkdir(parents=True)
+        user_skill.write_text("---\nname: mine\n---\nkeep me\n")
+
+        result = _run(
+            "install-harness", "codex", "--uninstall", "--home", str(td), "--json",
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert not (td / ".codex" / "skills" / "demo").exists()
+        assert not (td / ".codex" / ".agent-notes-harness.json").exists()
+        assert user_skill.is_file()  # untracked user skill preserved
 
 
 def test_user_flag_sets_principal_id():

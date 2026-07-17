@@ -1,6 +1,31 @@
 # Plan 019 — Codex harness support for the agent face
 
-**Status:** Proposed 2026-07-10.
+**Status:** Phase 1 landed 2026-07-17 (installer: `install-harness codex` renders
+skills + ownership manifest, dry-run, uninstall, verified on-box). Phases 2 (hooks),
+3.2/3.3, and 4 (live proof) remain.
+
+## Corrections applied during implementation (2026-07-17)
+
+- **Decision 2 corrected — skills install to `$CODEX_HOME/skills`, NOT
+  `$HOME/.agents/skills`.** codex 0.144.1's own authoritative `skill-creator`
+  and `skill-installer` name `$CODEX_HOME/skills` (`~/.codex/skills`) as the
+  user-skill auto-discovery path; there is no `~/.agents/skills` discovery in
+  this Codex version. Installing to `~/.agents/skills` would have silently placed
+  skills where Codex never looks. This also keeps agent-notes consistent with the
+  acb Codex adapter (both write `$CODEX_HOME/skills/<name>/SKILL.md`).
+- **WI-1.3 superseded by the hardened Plan 007 (2026-07-17).** `all` stays the
+  stable set (claude, opencode) and Codex is promoted into it *atomically across
+  all components* only after conformance — so Codex remains an explicit target
+  here, NOT part of `all`. Matches acb and the suite contract.
+- **WI-1.2 "user-modified skill not overwritten" is a pre-existing cross-harness
+  gap, not codex-specific.** codex reuses the existing `_install_one`
+  content-compare (create/update/unchanged), identical to claude/opencode/hermes,
+  which today *update* on drift. Hash-tracked preservation of a user-modified
+  installed skill should be added for all harnesses uniformly; recorded, not
+  faked for codex alone. Manifest + uninstall-only-recorded halves of WI-1.2 are
+  done.
+
+**Original status:** Proposed 2026-07-10.
 **Author:** GPT-5.6 Sol, from the suite Codex integration audit.
 **Strategic role:** Make the existing agent-notes skills and health contract
 available to local Codex clients through one idempotent `install-harness`

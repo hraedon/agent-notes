@@ -378,10 +378,13 @@ def _check_skills_installed() -> tuple[bool, str]:
         # install whose repo root is elsewhere).
         return None, "skills source unreadable (informational)"
     # (install_dir, is_claude_layout) — the layout differs per harness.
+    from agent_notes.cli.harness import _codex_home
+
     layouts = [
         (Path.home() / ".claude" / "skills", True),
         (Path.home() / ".config" / "opencode" / "command", False),
         (Path.home() / ".hermes" / "skills", True),
+        (_codex_home() / "skills", True),  # Codex: SKILL.md layout, $CODEX_HOME/skills
     ]
     found: list[str] = []
     for install_dir, is_claude in layouts:
@@ -397,10 +400,13 @@ def _check_skills_installed() -> tuple[bool, str]:
 
 def _check_harness_wired() -> tuple[bool, str]:
     """Detect whether install-harness left a manifest in either harness config."""
+    from agent_notes.cli.harness import _codex_home
+
     manifests = [
         Path.home() / ".claude" / ".agent-notes-harness.json",
         Path.home() / ".config" / "opencode" / ".agent-notes-harness.json",
         Path.home() / ".hermes" / ".agent-notes-harness.json",
+        _codex_home() / ".agent-notes-harness.json",
     ]
     wired = [str(p) for p in manifests if p.exists()]
     if not wired:

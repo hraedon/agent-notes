@@ -162,6 +162,19 @@ def _opencode_agents_dest(home: Path | None = None) -> Path:
     return (home or Path.home()) / ".config" / "opencode" / "agents"
 
 
+def _codex_home(home: Path | None = None) -> Path:
+    """Resolve Codex's config root: ``$CODEX_HOME`` else ``~/.codex``.
+
+    Under a test ``--home`` override, use ``<home>/.codex`` so fixtures stay
+    isolated (mirrors how the other harnesses derive their base under ``home``).
+    A real run honors the operator's ``CODEX_HOME`` if set.
+    """
+    if home is not None:
+        return home / ".codex"
+    env = os.environ.get("CODEX_HOME")
+    return Path(env) if env else Path.home() / ".codex"
+
+
 def _harness_paths(harness: str, home: Path | None = None) -> dict[str, Path]:
     """Return the config/skill/manifest/agent paths for a harness target."""
     resolved = home or Path.home()
@@ -182,6 +195,20 @@ def _harness_paths(harness: str, home: Path | None = None) -> dict[str, Path]:
             "config": base / ".env",
             "manifest": base / MANIFEST_FILENAME,
             "agent_config": resolved / ".config" / "agent-notes" / "config.json",
+            "agents_dest": base / "agents",
+        }
+    if harness == "codex":
+        # Codex auto-discovers user skills at $CODEX_HOME/skills/<name>/SKILL.md
+        # (its own SKILL.md format, same as Claude). NB: Codex does NOT read
+        # ~/.agents/skills — Plan 019 Decision 2 was corrected against codex
+        # 0.144.1's authoritative skill-creator/skill-installer. No config, env,
+        # plugin, or agents are written (Decision 4: never touch Codex config).
+        base = _codex_home(home)
+        return {
+            "skills_dest": base / "skills",
+            "config": base / "config.toml",  # never written; present for shape
+            "manifest": base / MANIFEST_FILENAME,
+            "agent_config": agent_config,
             "agents_dest": base / "agents",
         }
     # opencode
@@ -286,7 +313,7 @@ def _install_skills(
         name = src.parent.name
         names.append(name)
         src_content = src.read_text(encoding="utf-8")
-        if target in ("claude", "hermes"):
+        if target in ("claude", "hermes", "codex"):
             dest = dest_root / name / "SKILL.md"
             payload = src_content
         else:
@@ -674,7 +701,7 @@ def _install_harness_one(
             continue
         sf = (
             skills_dest / name / "SKILL.md"
-            if harness in ("claude", "hermes")
+            if harness in ("claude", "hermes", "codex")
             else skills_dest / f"{name}.md"
         )
         if sf.is_file():
@@ -698,8 +725,9 @@ def _install_harness_one(
         )
 
     # --- config + env + plugin ---
-    # Hermes config is a .env file (not JSON); _wire_env_hermes handles it directly.
-    config = _load_json(config_path) if harness != "hermes" else {}
+    # Hermes config is a .env file and Codex's is TOML — neither is JSON, and
+    # Codex config is never touched at all (Decision 4), so skip the JSON load.
+    config = _load_json(config_path) if harness not in ("hermes", "codex") else {}
     config_actions: list[dict] = []
     env_managed: list[str] = []
     env_newly: list[str] = []
@@ -749,6 +777,11 @@ def _install_harness_one(
                     if k not in env_managed:
                         env_managed.append(k)
         warns += hw
+    elif harness == "codex":
+        # Codex: skills-only. No env/plugin/config wiring (Decision 4). agent-notes
+        # resolves shared config launcher-independently, so nothing is written into
+        # Codex config — the manifest below records only the installed skills.
+        pass
     else:  # opencode
         # env -> agent-notes config file (the harness-independent fallback)
         agent_cfg = _load_json(agent_config_path)
@@ -901,7 +934,7 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
                 a = _act("remove_key", ["managed-block"], "removed managed env block")
                 a["path"] = str(env_path)
                 actions.append(a)
-    else:  # opencode: env lives in the agent-notes config file
+    elif harness == "opencode":  # env lives in the agent-notes config file
         agent_cfg = _load_json(paths["agent_config"])
         for key_path in env_keys:
             parts = key_path.split(".")
@@ -955,7 +988,7 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
     skill_names: list[str] = manifest.get("skills", [])
     skills_dest = paths["skills_dest"]
     for name in skill_names:
-        if harness in ("claude", "hermes"):
+        if harness in ("claude", "hermes", "codex"):
             skill_file = skills_dest / name / "SKILL.md"
         else:
             skill_file = skills_dest / f"{name}.md"
@@ -964,9 +997,13 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
             a = _act("remove_file", [], "removed skill")
             a["path"] = str(skill_file)
             actions.append(a)
-            # Clean up empty parent dir (claude/hermes lay out <name>/SKILL.md).
+            # Clean up empty parent dir (claude/hermes/codex lay out <name>/SKILL.md).
             parent = skill_file.parent
-            if harness in ("claude", "hermes") and parent.is_dir() and not any(parent.iterdir()):
+            if (
+                harness in ("claude", "hermes", "codex")
+                and parent.is_dir()
+                and not any(parent.iterdir())
+            ):
                 parent.rmdir()
 
     _remove_manifest(paths["manifest"])
@@ -1018,28 +1055,6 @@ def cmd_install_harness(args: argparse.Namespace) -> int:
     all_warns: list[str] = []
     results: list[dict] = []
     for tgt in targets:
-        if tgt == "codex":
-            results.append(
-                {
-                    "tool": TOOL_NAME,
-                    "harness": tgt,
-                    "user": user,
-                    "status": "unsupported",
-                    "actions": [
-                        {
-                            "kind": "unsupported",
-                            "path": "",
-                            "keys": [],
-                            "detail": (
-                                "Codex adapter is not implemented; no harness wiring "
-                                "was changed (Plan 019)"
-                            ),
-                        }
-                    ],
-                    "no_op": False,
-                }
-            )
-            continue
         if uninstall:
             try:
                 res, warns = _uninstall_one(tgt, home=home)
