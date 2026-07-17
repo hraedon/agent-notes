@@ -91,6 +91,12 @@ agent-notes changes since <timestamp-or-id> [--json]
 agent-notes install-skills [--target claude|opencode] [--dry-run]
 ```
 
+Suite harness installation accepts `claude`, `opencode`, `codex`, `hermes`, or
+`all`. Codex currently returns a contract-shaped, non-zero `unsupported` result
+until Plan 019 lands. Stable `all` remains Claude and OpenCode until Codex's
+full adapter and conformance proof land atomically; component-private Hermes
+remains explicitly selectable and is never implicit.
+
 ### Skills (Claude Code / opencode)
 
 This repo ships skill prose under `skills/` that turns the CLI into

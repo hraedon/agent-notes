@@ -69,9 +69,12 @@ Agent-facing workflows ship as skills under `skills/`:
 SKILL.md that shells to `agent-notes <noun> <verb> --json` and carries
 the per-workflow judgment in prose. Install with `agent-notes
 install-skills --target {claude,opencode}` (skills only) or
-`agent-notes install-harness {claude|opencode|all}` (skills + env wiring
+`agent-notes install-harness {claude|opencode|codex|all}` (skills + env wiring
 + opencode plugin + opencode subagent definitions — Plan 017 WI-2.1 and
-WI-2.3). Both are idempotent; `--dry-run` / `--uninstall` supported. See
+WI-2.3). Codex is accepted but returns an explicit non-zero `unsupported`
+result until Plan 019 lands; stable `all` remains Claude + OpenCode and excludes
+candidate Codex and private Hermes. Both are
+idempotent; `--dry-run` / `--uninstall` supported. See
 Plan 017 §Implementation log for the opencode env-via-config-file
 decision (D1).
 
