@@ -33,14 +33,15 @@ Env-var wiring per harness (decision: respect each harness's schema):
 
 Idempotency + uninstall: a sidecar manifest (``.agent-notes-harness.json`` next
 to each harness config) records exactly what install-harness wrote (env keys,
-skill names, plugin bool). ``--uninstall`` removes only those entries — user-
-authored config and pre-existing secrets are never clobbered (contract §3 rules
-2–4).
+skill names, plugin bool, and Codex hook-group hashes). ``--uninstall`` removes
+only those entries — user-authored config, Cairn hooks, and pre-existing secrets
+are never clobbered (contract §3 rules 2–4).
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -49,7 +50,6 @@ from pathlib import Path
 from agent_notes.cli.common import EXIT_GENERIC, EXIT_SUCCESS
 from agent_notes.cli.skills import (
     _discover_skills,
-    _install_one,
     _repo_skills_root,
     _to_opencode_body,
 )
@@ -80,11 +80,7 @@ EXIT_DRY_RUN = 2
 _STABLE_HARNESS_TARGETS = ("claude", "opencode")
 _CANDIDATE_HARNESS_TARGETS = ("codex",)
 _PRIVATE_HARNESS_TARGETS = ("hermes",)
-_HARNESS_TARGETS = (
-    _STABLE_HARNESS_TARGETS
-    + _CANDIDATE_HARNESS_TARGETS
-    + _PRIVATE_HARNESS_TARGETS
-)
+_HARNESS_TARGETS = _STABLE_HARNESS_TARGETS + _CANDIDATE_HARNESS_TARGETS + _PRIVATE_HARNESS_TARGETS
 
 # Canonical suite env vars to propagate, each with its legacy alias (Plan 017
 # WI-1.1). The canonical name is preferred (checked first) and is what gets
@@ -120,6 +116,111 @@ _OPENCODE_FIELD_MAP: dict[str, tuple[str | None, str, bool]] = {
 _BOOL_TRUTHY = {"1", "true", "yes"}
 
 
+# ---------------------------------------------------------------------------
+# hash helpers (Plan 019 Decision 5, WI-1.2)
+# ---------------------------------------------------------------------------
+
+
+def _sha256(content: str) -> str:
+    """SHA-256 hex digest of a string."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _sha256_file(path: Path) -> str | None:
+    """SHA-256 hex digest of a file's content.
+
+    Returns ``None`` if the file cannot be read as UTF-8 (e.g., the user
+    replaced it with a binary file).  A ``None`` result causes the caller to
+    treat the file as modified — our installed files are always UTF-8, so a
+    non-UTF-8 file is definitely user-modified.
+    """
+    try:
+        return _sha256(path.read_text(encoding="utf-8"))
+    except UnicodeDecodeError:
+        return None
+
+
+def _normalize_hash_map(raw: object) -> dict[str, str | None]:
+    """Normalize a manifest ``skills``/``agents`` entry to a name→hash dict.
+
+    Handles both the current dict format (``{"name": "<hash>"}``) and the
+    legacy list format (``["name1", "name2"]``) from before hash tracking was
+    added.  Entries from the legacy format get ``None`` — meaning "hash
+    unknown, cannot detect user modification" — so the old behavior (always
+    update / always remove) is preserved for those entries.  Non-string hash
+    values from a crafted or corrupted manifest are coerced to ``None``.
+    """
+    if isinstance(raw, dict):
+        return {
+            str(k): v if isinstance(v, str) else None for k, v in raw.items()
+        }
+    if isinstance(raw, list):
+        return {str(name): None for name in raw}
+    return {}
+
+
+def _install_tracked(
+    payload: str,
+    dest: Path,
+    dry_run: bool,
+    recorded_hash: str | None,
+    *,
+    managed_before: bool,
+) -> tuple[str, str | None, bool]:
+    """Install a single file with hash-based modification detection.
+
+    Returns ``(status, installed_hash, is_conflict)``.
+
+    * ``status`` — ``'created'``, ``'updated'``, ``'unchanged'``, or
+      ``'conflict'`` (user-modified, preserved).
+    * ``installed_hash`` — the hash to retain in the ownership manifest. For a
+      conflict on a previously managed file this is the prior recorded hash.
+      For a pre-existing unowned conflict it is ``None``: observing a foreign
+      file is not ownership evidence and uninstall must never claim it.
+    * ``is_conflict`` — ``True`` when the file was locally modified and
+      preserved.
+
+    Conflict detection (Plan 019 Decision 5): if the file exists, differs
+    from ``payload``, and we have a prior ``recorded_hash`` that does not
+    match the on-disk content, the user modified it after our last install.
+    The file is left untouched and a conflict is reported. Any file with no
+    prior manifest entry is also a conflict and remains unowned, even if its
+    bytes happen to match: equality is not proof that agent-notes may delete
+    it later. When a legacy manifest names the file but has no hash, the update
+    proceeds as before for backward compatibility.
+    """
+    src_hash = _sha256(payload)
+
+    if dest.exists():
+        # Try to read existing content as UTF-8. If the user replaced the
+        # file with binary content, UnicodeDecodeError is caught — the file
+        # is definitely not our payload (which is always UTF-8 text).
+        try:
+            existing = dest.read_text(encoding="utf-8")
+            content_matches = existing == payload
+        except UnicodeDecodeError:
+            content_matches = False
+        # Content equality proves compatibility, not ownership. A file that
+        # predates our manifest may belong to another installer; adopting it
+        # would let our uninstall delete someone else's managed asset.
+        if not managed_before:
+            return "conflict", None, True
+        if content_matches:
+            return "unchanged", src_hash, False
+        if recorded_hash is not None:
+            on_disk_hash = _sha256_file(dest)
+            if on_disk_hash != recorded_hash:
+                return "conflict", recorded_hash, True
+        if not dry_run:
+            dest.write_text(payload, encoding="utf-8")
+        return "updated", src_hash, False
+
+    if not dry_run:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(payload, encoding="utf-8")
+    return "created", src_hash, False
+
+
 def _act(kind: str, keys: list[str], detail: str, status: str = "") -> dict:
     """Build a contract action dict (path is filled in by the caller)."""
     a: dict = {"kind": kind, "path": "", "keys": keys, "detail": detail}
@@ -152,9 +253,15 @@ def _plugin_path() -> Path:
     return _repo_skills_root().parent / "integrations" / "opencode" / "index.js"
 
 
-def _opencode_agents_src_root() -> Path:
-    """Resolve the repo-local `.opencode/agents/` directory."""
-    return _repo_skills_root().parent / ".opencode" / "agents"
+def _opencode_agents_src_root(src_override: Path | None = None) -> Path:
+    """Resolve the repo-local ``.opencode/agents/`` directory.
+
+    When *src_override* is given (the skills source root, typically from
+    ``--source``), the agents directory is derived relative to it — so test
+    fixtures that place ``.opencode/agents/`` alongside ``skills/`` are found.
+    """
+    base = src_override if src_override is not None else _repo_skills_root()
+    return base.parent / ".opencode" / "agents"
 
 
 def _opencode_agents_dest(home: Path | None = None) -> Path:
@@ -198,18 +305,23 @@ def _harness_paths(harness: str, home: Path | None = None) -> dict[str, Path]:
             "agents_dest": base / "agents",
         }
     if harness == "codex":
-        # Codex auto-discovers user skills at $CODEX_HOME/skills/<name>/SKILL.md
-        # (its own SKILL.md format, same as Claude). NB: Codex does NOT read
-        # ~/.agents/skills — Plan 019 Decision 2 was corrected against codex
-        # 0.144.1's authoritative skill-creator/skill-installer. No config, env,
-        # plugin, or agents are written (Decision 4: never touch Codex config).
+        # Codex user-scoped shared skills live at $HOME/.agents/skills per the
+        # suite install-harness contract (§2 Codex) and Plan 019 Decision 2
+        # (restored 2026-07-18); repo-scoped skills live at .agents/skills (a
+        # per-project concern, not handled by this user-global command). Skills
+        # are home-relative, NOT under $CODEX_HOME: $CODEX_HOME holds only Codex
+        # user config and installed-plugin state. No env, plugin, agent, or TOML
+        # config is written for Codex. Phase 2 merges lifecycle groups into the
+        # separate hooks.json file; the ownership manifest stays under
+        # $CODEX_HOME as a stable sidecar.
         base = _codex_home(home)
         return {
-            "skills_dest": base / "skills",
+            "skills_dest": resolved / ".agents" / "skills",
             "config": base / "config.toml",  # never written; present for shape
             "manifest": base / MANIFEST_FILENAME,
             "agent_config": agent_config,
             "agents_dest": base / "agents",
+            "hooks": base / "hooks.json",
         }
     # opencode
     base = resolved / ".config" / "opencode"
@@ -258,6 +370,204 @@ def _save_json(path: Path, data: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Codex lifecycle hook merge (Plan 019 Phase 2)
+# ---------------------------------------------------------------------------
+
+
+def _json_hash(value: object) -> str:
+    """Hash a JSON value in a formatting-independent canonical form."""
+    return _sha256(json.dumps(value, sort_keys=True, separators=(",", ":")))
+
+
+def _normalize_hook_hashes(raw: object) -> dict[str, str | None]:
+    """Normalize the manifest's event-to-owned-group-hash mapping."""
+    return _normalize_hash_map(raw)
+
+
+def _hook_group_has_command(group: object, command: str) -> bool:
+    if not isinstance(group, dict):
+        return False
+    handlers = group.get("hooks")
+    if not isinstance(handlers, list):
+        return False
+    return any(
+        isinstance(handler, dict) and handler.get("command") == command
+        for handler in handlers
+    )
+
+
+def _wire_codex_hooks(
+    hooks_path: Path,
+    dry_run: bool,
+    prev_hashes: dict[str, str | None],
+) -> tuple[list[dict], dict[str, str], list[str], bool]:
+    """Merge only agent-notes' two matcher groups into a shared hooks file.
+
+    A same-command group without prior hash ownership is a conflict even when
+    byte-equivalent.  This mirrors skill ownership: compatibility is not proof
+    that a later uninstall may delete another installer's entry.
+    """
+    from agent_notes.codex_lifecycle import canonical_hook_groups
+
+    existed_before = hooks_path.is_file()
+    document = _load_json(hooks_path)
+    raw_hooks = document.get("hooks", {})
+    if not isinstance(raw_hooks, dict):
+        raise RuntimeError(f"{hooks_path} has a non-object 'hooks' value; refusing to overwrite")
+    hooks = raw_hooks
+    document["hooks"] = hooks
+
+    actions: list[dict] = []
+    owned_hashes: dict[str, str] = {}
+    conflicts: list[str] = []
+    changed = False
+    for event, canonical in canonical_hook_groups().items():
+        command = canonical["hooks"][0]["command"]
+        groups = hooks.get(event, [])
+        if not isinstance(groups, list):
+            raise RuntimeError(
+                f"{hooks_path} has a non-array hooks.{event} value; refusing to overwrite"
+            )
+        candidates = [
+            index
+            for index, group in enumerate(groups)
+            if _hook_group_has_command(group, str(command))
+        ]
+        canonical_hash = _json_hash(canonical)
+        status: str
+        if not candidates:
+            groups.append(canonical)
+            hooks[event] = groups
+            owned_hashes[event] = canonical_hash
+            status = "created"
+            changed = True
+        elif len(candidates) > 1:
+            status = "conflict"
+            conflicts.append(f"Codex {event} hook: duplicate same-command groups, preserved")
+            if event in prev_hashes and prev_hashes[event] is not None:
+                owned_hashes[event] = str(prev_hashes[event])
+        else:
+            index = candidates[0]
+            current = groups[index]
+            current_hash = _json_hash(current)
+            if event not in prev_hashes:
+                status = "conflict"
+                conflicts.append(
+                    f"Codex {event} hook: pre-existing and not owned by agent-notes, preserved"
+                )
+            elif current_hash == canonical_hash:
+                status = "unchanged"
+                owned_hashes[event] = canonical_hash
+            elif prev_hashes[event] is not None and current_hash != prev_hashes[event]:
+                status = "conflict"
+                owned_hashes[event] = str(prev_hashes[event])
+                conflicts.append(f"Codex {event} hook: locally modified, preserved")
+            else:
+                groups[index] = canonical
+                hooks[event] = groups
+                owned_hashes[event] = canonical_hash
+                status = "updated"
+                changed = True
+
+        action = _act(
+            "merge_json",
+            [f"hooks.{event}"],
+            f"install Codex {event} lifecycle hook ({status})",
+            status=status,
+        )
+        action["path"] = str(hooks_path)
+        actions.append(action)
+
+    if changed and not dry_run:
+        _save_json(hooks_path, document)
+    return actions, owned_hashes, conflicts, not existed_before
+
+
+def _unwire_codex_hooks(
+    hooks_path: Path,
+    recorded_hashes: dict[str, str | None],
+    *,
+    remove_created_file: bool,
+) -> tuple[list[dict], dict[str, str], list[str]]:
+    """Remove only unchanged, hash-owned agent-notes matcher groups."""
+    from agent_notes.codex_lifecycle import canonical_hook_groups
+
+    if not recorded_hashes:
+        return [], {}, []
+    document = _load_json(hooks_path)
+    raw_hooks = document.get("hooks", {})
+    if not isinstance(raw_hooks, dict):
+        return [], {
+            event: value
+            for event, value in recorded_hashes.items()
+            if value is not None
+        }, ["Codex hooks: malformed shared hooks object, preserved"]
+
+    actions: list[dict] = []
+    preserved: dict[str, str] = {}
+    warnings: list[str] = []
+    changed = False
+    for event, canonical in canonical_hook_groups().items():
+        if event not in recorded_hashes:
+            continue
+        command = canonical["hooks"][0]["command"]
+        groups = raw_hooks.get(event, [])
+        if not isinstance(groups, list):
+            if recorded_hashes[event] is not None:
+                preserved[event] = str(recorded_hashes[event])
+            warnings.append(f"Codex {event} hook: malformed event group, preserved")
+            continue
+        candidates = [
+            index
+            for index, group in enumerate(groups)
+            if _hook_group_has_command(group, str(command))
+        ]
+        matching = [
+            index
+            for index in candidates
+            if recorded_hashes[event] is None
+            or _json_hash(groups[index]) == recorded_hashes[event]
+        ]
+        if len(matching) == 1:
+            groups.pop(matching[0])
+            if groups:
+                raw_hooks[event] = groups
+            else:
+                raw_hooks.pop(event, None)
+            action = _act(
+                "remove_key",
+                [f"hooks.{event}"],
+                f"removed owned Codex {event} lifecycle hook",
+            )
+            action["path"] = str(hooks_path)
+            actions.append(action)
+            changed = True
+        elif not candidates:
+            # Already absent is safe and needs no retained ownership record.
+            continue
+        else:
+            if recorded_hashes[event] is not None:
+                preserved[event] = str(recorded_hashes[event])
+            warnings.append(f"Codex {event} hook: modified or duplicated, preserved")
+            action = _act(
+                "skip_key",
+                [f"hooks.{event}"],
+                f"Codex {event} lifecycle hook modified or duplicated, preserved",
+                status="conflict",
+            )
+            action["path"] = str(hooks_path)
+            actions.append(action)
+
+    if changed:
+        document["hooks"] = raw_hooks
+        if remove_created_file and not raw_hooks and set(document) == {"hooks"}:
+            hooks_path.unlink(missing_ok=True)
+        else:
+            _save_json(hooks_path, document)
+    return actions, preserved, warnings
+
+
+# ---------------------------------------------------------------------------
 # env resolution
 # ---------------------------------------------------------------------------
 
@@ -298,20 +608,31 @@ def _env_coerce(name: str, value: str) -> object:
 
 
 def _install_skills(
-    target: str, src_root: Path, dest_root: Path, dry_run: bool
-) -> tuple[list[dict], list[str]]:
-    """Install skills for a harness target. Returns (action_dicts, skill_names).
+    target: str,
+    src_root: Path,
+    dest_root: Path,
+    dry_run: bool,
+    prev_hashes: dict[str, str | None] | None = None,
+) -> tuple[list[dict], dict[str, str], list[str]]:
+    """Install skills for a harness target.
 
-    Reuses the tested discovery + per-file install logic from
-    :mod:`agent_notes.cli.skills` so idempotency semantics stay identical to
-    ``install-skills`` (Plan 004 §9 Q4).
+    Returns ``(action_dicts, skill_hashes, conflicts)``.
+
+    * ``skill_hashes`` — maps skill name to the SHA-256 of the content on disk
+      after install (or the prior hash if a conflict was detected).
+    * ``conflicts`` — human-readable messages for user-modified skills that
+      were preserved (Plan 019 Decision 5, WI-1.2).
+
+    Reuses the tested discovery logic from :mod:`agent_notes.cli.skills` so
+    skill discovery stays identical to ``install-skills`` (Plan 004 §9 Q4).
     """
+    prev_hashes = prev_hashes or {}
     skills = _discover_skills(src_root)
     actions: list[dict] = []
-    names: list[str] = []
+    skill_hashes: dict[str, str] = {}
+    conflicts: list[str] = []
     for src in skills:
         name = src.parent.name
-        names.append(name)
         src_content = src.read_text(encoding="utf-8")
         if target in ("claude", "hermes", "codex"):
             dest = dest_root / name / "SKILL.md"
@@ -319,19 +640,34 @@ def _install_skills(
         else:
             dest = dest_root / f"{name}.md"
             payload = _to_opencode_body(src_content)
-        status = _install_one(payload, dest, dry_run)
+        status, installed_hash, is_conflict = _install_tracked(
+            payload,
+            dest,
+            dry_run,
+            prev_hashes.get(name),
+            managed_before=name in prev_hashes,
+        )
+        if installed_hash is not None:
+            skill_hashes[name] = installed_hash
+        if is_conflict:
+            reason = (
+                "locally modified"
+                if name in prev_hashes
+                else "pre-existing and not owned by agent-notes"
+            )
+            conflicts.append(f"skill '{name}': {reason}, not overwritten")
         a = _act("create_file", [], f"install skill ({status})", status=status)
         a["path"] = str(dest)
         actions.append(a)
-    return actions, names
+    return actions, skill_hashes, conflicts
 
 
 def _install_opencode_agents(
     src_root: Path,
     dest_root: Path,
     dry_run: bool,
-    prev_agents: list[str],
-) -> tuple[list[dict], list[str]]:
+    prev_agents: dict[str, str | None],
+) -> tuple[list[dict], dict[str, str], list[str]]:
     """Install repo-local opencode subagent definitions.
 
     Copies the agent Markdown files from ``.opencode/agents/`` into the
@@ -339,33 +675,55 @@ def _install_opencode_agents(
     are read-only (edit denied) with limited ``agent-notes`` and ``git``
     bash access so they can drive the review gate without mutating code.
 
-    Returns (action_dicts, installed_agent_names). Preserves
-    previously-managed agents still on disk but no longer in the repo so
-    uninstall can remove orphaned files (mirror of the skill preservation
-    logic).
+    Returns ``(action_dicts, agent_hashes, conflicts)``.  Hash tracking is
+    identical to :func:`_install_skills` — a user-modified agent file is
+    preserved, not overwritten (Plan 019 Decision 5).
+
+    Preserves previously-managed agents still on disk but no longer in the
+    repo so uninstall can remove orphaned files (mirror of the skill
+    preservation logic).
     """
     actions: list[dict] = []
-    names: list[str] = []
+    agent_hashes: dict[str, str] = {}
+    conflicts: list[str] = []
     for filename in _OPENCODE_AGENT_FILES:
         src = src_root / filename
         if not src.is_file():
             continue
         dest = dest_root / filename
-        names.append(Path(filename).stem)
+        name = Path(filename).stem
         src_content = src.read_text(encoding="utf-8")
-        status = _install_one(src_content, dest, dry_run)
+        status, installed_hash, is_conflict = _install_tracked(
+            src_content,
+            dest,
+            dry_run,
+            prev_agents.get(name),
+            managed_before=name in prev_agents,
+        )
+        if installed_hash is not None:
+            agent_hashes[name] = installed_hash
+        if is_conflict:
+            reason = (
+                "locally modified"
+                if name in prev_agents
+                else "pre-existing and not owned by agent-notes"
+            )
+            conflicts.append(f"agent '{name}': {reason}, not overwritten")
         a = _act("create_file", [], f"install agent ({status})", status=status)
         a["path"] = str(dest)
         actions.append(a)
 
-    for name in prev_agents:
-        if name in names:
+    for name, recorded_hash in prev_agents.items():
+        if name in agent_hashes:
             continue
         af = dest_root / f"{name}.md"
         if af.is_file():
-            names.append(name)
+            if recorded_hash is not None:
+                agent_hashes[name] = recorded_hash
+            else:
+                agent_hashes[name] = _sha256_file(af)
 
-    return actions, names
+    return actions, agent_hashes, conflicts
 
 
 # ---------------------------------------------------------------------------
@@ -560,9 +918,7 @@ def _wire_env_hermes(
                 actions.append(_act("merge_env", [name], "already set (unchanged)"))
                 matching.append(name)
             else:
-                warns.append(
-                    f"{name}: existing value differs; kept existing (no clobber)"
-                )
+                warns.append(f"{name}: existing value differs; kept existing (no clobber)")
                 actions.append(_act("merge_env", [name], "kept existing (no clobber)"))
         elif name in managed_map_existing:
             # Key already in the managed block — check if value matches.
@@ -683,21 +1039,64 @@ def _install_harness_one(
     if not env_values:
         warns.append("no suite env vars found in process env; skills/plugin wired without env")
 
-    # Read the prior manifest first so we can preserve previously-managed keys
-    # that are still present but no longer in env_values (user unset a var
+    # Read the prior manifest first so we can (a) preserve previously-managed
+    # keys that are still present but no longer in env_values (user unset a var
     # between installs) — without this, re-install would drop them from the
-    # manifest and uninstall would leak them (review B1).
-    prev = _read_manifest(paths["manifest"]) if not dry_run else {}
+    # manifest and uninstall would leak them (review B1); and (b) detect
+    # user-modified skills/agents via hash comparison (Plan 019 Decision 5).
+    # Always read, even in dry-run, so conflicts are surfaced in --dry-run too.
+    # In dry-run mode, a corrupted manifest should not block the preview —
+    # fall back to an empty manifest with a warning (review Finding 3).
+    try:
+        prev = _read_manifest(paths["manifest"])
+    except RuntimeError as exc:
+        if not dry_run:
+            raise
+        warns.append(f"could not read manifest: {exc}")
+        prev = {}
     prev_env_keys = set(prev.get("env_keys", []))
     prev_plugin = bool(prev.get("plugin", False))
-    prev_skills = set(prev.get("skills", []))
+    prev_skill_hashes = _normalize_hash_map(prev.get("skills", []))
+    prev_agent_hashes = _normalize_hash_map(prev.get("agents", []))
+    prev_hook_hashes = _normalize_hook_hashes(prev.get("hooks", {}))
 
     # --- skills ---
-    skill_actions, skill_names = _install_skills(harness, src_root, skills_dest, dry_run)
+    skill_actions, skill_hashes, skill_conflicts = _install_skills(
+        harness, src_root, skills_dest, dry_run, prev_skill_hashes
+    )
+    warns += skill_conflicts
+    # Refuse the false green (WI-022): when the source resolves to zero skills
+    # the install must not report `installed / no_op: true`. Contract §4 bounds
+    # `no_op: true` to an already-installed idempotent state; an empty source is
+    # a failure, surfaced as an explicit action so --dry-run previews it too.
+    # This fires whether the default source path is wrong (e.g. an editable
+    # checkout whose package-internal skills/ is absent) or an operator-supplied
+    # --source points at an empty tree. Previously-manifested skills on disk do
+    # not change this: install-harness installs from the source, not from disk.
+    if not skill_actions:
+        msg = f"no skills found at source {src_root}"
+        warns.append(msg)
+        # `kind: "skip_file"` (not "create_file"): nothing is created — this
+        # action records a failed discovery. `status: "missing"` lets dry-run
+        # previews and consumers distinguish it from a real file write.
+        miss = _act("skip_file", [], msg, status="missing")
+        miss["path"] = str(src_root)
+        return (
+            {
+                "tool": TOOL_NAME,
+                "harness": harness,
+                "user": user,
+                "status": "failed",
+                "actions": [miss],
+                "no_op": False,
+                "warnings": warns,
+            },
+            warns,
+        )
     # Preserve previously-manifested skills still on disk but no longer in the
     # repo so uninstall can remove the orphaned files (review B1).
-    for name in prev_skills:
-        if name in skill_names:
+    for name, recorded_hash in prev_skill_hashes.items():
+        if name in skill_hashes:
             continue
         sf = (
             skills_dest / name / "SKILL.md"
@@ -705,18 +1104,22 @@ def _install_harness_one(
             else skills_dest / f"{name}.md"
         )
         if sf.is_file():
-            skill_names.append(name)
+            if recorded_hash is not None:
+                skill_hashes[name] = recorded_hash
+            else:
+                skill_hashes[name] = _sha256_file(sf)
 
     # --- opencode agents (opencode only) ---
     agent_actions: list[dict] = []
-    installed_agents: list[str] = []
+    installed_agent_hashes: dict[str, str] = {}
     if harness == "opencode":
-        agent_actions, installed_agents = _install_opencode_agents(
-            _opencode_agents_src_root(),
+        agent_actions, installed_agent_hashes, agent_conflicts = _install_opencode_agents(
+            _opencode_agents_src_root(source),
             paths["agents_dest"],
             dry_run,
-            prev.get("agents", []),
+            prev_agent_hashes,
         )
+        warns += agent_conflicts
 
     if user and harness == "opencode":
         warns.append(
@@ -729,6 +1132,8 @@ def _install_harness_one(
     # Codex config is never touched at all (Decision 4), so skip the JSON load.
     config = _load_json(config_path) if harness not in ("hermes", "codex") else {}
     config_actions: list[dict] = []
+    installed_hook_hashes: dict[str, str] = {}
+    hooks_file_created = bool(prev.get("hooks_file_created", False))
     env_managed: list[str] = []
     env_newly: list[str] = []
     plugin_newly = False
@@ -778,10 +1183,15 @@ def _install_harness_one(
                         env_managed.append(k)
         warns += hw
     elif harness == "codex":
-        # Codex: skills-only. No env/plugin/config wiring (Decision 4). agent-notes
-        # resolves shared config launcher-independently, so nothing is written into
-        # Codex config — the manifest below records only the installed skills.
-        pass
+        # Codex: no env/plugin/TOML wiring (Decision 4).  Merge only the two
+        # canonical lifecycle matcher groups into the shared hooks.json. Cairn
+        # and user groups remain untouched and are never adopted by ownership.
+        hook_actions, installed_hook_hashes, hook_conflicts, created_now = (
+            _wire_codex_hooks(paths["hooks"], dry_run, prev_hook_hashes)
+        )
+        config_actions += hook_actions
+        warns += hook_conflicts
+        hooks_file_created = hooks_file_created or created_now
     else:  # opencode
         # env -> agent-notes config file (the harness-independent fallback)
         agent_cfg = _load_json(agent_config_path)
@@ -820,7 +1230,7 @@ def _install_harness_one(
     agents_newly = any(a.get("status") in ("created", "updated") for a in agent_actions)
     any_newly = bool(env_newly or plugin_newly or agents_newly)
     no_op = all(_action_is_unchanged(a) for a in all_actions) and not any_newly
-
+    has_conflict = any(a.get("status") == "conflict" for a in all_actions)
     # --- manifest: record what install-harness manages (survives re-installs) ---
     if not dry_run:
         try:
@@ -835,23 +1245,34 @@ def _install_harness_one(
             "version": ver,
             "harness": harness,
             "env_keys": env_managed,
-            "skills": skill_names,
+            "skills": skill_hashes,
             "plugin": plugin_managed,
         }
+        if harness == "codex":
+            manifest_payload["hooks"] = installed_hook_hashes
+            manifest_payload["hooks_file_created"] = hooks_file_created
         if harness == "opencode":
-            manifest_payload["agents"] = installed_agents
+            manifest_payload["agents"] = installed_agent_hashes
         _write_manifest(
             paths["manifest"],
             manifest_payload,
         )
 
+    # Contract §4: status is one of installed|degraded|unsupported|failed.
+    # A conflict (user-modified file preserved) means the install did not
+    # complete safely → "failed".  In dry-run the status still reflects the
+    # conflict (the preview detected an unsafe condition), but the exit code
+    # remains 2 (dry-run takes precedence in the exit-code logic).
+    install_status = "failed" if has_conflict else "installed"
+
     result = {
         "tool": TOOL_NAME,
         "harness": harness,
         "user": user,
-        "status": "installed",
+        "status": install_status,
         "actions": all_actions,
         "no_op": no_op,
+        "warnings": warns,
     }
     return result, warns
 
@@ -874,6 +1295,7 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
                 "actions": [],
                 "no_op": True,
                 "uninstalled": True,
+                "warnings": [],
             },
             [],
         )
@@ -890,6 +1312,17 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
             for p in (plugins if isinstance(plugins, list) else [])
         ):
             manifest["plugin"] = True
+
+    # --- remove Codex lifecycle groups (Codex only) ---
+    preserved_hooks: dict[str, str] = {}
+    if harness == "codex":
+        hook_actions, preserved_hooks, hook_warnings = _unwire_codex_hooks(
+            paths["hooks"],
+            _normalize_hook_hashes(manifest.get("hooks", {})),
+            remove_created_file=bool(manifest.get("hooks_file_created", False)),
+        )
+        actions += hook_actions
+        warns += hook_warnings
 
     # --- remove env keys ---
     env_keys: list[str] = manifest.get("env_keys", [])
@@ -973,26 +1406,46 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
                 _save_json(paths["config"], oc_cfg)
 
     # --- remove opencode agents (opencode only) ---
-    agent_names: list[str] = manifest.get("agents", [])
-    if harness == "opencode" and agent_names:
+    agent_hashes = _normalize_hash_map(manifest.get("agents", []))
+    preserved_agents: dict[str, str] = {}
+    if harness == "opencode" and agent_hashes:
         agents_dest = paths["agents_dest"]
-        for name in agent_names:
+        for name, recorded_hash in agent_hashes.items():
             agent_file = agents_dest / f"{name}.md"
             if agent_file.is_file():
+                if recorded_hash is not None:
+                    on_disk = _sha256_file(agent_file)
+                    if on_disk != recorded_hash:
+                        warns.append(f"agent '{name}': locally modified, preserved")
+                        a = _act("skip_file", [], "agent locally modified, preserved")
+                        a["path"] = str(agent_file)
+                        actions.append(a)
+                        preserved_agents[name] = recorded_hash
+                        continue
                 agent_file.unlink()
                 a = _act("remove_file", [], "removed agent")
                 a["path"] = str(agent_file)
                 actions.append(a)
 
     # --- remove skills ---
-    skill_names: list[str] = manifest.get("skills", [])
+    skill_hashes = _normalize_hash_map(manifest.get("skills", []))
+    preserved_skills: dict[str, str] = {}
     skills_dest = paths["skills_dest"]
-    for name in skill_names:
+    for name, recorded_hash in skill_hashes.items():
         if harness in ("claude", "hermes", "codex"):
             skill_file = skills_dest / name / "SKILL.md"
         else:
             skill_file = skills_dest / f"{name}.md"
         if skill_file.is_file():
+            if recorded_hash is not None:
+                on_disk = _sha256_file(skill_file)
+                if on_disk != recorded_hash:
+                    warns.append(f"skill '{name}': locally modified, preserved")
+                    a = _act("skip_file", [], "skill locally modified, preserved")
+                    a["path"] = str(skill_file)
+                    actions.append(a)
+                    preserved_skills[name] = recorded_hash
+                    continue
             skill_file.unlink()
             a = _act("remove_file", [], "removed skill")
             a["path"] = str(skill_file)
@@ -1006,16 +1459,39 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
             ):
                 parent.rmdir()
 
-    _remove_manifest(paths["manifest"])
+    # If any skills/agents were preserved (user-modified), retain a reduced
+    # manifest so a future install-harness can detect the conflict via hash
+    # comparison. Without this, the next install would see no manifest, treat
+    # the files as first-install (recorded_hash=None), and silently overwrite
+    # the user's modifications (review Finding 1).
+    if preserved_skills or preserved_agents or preserved_hooks:
+        reduced: dict = {
+            "tool": TOOL_NAME,
+            "version": manifest.get("version", "unknown"),
+            "harness": harness,
+            "env_keys": [],
+            "skills": preserved_skills,
+            "plugin": False,
+        }
+        if harness == "opencode" and preserved_agents:
+            reduced["agents"] = preserved_agents
+        if harness == "codex" and preserved_hooks:
+            reduced["hooks"] = preserved_hooks
+            reduced["hooks_file_created"] = bool(manifest.get("hooks_file_created", False))
+        _write_manifest(paths["manifest"], reduced)
+    else:
+        _remove_manifest(paths["manifest"])
 
+    has_preserved = bool(preserved_skills or preserved_agents or preserved_hooks)
     result = {
         "tool": TOOL_NAME,
         "harness": harness,
         "user": None,
-        "status": "installed",
+        "status": "failed" if has_preserved else "installed",
         "actions": actions,
         "no_op": not actions,
         "uninstalled": True,
+        "warnings": warns,
     }
     return result, warns
 
@@ -1046,8 +1522,7 @@ def cmd_install_harness(args: argparse.Namespace) -> int:
     targets = _targets_for(harness)
     if not targets:
         print(
-            f"Unknown harness: {harness!r} "
-            f"(expected: claude|opencode|codex|hermes|all)",
+            f"Unknown harness: {harness!r} (expected: claude|opencode|codex|hermes|all)",
             file=sys.stderr,
         )
         return EXIT_GENERIC
@@ -1070,11 +1545,17 @@ def cmd_install_harness(args: argparse.Namespace) -> int:
         results.append(res)
         all_warns += warns
 
+    # Contract §4 exit codes: 0 success, 1 failed/unsupported, 2 dry-run.
+    # Unsupported takes precedence over dry-run (contract: "unsupported
+    # takes precedence over the informational dry-run state").  A failed
+    # status (conflict in non-dry-run) exits 1; in dry-run the preview
+    # completed, so exit 2.
     has_unsupported = any(res.get("status") == "unsupported" for res in results)
+    has_failed = any(res.get("status") == "failed" for res in results)
     exit_code = (
         EXIT_GENERIC
         if has_unsupported
-        else (EXIT_DRY_RUN if dry_run else EXIT_SUCCESS)
+        else (EXIT_DRY_RUN if dry_run else (EXIT_GENERIC if has_failed else EXIT_SUCCESS))
     )
 
     if use_json or dry_run:
@@ -1093,13 +1574,15 @@ def cmd_install_harness(args: argparse.Namespace) -> int:
                     print(f"  {action['kind']}: {action.get('detail', '')}")
                 continue
             verb = "Uninstalled" if uninstall else "Installed"
-            if res["no_op"]:
+            if res.get("status") == "failed":
+                print(f"[{res['harness']}] {verb} with conflicts (user-modified files preserved).")
+            elif res["no_op"]:
                 print(f"[{res['harness']}] already wired (no-op).")
             else:
                 n = len(res["actions"])
                 print(f"[{res['harness']}] {verb}: {n} action(s).")
-                for a in res["actions"]:
-                    print(f"  {a['kind']}: {a.get('path', '')} — {a.get('detail', '')}")
+            for a in res["actions"]:
+                print(f"  {a['kind']}: {a.get('path', '')} — {a.get('detail', '')}")
         print(f"exit {exit_code}")
 
     for w in all_warns:

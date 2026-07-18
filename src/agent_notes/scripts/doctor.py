@@ -131,7 +131,28 @@ def _check_embedding() -> tuple[bool, str]:
         return False, _sanitize_conn_error(exc)
 
 
-def _check_links_audit() -> tuple[bool, str]:
+def _check_links_audit() -> tuple[bool | None, str]:
+    """Audit referential integrity of the local links table.
+
+    Two classes of edges live in ``links``:
+
+    * **Strict referential edges** — ``from_kind='work_item'`` source rows and
+      any memory-to-memory edge whose ``relationship`` is in the strict set
+      (``supersedes``, ``derived_from``, ``replaces``). These must resolve to a
+      row that exists in this database; a dangling strict edge is a real
+      integrity violation and fails the audit.
+
+    * **Soft knowledge-graph edges** — auto-created ``relates_to`` wikilinks
+      (see ``memory_model._auto_create_wikilinks``). The link writer intentionally
+      stores these with ``to_project = from_project`` even when the wikilink
+      target is a foreign-project or workspace-scoped anchor (e.g. a memory
+      body that says ``[[project-gpo-lens]]`` or ``[[user-central-pillars]]``).
+      Such targets legitimately do not exist in the local DB, so a dangling
+      ``relates_to`` memory edge is a **cross-project knowledge reference**,
+      not an integrity violation. These are reported as informational
+      (``skip``) rather than failing the audit, with the count disclosed so an
+      operator can see how many foreign references are unrouted.
+    """
     try:
         from agent_notes.core.db import _conn
 
@@ -148,6 +169,7 @@ def _check_links_audit() -> tuple[bool, str]:
             )
             dangle_wi_from = cur.fetchone()["cnt"]
 
+            # Strict memory edges: anything that is not a soft relates_to wikilink.
             cur.execute(
                 """
                 SELECT COUNT(*) AS cnt FROM links l
@@ -155,10 +177,12 @@ def _check_links_audit() -> tuple[bool, str]:
                   ON m.project_id = l.to_project
                   AND m.name = l.to_identifier
                   AND m.active = true
-                WHERE l.to_kind = 'memory' AND m.id IS NULL
+                WHERE l.to_kind = 'memory'
+                  AND m.id IS NULL
+                  AND COALESCE(l.relationship, '') <> 'relates_to'
                 """
             )
-            dangle_mem_to = cur.fetchone()["cnt"]
+            dangle_mem_to_strict = cur.fetchone()["cnt"]
 
             cur.execute(
                 """
@@ -167,17 +191,42 @@ def _check_links_audit() -> tuple[bool, str]:
                   ON m.project_id = l.from_project
                   AND m.name = l.from_identifier
                   AND m.active = true
-                WHERE l.from_kind = 'memory' AND m.id IS NULL
+                WHERE l.from_kind = 'memory'
+                  AND m.id IS NULL
+                  AND COALESCE(l.relationship, '') <> 'relates_to'
                 """
             )
-            dangle_mem_from = cur.fetchone()["cnt"]
+            dangle_mem_from_strict = cur.fetchone()["cnt"]
 
-        total = dangle_wi_from + dangle_mem_to + dangle_mem_from
-        if total:
+            # Soft cross-project knowledge references (relates_to wikilinks whose
+            # target lives in a sibling project's DB). Informational only.
+            cur.execute(
+                """
+                SELECT COUNT(*) AS cnt FROM links l
+                LEFT JOIN memories m
+                  ON m.project_id = l.to_project
+                  AND m.name = l.to_identifier
+                  AND m.active = true
+                WHERE l.to_kind = 'memory'
+                  AND m.id IS NULL
+                  AND COALESCE(l.relationship, '') = 'relates_to'
+                """
+            )
+            cross_project_refs = cur.fetchone()["cnt"]
+
+        strict_total = dangle_wi_from + dangle_mem_to_strict + dangle_mem_from_strict
+        if strict_total:
             return (
                 False,
-                f"Dangling links: work_item-from={dangle_wi_from}, "
-                f"memory-to={dangle_mem_to}, memory-from={dangle_mem_from}",
+                f"Dangling strict links: work_item-from={dangle_wi_from}, "
+                f"memory-to={dangle_mem_to_strict}, "
+                f"memory-from={dangle_mem_from_strict}",
+            )
+        if cross_project_refs:
+            return (
+                None,
+                f"No dangling strict links; {cross_project_refs} cross-project "
+                f"relates_to reference(s) resolve in sibling DBs",
             )
         return True, "No dangling links"
     except Exception as exc:
@@ -366,7 +415,7 @@ def _check_chain_ok() -> tuple[bool | None, str]:
         return False, f"chain verification error: {type(exc).__name__}"
 
 
-def _check_skills_installed() -> tuple[bool, str]:
+def _check_skills_installed() -> tuple[bool | None, str]:
     """Detect whether the agent-notes skills are present in either harness."""
     try:
         from agent_notes.cli.skills import _discover_skills, _repo_skills_root
@@ -378,13 +427,13 @@ def _check_skills_installed() -> tuple[bool, str]:
         # install whose repo root is elsewhere).
         return None, "skills source unreadable (informational)"
     # (install_dir, is_claude_layout) — the layout differs per harness.
-    from agent_notes.cli.harness import _codex_home
-
     layouts = [
         (Path.home() / ".claude" / "skills", True),
         (Path.home() / ".config" / "opencode" / "command", False),
         (Path.home() / ".hermes" / "skills", True),
-        (_codex_home() / "skills", True),  # Codex: SKILL.md layout, $CODEX_HOME/skills
+        # Codex user-scoped shared skills: $HOME/.agents/skills (suite contract
+        # §2 Codex; Plan 019 Decision 2 restored 2026-07-18). SKILL.md layout.
+        (Path.home() / ".agents" / "skills", True),
     ]
     found: list[str] = []
     for install_dir, is_claude in layouts:
@@ -412,6 +461,194 @@ def _check_harness_wired() -> tuple[bool, str]:
     if not wired:
         return False, "no harness manifest found (run 'agent-notes install-harness <harness>')"
     return True, f"harness wired: {', '.join(wired)}"
+
+
+def _check_codex_harness() -> tuple[bool | None, str]:
+    """Report plugin/direct/duplicate/stale Codex lifecycle states.
+
+    The generic skills/manifest checks above answer whether *any* harness is
+    installed. They cannot prove Codex readiness: a healthy Claude install
+    must not hide a requested Codex install whose shared skills are missing or
+    locally modified. A Codex ownership manifest is the request/configuration
+    signal for this component-owned fallback installer. When it is absent the
+    check is informational (the suite may instead own plugin installation);
+    once present, every canonical skill and recorded hook-group hash must agree.
+    Hook trust itself is intentionally named ``trust-unverified``: Codex exposes
+    review through interactive ``/hooks`` but no machine-readable trust probe.
+    """
+    from agent_notes.cli.harness import (
+        _harness_paths,
+        _hook_group_has_command,
+        _json_hash,
+        _load_json,
+        _normalize_hash_map,
+        _normalize_hook_hashes,
+        _read_manifest,
+        _sha256_file,
+    )
+    from agent_notes.cli.skills import _discover_skills, _repo_skills_root
+    from agent_notes.codex_lifecycle import canonical_hook_groups
+
+    paths = _harness_paths("codex")
+    manifest_path = paths["manifest"]
+    plugin_state, plugin_detail = _probe_codex_agent_notes_plugin()
+    if not manifest_path.is_file():
+        if plugin_state == "enabled":
+            return True, "codex: plugin wired (trust-unverified via /hooks)"
+        if plugin_state == "disabled":
+            return False, "codex: plugin disabled (trust-unverified via /hooks)"
+        if plugin_state == "stale":
+            return False, f"codex: plugin stale ({plugin_detail}; trust-unverified via /hooks)"
+        if plugin_state == "unknown":
+            return None, (
+                "codex: absent (no direct manifest; plugin state unavailable: "
+                f"{plugin_detail})"
+            )
+        return None, "codex: absent (no plugin and no direct-install ownership manifest)"
+
+    try:
+        manifest = _read_manifest(manifest_path)
+    except RuntimeError as exc:
+        return False, f"codex: stale (unreadable manifest: {type(exc).__name__})"
+
+    if manifest.get("harness") != "codex":
+        return False, "codex: stale (ownership manifest names a different harness)"
+
+    try:
+        sources = {
+            path.parent.name: path for path in _discover_skills(_repo_skills_root())
+        }
+    except Exception as exc:
+        return False, f"codex: stale (canonical skills unreadable: {type(exc).__name__})"
+    if not sources:
+        return False, "codex: stale (canonical skill assets are missing)"
+
+    recorded = _normalize_hash_map(manifest.get("skills"))
+    if not recorded:
+        return False, "codex: stale (manifest records no owned skills)"
+
+    problems: list[str] = []
+    for name, source in sorted(sources.items()):
+        recorded_hash = recorded.get(name)
+        target = paths["skills_dest"] / name / "SKILL.md"
+        if name not in recorded:
+            problems.append(f"{name}: untracked")
+            continue
+        if recorded_hash is None:
+            problems.append(f"{name}: legacy manifest hash missing")
+            continue
+        if not target.is_file():
+            problems.append(f"{name}: installed file missing")
+            continue
+        target_hash = _sha256_file(target)
+        source_hash = _sha256_file(source)
+        if target_hash != recorded_hash:
+            problems.append(f"{name}: installed file modified")
+        elif source_hash != recorded_hash:
+            problems.append(f"{name}: installed version outdated")
+
+    recorded_hooks = _normalize_hook_hashes(manifest.get("hooks"))
+    canonical = canonical_hook_groups()
+    if set(recorded_hooks) != set(canonical):
+        missing = sorted(set(canonical) - set(recorded_hooks))
+        extra = sorted(set(recorded_hooks) - set(canonical))
+        if missing:
+            problems.append("hooks untracked: " + ", ".join(missing))
+        if extra:
+            problems.append("unknown hook ownership: " + ", ".join(extra))
+    try:
+        hook_document = _load_json(paths["hooks"])
+    except RuntimeError as exc:
+        problems.append(f"hooks unreadable: {type(exc).__name__}")
+        hook_document = {}
+    live_hooks = hook_document.get("hooks", {})
+    if not isinstance(live_hooks, dict):
+        problems.append("hooks document has a non-object hooks value")
+        live_hooks = {}
+    for event, group in canonical.items():
+        expected_hash = recorded_hooks.get(event)
+        command = group["hooks"][0]["command"]
+        groups = live_hooks.get(event, [])
+        candidates = (
+            [g for g in groups if _hook_group_has_command(g, str(command))]
+            if isinstance(groups, list)
+            else []
+        )
+        if len(candidates) == 0:
+            problems.append(f"{event} hook missing")
+        elif len(candidates) > 1:
+            problems.append(f"{event} hook duplicated")
+        elif expected_hash is None:
+            problems.append(f"{event} hook ownership hash missing")
+        elif _json_hash(candidates[0]) != expected_hash:
+            problems.append(f"{event} hook modified")
+
+    if problems:
+        return False, "codex: stale (" + "; ".join(problems) + ")"
+    if plugin_state in {"enabled", "stale"}:
+        return False, (
+            "codex: duplicate (plugin and direct lifecycle hooks configured; "
+            "remove the direct fallback; trust-unverified via /hooks)"
+        )
+    if plugin_state == "unknown":
+        return False, (
+            "codex: direct wired but plugin state unavailable "
+            f"({plugin_detail}; trust-unverified via /hooks)"
+        )
+    return True, (
+        f"codex: direct wired ({len(sources)} canonical skills and lifecycle hooks current; "
+        "trust-unverified via /hooks)"
+    )
+
+
+def _probe_codex_agent_notes_plugin() -> tuple[str, str]:
+    """Return enabled/disabled/stale/absent/unknown from Codex's CLI probe."""
+    import importlib.metadata
+    import shutil
+    import subprocess
+
+    if shutil.which("codex") is None:
+        return "absent", "Codex CLI not installed"
+    try:
+        completed = subprocess.run(
+            ("codex", "plugin", "list", "--json"),
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return "unknown", type(exc).__name__
+    if completed.returncode != 0:
+        return "unknown", "codex plugin list failed"
+    try:
+        payload = json.loads(completed.stdout)
+    except ValueError:
+        return "unknown", "codex plugin list emitted invalid JSON"
+    installed = payload.get("installed") if isinstance(payload, dict) else None
+    if not isinstance(installed, list):
+        return "unknown", "codex plugin list omitted installed entries"
+    matches = [
+        entry
+        for entry in installed
+        if isinstance(entry, dict) and entry.get("name") == "agent-notes"
+    ]
+    if not matches:
+        return "absent", "agent-notes plugin not installed"
+    enabled = [entry for entry in matches if entry.get("enabled") is not False]
+    if enabled:
+        try:
+            expected_version = importlib.metadata.version("agent-notes")
+        except importlib.metadata.PackageNotFoundError:
+            expected_version = "1.0.0"
+        versions = {entry.get("version") for entry in enabled}
+        if versions != {expected_version}:
+            return (
+                "stale",
+                f"installed version(s) {sorted(str(v) for v in versions)}; "
+                f"component version {expected_version}",
+            )
+        return "enabled", "agent-notes plugin installed and enabled"
+    return "disabled", "agent-notes plugin installed but disabled"
 
 
 def _check_secrets_backend(cfg: reg_config.RegistaConfig) -> tuple[bool | None, str]:
@@ -712,6 +949,9 @@ def run_json(check_embed: bool = False) -> tuple[dict, int]:
     ok, msg = _check_harness_wired()
     add("harness_wired", ok, msg)
 
+    ok, msg = _check_codex_harness()
+    add("codex_harness", ok, msg)
+
     ok, msg = _check_secrets_backend(cfg)
     add("secrets_backend", ok, msg)
 
@@ -859,9 +1099,17 @@ def run(skip_embed: bool = False, check_embed: bool = False) -> int:
     _print_result(ok, msg)
     all_ok = all_ok and ok
 
+    ok, msg = _check_codex_harness()
+    _print_section("13. Codex Harness")
+    if ok is None:
+        print(f"  SKIP: {msg}")
+    else:
+        _print_result(ok, msg)
+        all_ok = all_ok and ok
+
     cfg = reg_config.regista_config()
     reachable, reach_msg = _check_regista_reachable(cfg)
-    _print_section("13. Regista Reachable")
+    _print_section("14. Regista Reachable")
     if reachable is None:
         print(f"  SKIP: {reach_msg}")
     else:
@@ -869,7 +1117,7 @@ def run(skip_embed: bool = False, check_embed: bool = False) -> int:
         all_ok = all_ok and reachable
 
     ok, msg = _check_secrets_backend(cfg)
-    _print_section("14. Secrets Backend")
+    _print_section("15. Secrets Backend")
     if ok is None:
         print(f"  SKIP: {msg}")
     else:
@@ -877,7 +1125,7 @@ def run(skip_embed: bool = False, check_embed: bool = False) -> int:
         all_ok = all_ok and ok
 
     ok, msg = _check_memory_provider()
-    _print_section("15. Memory Provider")
+    _print_section("16. Memory Provider")
     if ok is None:
         print(f"  SKIP: {msg}")
     else:

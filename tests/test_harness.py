@@ -59,9 +59,7 @@ def _make_opencode_agents(td: Path, *extra: str) -> Path:
     agents_dir = td / ".opencode" / "agents"
     agents_dir.mkdir(parents=True)
     for filename in ("glm.md", "kimi.md", *extra):
-        (agents_dir / filename).write_text(
-            "---\ndescription: stub\nmode: subagent\n---\nstub\n"
-        )
+        (agents_dir / filename).write_text("---\ndescription: stub\nmode: subagent\n---\nstub\n")
     return agents_dir
 
 
@@ -343,7 +341,7 @@ def test_all_target_expands_supported_public_targets_only():
         assert not (td / ".config" / "opencode").exists()
 
 
-def test_codex_install_writes_skills_only_no_config():
+def test_codex_install_writes_skills_and_owned_hooks_but_no_toml_config():
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         src = _make_skill_tree(td)
@@ -363,17 +361,31 @@ def test_codex_install_writes_skills_only_no_config():
         assert data["harness"] == "codex"
         assert data["status"] == "installed"
         assert data["no_op"] is False
-        # Skills land in Codex's own auto-discovery dir, SKILL.md layout.
-        assert (td / ".codex" / "skills" / "demo" / "SKILL.md").is_file()
+        # Skills land at $HOME/.agents/skills (suite contract §2 Codex; Plan 019
+        # Decision 2 restored), SKILL.md layout — NOT under $CODEX_HOME/skills.
+        assert (td / ".agents" / "skills" / "demo" / "SKILL.md").is_file()
+        assert not (td / ".codex" / "skills").exists()
         # Decision 4: Codex config is never written (no secret/config leak).
         assert not (td / ".codex" / "config.toml").exists()
+        hooks = json.loads((td / ".codex" / "hooks.json").read_text())
+        assert set(hooks["hooks"]) == {"SessionStart", "Stop"}
+        assert hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"] == (
+            "agent-notes codex-hook session-start"
+        )
+        assert hooks["hooks"]["Stop"][0]["hooks"][0]["command"] == (
+            "agent-notes codex-hook stop"
+        )
         # No env leaked into the agent-notes config file either.
         assert not config_path(home=td).exists()
-        # Manifest records the installed skill and no env/plugin.
+        # Manifest stays under $CODEX_HOME as a stable ownership sidecar and
+        # records the installed skill and no env/plugin.
         man = json.loads((td / ".codex" / ".agent-notes-harness.json").read_text())
-        assert man["skills"] == ["demo"]
+        assert "demo" in man["skills"]
+        assert isinstance(man["skills"]["demo"], str)
         assert man["env_keys"] == []
         assert man["plugin"] is False
+        assert set(man["hooks"]) == {"SessionStart", "Stop"}
+        assert man["hooks_file_created"] is True
 
 
 def test_codex_reinstall_is_noop():
@@ -392,12 +404,20 @@ def test_codex_dry_run_writes_nothing():
         td = Path(td)
         src = _make_skill_tree(td)
         result = _run(
-            "install-harness", "codex", "--dry-run",
-            "--source", str(src), "--home", str(td), "--json",
-            env=_SUITE_ENV, check=False,
+            "install-harness",
+            "codex",
+            "--dry-run",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            env=_SUITE_ENV,
+            check=False,
         )
         assert result.returncode == 2
         assert not (td / ".codex").exists()
+        assert not (td / ".agents").exists()
 
 
 def test_codex_uninstall_removes_skills_and_manifest():
@@ -405,22 +425,266 @@ def test_codex_uninstall_removes_skills_and_manifest():
         td = Path(td)
         src = _make_skill_tree(td)
         _run(
-            "install-harness", "codex", "--source", str(src), "--home", str(td), "--json",
-            env=_SUITE_ENV, check=False,
+            "install-harness",
+            "codex",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            env=_SUITE_ENV,
+            check=False,
         )
         # A user's own skill must survive uninstall (only tracked files removed).
-        user_skill = td / ".codex" / "skills" / "mine" / "SKILL.md"
+        user_skill = td / ".agents" / "skills" / "mine" / "SKILL.md"
         user_skill.parent.mkdir(parents=True)
         user_skill.write_text("---\nname: mine\n---\nkeep me\n")
 
         result = _run(
-            "install-harness", "codex", "--uninstall", "--home", str(td), "--json",
+            "install-harness",
+            "codex",
+            "--uninstall",
+            "--home",
+            str(td),
+            "--json",
             check=False,
         )
         assert result.returncode == 0, result.stderr
-        assert not (td / ".codex" / "skills" / "demo").exists()
+        assert not (td / ".agents" / "skills" / "demo").exists()
         assert not (td / ".codex" / ".agent-notes-harness.json").exists()
+        assert not (td / ".codex" / "hooks.json").exists()
         assert user_skill.is_file()  # untracked user skill preserved
+
+
+def test_codex_hooks_merge_and_uninstall_preserve_cairn_and_user_groups():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        hooks_path = td / ".codex" / "hooks.json"
+        hooks_path.parent.mkdir(parents=True)
+        original = {
+            "description": "operator-owned hooks",
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "cairn _codex_hook SessionStart",
+                            }
+                        ]
+                    }
+                ],
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [{"type": "command", "command": "user-policy"}],
+                    }
+                ],
+            },
+        }
+        hooks_path.write_text(json.dumps(original), encoding="utf-8")
+
+        install = _run(
+            "install-harness",
+            "codex",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            check=False,
+        )
+        assert install.returncode == 0, install.stderr
+        installed = json.loads(hooks_path.read_text())
+        assert installed["description"] == "operator-owned hooks"
+        assert len(installed["hooks"]["SessionStart"]) == 2
+        assert installed["hooks"]["PreToolUse"] == original["hooks"]["PreToolUse"]
+
+        uninstall = _run(
+            "install-harness",
+            "codex",
+            "--uninstall",
+            "--home",
+            str(td),
+            "--json",
+            check=False,
+        )
+        assert uninstall.returncode == 0, uninstall.stderr
+        assert json.loads(hooks_path.read_text()) == original
+
+
+def test_codex_modified_owned_hook_is_preserved_and_reported():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        common = ["install-harness", "codex", "--source", str(src), "--home", str(td)]
+        _run(*common, "--json", check=False)
+        hooks_path = td / ".codex" / "hooks.json"
+        hooks = json.loads(hooks_path.read_text())
+        hooks["hooks"]["Stop"][0]["hooks"][0]["timeout"] = 99
+        hooks_path.write_text(json.dumps(hooks), encoding="utf-8")
+
+        reinstall = _run(*common, "--json", check=False)
+        assert reinstall.returncode == 1
+        assert json.loads(reinstall.stdout)["status"] == "failed"
+        assert "locally modified" in reinstall.stderr
+        assert json.loads(hooks_path.read_text())["hooks"]["Stop"][0]["hooks"][0][
+            "timeout"
+        ] == 99
+
+        uninstall = _run(
+            "install-harness", "codex", "--uninstall", "--home", str(td), "--json", check=False
+        )
+        assert uninstall.returncode == 1
+        assert hooks_path.is_file()
+        assert "Stop" in json.loads(hooks_path.read_text())["hooks"]
+        manifest = json.loads((td / ".codex" / ".agent-notes-harness.json").read_text())
+        assert set(manifest["hooks"]) == {"Stop"}
+
+
+def test_codex_preexisting_same_command_hook_is_not_adopted():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        hooks_path = td / ".codex" / "hooks.json"
+        hooks_path.parent.mkdir(parents=True)
+        hooks_path.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "Stop": [
+                            {
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": "agent-notes codex-hook stop",
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = _run(
+            "install-harness",
+            "codex",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            check=False,
+        )
+        assert result.returncode == 1
+        assert "pre-existing and not owned" in result.stderr
+        manifest = json.loads((td / ".codex" / ".agent-notes-harness.json").read_text())
+        assert set(manifest["hooks"]) == {"SessionStart"}
+
+
+def test_empty_source_fails_not_false_green():
+    """An empty/missing skills source must not report installed/no_op (WI-022).
+
+    Contract §4 bounds `no_op: true` to an already-installed idempotent state.
+    A source that resolves to zero skills is a failure surfaced with an explicit
+    action, in both real and dry-run modes, for every harness.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        empty_src = td / "empty-skills"
+        empty_src.mkdir()
+        for harness in ("claude", "codex"):
+            # Real install: status=failed, no_op=false, exit 1.
+            result = _run(
+                "install-harness",
+                harness,
+                "--source",
+                str(empty_src),
+                "--home",
+                str(td),
+                "--json",
+                check=False,
+            )
+            assert result.returncode == 1, (harness, result.stderr)
+            data = json.loads(result.stdout)
+            assert data["status"] == "failed", harness
+            assert data["no_op"] is False, harness
+            assert any(a.get("status") == "missing" for a in data["actions"]), harness
+            # Nothing written despite the failure.
+            assert not (td / ".claude").exists()
+            assert not (td / ".agents").exists()
+
+            # Dry-run previews the same failure (status=failed in the payload;
+            # exit code is 2 because dry-run completed, per contract §4).
+            dry = _run(
+                "install-harness",
+                harness,
+                "--dry-run",
+                "--source",
+                str(empty_src),
+                "--home",
+                str(td),
+                "--json",
+                check=False,
+            )
+            assert dry.returncode == 2, (harness, dry.stderr)
+            dry_data = json.loads(dry.stdout)
+            assert dry_data["status"] == "failed", harness
+            assert dry_data["no_op"] is False, harness
+
+
+def test_codex_install_uses_home_agents_skills_not_codex_home():
+    """Codex skills must land under $HOME/.agents/skills, never $CODEX_HOME/skills
+    (suite contract §2 Codex). Regression guard for the WI-022 location bug."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        result = _run(
+            "install-harness",
+            "codex",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            env=_SUITE_ENV,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert (td / ".agents" / "skills" / "demo" / "SKILL.md").is_file()
+        # The old, wrong location must remain empty.
+        assert not (td / ".codex" / "skills").exists()
+
+
+def test_file_path_source_fails_gracefully_not_traceback():
+    """An operator --source that points at a file (not a dir) must surface a
+    contract-shaped failure, not a NotADirectoryError traceback (WI-022).
+    Guards the _discover_skills non-directory handling the false-green guard
+    relies on."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        not_a_dir = td / "skills.txt"
+        not_a_dir.write_text("this is a file, not a skills tree\n")
+        result = _run(
+            "install-harness",
+            "claude",
+            "--source",
+            str(not_a_dir),
+            "--home",
+            str(td),
+            "--json",
+            check=False,
+        )
+        assert result.returncode == 1, result.stderr
+        assert "Traceback" not in result.stderr, "must not crash with a traceback"
+        data = json.loads(result.stdout)
+        assert data["status"] == "failed"
+        assert data["no_op"] is False
+        miss = [a for a in data["actions"] if a.get("status") == "missing"]
+        assert len(miss) == 1
 
 
 def test_user_flag_sets_principal_id():
@@ -570,9 +834,7 @@ def test_opencode_no_clobber_keeps_existing_different_value():
         # Pre-populate the agent-notes config with a user-set regista.dsn.
         _cfg = config_path(home=td)
         _cfg.parent.mkdir(parents=True, exist_ok=True)
-        _cfg.write_text(
-            json.dumps({"regista": {"dsn": "postgresql://user-set/x"}})
-        )
+        _cfg.write_text(json.dumps({"regista": {"dsn": "postgresql://user-set/x"}}))
         result = _run(
             "install-harness",
             "opencode",
@@ -841,3 +1103,572 @@ def test_hermes_reinstall_with_fewer_env_vars_preserves_manifest_tracking():
         _run("install-harness", "hermes", "--uninstall", "--home", str(td), "--json", check=False)
         env_content = (td / ".hermes" / ".env").read_text()
         assert "REGISTA_DSN" not in env_content
+
+
+# ---------------------------------------------------------------------------
+# hash-tracked ownership (Plan 019 Decision 5, WI-1.2)
+# ---------------------------------------------------------------------------
+
+
+def test_first_install_preserves_preexisting_unowned_skill():
+    """A conflicting file with no ownership manifest is never overwritten or
+    adopted, so a later uninstall cannot delete another installer's skill."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        skill_file = td / ".agents" / "skills" / "demo" / "SKILL.md"
+        skill_file.parent.mkdir(parents=True)
+        skill_file.write_text("---\nname: demo\n---\nowned elsewhere\n")
+
+        result = _run(
+            "install-harness",
+            "codex",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            check=False,
+        )
+        data = json.loads(result.stdout)
+
+        assert result.returncode == 1
+        assert data["status"] == "failed"
+        assert data["actions"][0]["status"] == "conflict"
+        assert "owned elsewhere" in skill_file.read_text()
+        manifest = json.loads((td / ".codex" / ".agent-notes-harness.json").read_text())
+        assert "demo" not in manifest["skills"]
+
+        uninstall = _run(
+            "install-harness",
+            "codex",
+            "--uninstall",
+            "--home",
+            str(td),
+            "--json",
+            check=False,
+        )
+        assert uninstall.returncode == 0
+        assert "owned elsewhere" in skill_file.read_text()
+
+
+def test_first_install_does_not_adopt_identical_unowned_skill():
+    """Matching bytes are not sufficient evidence that uninstall may own a
+    pre-existing shared skill."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        payload = (src / "demo" / "SKILL.md").read_text()
+        skill_file = td / ".agents" / "skills" / "demo" / "SKILL.md"
+        skill_file.parent.mkdir(parents=True)
+        skill_file.write_text(payload)
+
+        result = _run(
+            "install-harness",
+            "codex",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            check=False,
+        )
+
+        assert result.returncode == 1
+        assert "pre-existing and not owned" in result.stderr
+        manifest = json.loads((td / ".codex" / ".agent-notes-harness.json").read_text())
+        assert manifest["skills"] == {}
+
+
+def test_install_preserves_user_modified_skill():
+    """A locally modified skill is not overwritten on re-install (WI-1.2)."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        common = ["install-harness", "claude", "--source", str(src), "--home", str(td), "--json"]
+        _run(*common, env=_SUITE_ENV, check=False)
+
+        skill_file = td / ".claude" / "skills" / "demo" / "SKILL.md"
+        original = skill_file.read_text()
+        skill_file.write_text(original + "\n# user customization\n")
+
+        result = _run(*common, env=_SUITE_ENV, check=False)
+        data = json.loads(result.stdout)
+        # Conflict must be surfaced in actions.
+        conflict_actions = [a for a in data["actions"] if a.get("status") == "conflict"]
+        assert len(conflict_actions) == 1
+        assert "locally modified" in result.stderr.lower()
+        # File preserved — user changes intact.
+        assert "# user customization" in skill_file.read_text()
+
+
+def test_uninstall_preserves_user_modified_skill():
+    """Uninstall preserves a locally modified skill and reports it (WI-1.2)."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        _run(
+            "install-harness",
+            "claude",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            env=_SUITE_ENV,
+            check=False,
+        )
+
+        skill_file = td / ".claude" / "skills" / "demo" / "SKILL.md"
+        skill_file.write_text("---\nname: demo\n---\nuser changed this\n")
+
+        result = _run(
+            "install-harness",
+            "claude",
+            "--uninstall",
+            "--home",
+            str(td),
+            "--json",
+            check=False,
+        )
+        data = json.loads(result.stdout)
+        # Skill preserved on disk.
+        assert skill_file.is_file()
+        assert "user changed this" in skill_file.read_text()
+        # Warning surfaced.
+        assert "locally modified" in result.stderr.lower()
+        # A skip_file action recorded.
+        skip_actions = [a for a in data["actions"] if a.get("kind") == "skip_file"]
+        assert len(skip_actions) == 1
+
+
+def test_install_updates_unchanged_outdated_skill():
+    """When the source changes but the user hasn't modified the installed copy,
+    the skill is updated (no false conflict)."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        common = ["install-harness", "claude", "--source", str(src), "--home", str(td), "--json"]
+        _run(*common, env=_SUITE_ENV, check=False)
+
+        # Change the source skill (simulates an upstream update).
+        skill_src = src / "demo" / "SKILL.md"
+        skill_src.write_text("---\nname: demo\n---\nnew upstream content\n")
+
+        result = _run(*common, env=_SUITE_ENV, check=False)
+        data = json.loads(result.stdout)
+        update_actions = [a for a in data["actions"] if a.get("status") == "updated"]
+        assert len(update_actions) == 1
+        # File was updated.
+        installed = (td / ".claude" / "skills" / "demo" / "SKILL.md").read_text()
+        assert "new upstream content" in installed
+
+
+def test_backward_compat_old_manifest_uninstall():
+    """An old-format manifest (skills as a list of names, no hashes) must
+    still work for uninstall — skills are removed without hash checking."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        _run(
+            "install-harness",
+            "claude",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            env=_SUITE_ENV,
+            check=False,
+        )
+        # Overwrite the manifest with old list format.
+        man_path = td / ".claude" / ".agent-notes-harness.json"
+        man = json.loads(man_path.read_text())
+        man["skills"] = ["demo"]
+        man_path.write_text(json.dumps(man))
+
+        result = _run(
+            "install-harness",
+            "claude",
+            "--uninstall",
+            "--home",
+            str(td),
+            "--json",
+            check=False,
+        )
+        assert result.returncode == 0
+        # Skill removed (no hash to check, backward compatible).
+        assert not (td / ".claude" / "skills" / "demo" / "SKILL.md").exists()
+
+
+def test_backward_compat_old_manifest_reinstall():
+    """Re-install with an old-format manifest migrates to hash format."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        _run(
+            "install-harness",
+            "claude",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            env=_SUITE_ENV,
+            check=False,
+        )
+        # Overwrite manifest with old list format.
+        man_path = td / ".claude" / ".agent-notes-harness.json"
+        man = json.loads(man_path.read_text())
+        man["skills"] = ["demo"]
+        man_path.write_text(json.dumps(man))
+
+        # Re-install: should migrate to dict format.
+        _run(
+            "install-harness",
+            "claude",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            env=_SUITE_ENV,
+            check=False,
+        )
+        man = json.loads(man_path.read_text())
+        assert isinstance(man["skills"], dict)
+        assert "demo" in man["skills"]
+        assert isinstance(man["skills"]["demo"], str)
+
+
+def test_agent_install_preserves_user_modified():
+    """A locally modified opencode agent is not overwritten on re-install."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        _make_opencode_agents(td)
+        common = ["install-harness", "opencode", "--source", str(src), "--home", str(td), "--json"]
+        _run(*common, env=_SUITE_ENV, check=False)
+
+        agent_file = td / ".config" / "opencode" / "agents" / "glm.md"
+        original = agent_file.read_text()
+        agent_file.write_text(original + "\n# user tweak\n")
+
+        result = _run(*common, env=_SUITE_ENV, check=False)
+        data = json.loads(result.stdout)
+        conflict_actions = [a for a in data["actions"] if a.get("status") == "conflict"]
+        assert len(conflict_actions) >= 1
+        assert "locally modified" in result.stderr.lower()
+        assert "# user tweak" in agent_file.read_text()
+
+
+def test_agent_uninstall_preserves_user_modified():
+    """Uninstall preserves a locally modified opencode agent."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        _make_opencode_agents(td)
+        _run(
+            "install-harness",
+            "opencode",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            env=_SUITE_ENV,
+            check=False,
+        )
+
+        agent_file = td / ".config" / "opencode" / "agents" / "glm.md"
+        agent_file.write_text("---\ndescription: stub\n---\nuser changed\n")
+
+        result = _run(
+            "install-harness",
+            "opencode",
+            "--uninstall",
+            "--home",
+            str(td),
+            "--json",
+            check=False,
+        )
+        # Agent preserved.
+        assert agent_file.is_file()
+        assert "user changed" in agent_file.read_text()
+        assert "locally modified" in result.stderr.lower()
+
+
+def test_dry_run_detects_conflict():
+    """Dry-run surfaces conflicts without mutating anything."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        common = ["install-harness", "claude", "--source", str(src), "--home", str(td), "--json"]
+        _run(*common, env=_SUITE_ENV, check=False)
+
+        skill_file = td / ".claude" / "skills" / "demo" / "SKILL.md"
+        original = skill_file.read_text()
+        skill_file.write_text(original + "\n# user edit\n")
+
+        result = _run(
+            "install-harness",
+            "claude",
+            "--dry-run",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            env=_SUITE_ENV,
+            check=False,
+        )
+        assert result.returncode == 2
+        data = json.loads(result.stdout)
+        conflict_actions = [a for a in data["actions"] if a.get("status") == "conflict"]
+        assert len(conflict_actions) == 1
+        # Nothing was written — user edit still intact.
+        assert "# user edit" in skill_file.read_text()
+
+
+def test_uninstall_then_reinstall_preserves_user_modified_skill():
+    """Uninstall preserves a modified skill and retains a reduced manifest so
+    a subsequent install detects the conflict (review Finding 1)."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        common = ["install-harness", "claude", "--source", str(src), "--home", str(td), "--json"]
+        _run(*common, env=_SUITE_ENV, check=False)
+
+        skill_file = td / ".claude" / "skills" / "demo" / "SKILL.md"
+        skill_file.write_text("---\nname: demo\n---\nuser changed this\n")
+
+        # Uninstall: skill preserved, manifest retained.
+        _run("install-harness", "claude", "--uninstall", "--home", str(td), "--json", check=False)
+        assert skill_file.is_file()
+        assert "user changed this" in skill_file.read_text()
+        # Reduced manifest still on disk.
+        man_path = td / ".claude" / ".agent-notes-harness.json"
+        assert man_path.is_file()
+        man = json.loads(man_path.read_text())
+        assert "demo" in man["skills"]
+        assert isinstance(man["skills"]["demo"], str)
+        assert man["env_keys"] == []
+        assert man["plugin"] is False
+
+        # Re-install: conflict detected, user changes preserved.
+        result = _run(*common, env=_SUITE_ENV, check=False)
+        data = json.loads(result.stdout)
+        conflict_actions = [a for a in data["actions"] if a.get("status") == "conflict"]
+        assert len(conflict_actions) == 1
+        assert "user changed this" in skill_file.read_text()
+
+
+def test_agent_backward_compat_old_manifest_uninstall():
+    """Old-format agent manifest (list of names) works with uninstall —
+    agents removed without hash checking (backward compatible)."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        _make_opencode_agents(td)
+        _run(
+            "install-harness", "opencode", "--source", str(src), "--home", str(td), "--json",
+            env=_SUITE_ENV, check=False,
+        )
+        # Overwrite manifest agents with old list format.
+        man_path = td / ".config" / "opencode" / ".agent-notes-harness.json"
+        man = json.loads(man_path.read_text())
+        man["agents"] = ["glm"]
+        man_path.write_text(json.dumps(man))
+
+        result = _run(
+            "install-harness", "opencode", "--uninstall", "--home", str(td), "--json",
+            check=False,
+        )
+        assert result.returncode == 0
+        # Agent removed (no hash to check, backward compatible).
+        assert not (td / ".config" / "opencode" / "agents" / "glm.md").exists()
+
+
+def test_corrupted_manifest_dry_run_does_not_crash():
+    """A corrupted manifest should not block --dry-run (review Finding 3)."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        # Write a corrupted manifest.
+        man_path = td / ".claude" / ".agent-notes-harness.json"
+        man_path.parent.mkdir(parents=True, exist_ok=True)
+        man_path.write_text("{invalid json")
+        result = _run(
+            "install-harness", "claude", "--dry-run",
+            "--source", str(src), "--home", str(td), "--json",
+            env=_SUITE_ENV, check=False,
+        )
+        assert result.returncode == 2
+        assert "could not read manifest" in result.stderr
+
+
+def test_corrupted_manifest_non_dry_run_exits_1():
+    """A corrupted manifest in non-dry-run mode must exit 1 (not silently
+    proceed)."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        man_path = td / ".claude" / ".agent-notes-harness.json"
+        man_path.parent.mkdir(parents=True, exist_ok=True)
+        man_path.write_text("{invalid json")
+        result = _run(
+            "install-harness", "claude",
+            "--source", str(src), "--home", str(td), "--json",
+            env=_SUITE_ENV, check=False,
+        )
+        assert result.returncode == 1
+
+
+def test_non_string_hash_coerced_to_none():
+    """A crafted manifest with non-string hash values must not cause false
+    conflicts (review Finding 5)."""
+    from agent_notes.cli.harness import _normalize_hash_map
+
+    assert _normalize_hash_map({"demo": 42}) == {"demo": None}
+    assert _normalize_hash_map({"demo": True}) == {"demo": None}
+    assert _normalize_hash_map({"demo": [1, 2]}) == {"demo": None}
+    assert _normalize_hash_map({"demo": None}) == {"demo": None}
+    assert _normalize_hash_map({"demo": "abc123"}) == {"demo": "abc123"}
+
+
+def test_agent_uninstall_then_reinstall_preserves_modified():
+    """Opencode agent: uninstall preserves modified agent, reinstall detects
+    conflict via reduced manifest."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        _make_opencode_agents(td)
+        common = [
+            "install-harness", "opencode", "--source", str(src), "--home", str(td), "--json",
+        ]
+        _run(*common, env=_SUITE_ENV, check=False)
+
+        agent_file = td / ".config" / "opencode" / "agents" / "glm.md"
+        agent_file.write_text("---\ndescription: stub\n---\nuser changed\n")
+
+        # Uninstall: agent preserved, reduced manifest retained.
+        _run(
+            "install-harness", "opencode", "--uninstall", "--home", str(td), "--json",
+            check=False,
+        )
+        assert agent_file.is_file()
+        man_path = td / ".config" / "opencode" / ".agent-notes-harness.json"
+        assert man_path.is_file()
+        man = json.loads(man_path.read_text())
+        assert "glm" in man.get("agents", {})
+
+        # Reinstall: conflict detected.
+        result = _run(*common, env=_SUITE_ENV, check=False)
+        data = json.loads(result.stdout)
+        conflict_actions = [a for a in data["actions"] if a.get("status") == "conflict"]
+        assert len(conflict_actions) >= 1
+        assert "user changed" in agent_file.read_text()
+
+
+def test_install_conflict_returns_exit_1():
+    """Install with conflicts returns exit 1 and status 'failed' (not 0)."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        common = ["install-harness", "claude", "--source", str(src), "--home", str(td), "--json"]
+        _run(*common, env=_SUITE_ENV, check=False)
+
+        skill_file = td / ".claude" / "skills" / "demo" / "SKILL.md"
+        skill_file.write_text("---\nname: demo\n---\nuser edit\n")
+
+        result = _run(*common, env=_SUITE_ENV, check=False)
+        assert result.returncode == 1
+        data = json.loads(result.stdout)
+        assert data["status"] == "failed"
+
+
+def test_uninstall_preserved_returns_exit_1():
+    """Uninstall with preserved files returns exit 1 (not 0)."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        _run(
+            "install-harness", "claude", "--source", str(src), "--home", str(td), "--json",
+            env=_SUITE_ENV, check=False,
+        )
+
+        skill_file = td / ".claude" / "skills" / "demo" / "SKILL.md"
+        skill_file.write_text("---\nname: demo\n---\nuser edit\n")
+
+        result = _run(
+            "install-harness", "claude", "--uninstall", "--home", str(td), "--json",
+            check=False,
+        )
+        assert result.returncode == 1
+        data = json.loads(result.stdout)
+        assert data["status"] == "failed"
+
+
+def test_non_utf8_reinstall_does_not_crash():
+    """A binary/non-UTF-8 replacement of a skill file must not crash reinstall.
+    The file is treated as user-modified (conflict, preserved)."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        common = ["install-harness", "claude", "--source", str(src), "--home", str(td), "--json"]
+        _run(*common, env=_SUITE_ENV, check=False)
+
+        skill_file = td / ".claude" / "skills" / "demo" / "SKILL.md"
+        skill_file.write_bytes(b"\x80\x81\x82binary")
+
+        result = _run(*common, env=_SUITE_ENV, check=False)
+        assert result.returncode == 1
+        data = json.loads(result.stdout)
+        conflict_actions = [a for a in data["actions"] if a.get("status") == "conflict"]
+        assert len(conflict_actions) == 1
+        # Binary content preserved.
+        assert skill_file.read_bytes() == b"\x80\x81\x82binary"
+
+
+def test_non_utf8_uninstall_does_not_crash():
+    """A binary/non-UTF-8 replacement must not crash uninstall either.
+    The file is treated as user-modified (preserved)."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        _run(
+            "install-harness", "claude", "--source", str(src), "--home", str(td), "--json",
+            env=_SUITE_ENV, check=False,
+        )
+
+        skill_file = td / ".claude" / "skills" / "demo" / "SKILL.md"
+        skill_file.write_bytes(b"\x80\x81\x82binary")
+
+        result = _run(
+            "install-harness", "claude", "--uninstall", "--home", str(td), "--json",
+            check=False,
+        )
+        assert result.returncode == 1
+        # Binary file preserved.
+        assert skill_file.read_bytes() == b"\x80\x81\x82binary"
+
+
+def test_all_target_mixed_conflict_and_success():
+    """install-harness all with one harness conflict returns exit 1."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        _make_opencode_agents(td)
+        common = ["install-harness", "all", "--source", str(src), "--home", str(td), "--json"]
+        _run(*common, env=_SUITE_ENV, check=False)
+
+        # Modify only the claude skill.
+        claude_skill = td / ".claude" / "skills" / "demo" / "SKILL.md"
+        claude_skill.write_text("---\nname: demo\n---\nuser edit\n")
+
+        result = _run(*common, env=_SUITE_ENV, check=False)
+        assert result.returncode == 1
+        data = json.loads(result.stdout)
+        statuses = {r["harness"]: r["status"] for r in data["results"]}
+        assert statuses["claude"] == "failed"
+        assert statuses["opencode"] == "installed"

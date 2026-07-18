@@ -1,0 +1,35 @@
+{
+  "name": "agent-notes",
+  "version": "1.0.0",
+  "description": "Agent-facing workflows for shared notes, memories, and coordinated work items.",
+  "author": {
+    "name": "hraedon",
+    "url": "https://github.com/hraedon"
+  },
+  "homepage": "https://github.com/hraedon/agent-notes",
+  "repository": "https://github.com/hraedon/agent-notes",
+  "keywords": [
+    "agents",
+    "memory",
+    "notes",
+    "work-items"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Agent Notes",
+    "shortDescription": "Shared notes, memories, and work-item workflows.",
+    "longDescription": "Use the agent-notes CLI through reusable workflows for breadcrumbs, memories, reflections, and coordinated work items.",
+    "developerName": "hraedon",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/hraedon/agent-notes",
+    "defaultPrompt": [
+      "Orient to this project's current work.",
+      "Find relevant project memories and breadcrumbs.",
+      "Record what we learned from this task."
+    ]
+  }
+}

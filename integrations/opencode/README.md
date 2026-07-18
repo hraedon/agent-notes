@@ -2,6 +2,16 @@
 
 Plan 007 Piece 2 — opencode enforcement hooks.
 
+## One canonical skill tree
+
+OpenCode commands are rendered from the same `skills/<name>/SKILL.md` files
+used by Claude, Hermes, and Codex. `agent-notes install-skills --target
+opencode` removes the `name:` frontmatter field and writes
+`~/.config/opencode/command/<name>.md`; there is deliberately no parallel
+OpenCode skill tree. If wording ever has to diverge, use a sibling
+`SKILL.opencode.md` override rather than copying the full tree (Plan 004 §9
+Q4).
+
 ## What it does
 
 - **Session-start orientation:** Injects `agent-notes orient --json` output into the system prompt of every new session, so the agent starts with open breadcrumbs, recent changes, and active memories already loaded.

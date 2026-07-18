@@ -96,6 +96,8 @@ class TestDoctorDanglingLink:
 
         with _conn() as conn:
             cur = conn.cursor()
+            # Soft cross-project wikilink: target absent locally but the
+            # relationship is 'relates_to', so this must NOT fail the audit.
             cur.execute(
                 """
                 INSERT INTO links
@@ -116,16 +118,57 @@ class TestDoctorDanglingLink:
                     "relates_to",
                 ),
             )
+            # Strict edge: a 'supersedes' memory link whose target is absent.
+            # This MUST fail the audit — strict referential integrity.
+            cur.execute(
+                """
+                INSERT INTO links
+                    (from_kind, from_workspace, from_project, from_identifier,
+                     to_kind, to_workspace, to_project, to_identifier, relationship)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+                """,
+                (
+                    "memory",
+                    ws.id,
+                    proj.id,
+                    "strict-source",
+                    "memory",
+                    ws.id,
+                    proj.id,
+                    "strict-ghost",
+                    "supersedes",
+                ),
+            )
             conn.commit()
 
-    def test_doctor_catches_dangling_link(self, capsys):
+    def test_doctor_catches_strict_dangling_link(self, capsys):
         from agent_notes.scripts.doctor import run
 
         with patch("agent_notes.scripts.doctor._check_embedding", return_value=(True, "mocked")):
             code = run(check_embed=True)
         captured = capsys.readouterr()
+        # The strict supersedes edge must fail the audit.
         assert code == 1, f"Expected failure, got: {captured.out}"
-        assert "Dangling" in captured.out
+        assert "Dangling strict links" in captured.out
+
+    def test_doctor_soft_wikilink_is_informational(self):
+        """Soft relates_to wikilinks to absent targets are cross-project refs,
+        not integrity violations. The audit must report them as informational
+        and must not include them in the failing strict count."""
+        # Re-seed: remove the strict edge so only the soft wikilink remains.
+        from agent_notes.core.db import _conn
+        from agent_notes.scripts.doctor import _check_links_audit
+
+        with _conn() as conn:
+            conn.execute("DELETE FROM links WHERE relationship = 'supersedes'")
+            conn.commit()
+
+        ok, detail = _check_links_audit()
+        # Informational skip: not ok=True (no fail), not strict-dangling.
+        assert ok is None, f"Expected informational skip, got ok={ok!r}: {detail}"
+        assert "cross-project" in detail
+        assert "1 cross-project" in detail
 
 
 class TestDoctorSkipsOnDsnFailure:
@@ -217,6 +260,7 @@ class TestDoctorJsonSuiteShape:
         assert payload["degraded"] == (payload["status"] == "degraded")
         assert self._required_regista_keys() <= set(payload["regista"])
         assert isinstance(payload["checks"], list) and payload["checks"]
+        assert "codex_harness" in {check["name"] for check in payload["checks"]}
         for c in payload["checks"]:
             assert {"name", "status", "detail"} <= set(c)
             assert c["status"] in {"ok", "warn", "fail", "skip"}
