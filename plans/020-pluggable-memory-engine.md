@@ -10,6 +10,10 @@ recall projection; it does not supersede signed notes or human legibility.
 **Strategic role:** Keep agent-notes as the stable agent face and exact-knowledge
 workflow while allowing a dedicated memory system to own extraction, indexing,
 retrieval, temporal reasoning, and synthesis.
+**Scope extension:** Plan 022 defines shared organization/project and personal
+agent/session memory, authenticated access context, opaque provider bank IDs,
+composed recall, and publication. Its scope and isolation requirements supersede
+this plan's project-only Hindsight mapping.
 
 ## Outcome and default decision
 
