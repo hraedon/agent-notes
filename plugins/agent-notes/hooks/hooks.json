@@ -1,0 +1,30 @@
+{
+  "description": "Agent-notes project orientation and best-effort outbox reconciliation. Review and trust these commands with /hooks before use.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agent-notes codex-hook session-start",
+            "timeout": 20,
+            "statusMessage": "Loading agent-notes orientation"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agent-notes codex-hook stop",
+            "timeout": 30,
+            "statusMessage": "Reconciling the agent-notes outbox"
+          }
+        ]
+      }
+    ]
+  }
+}
