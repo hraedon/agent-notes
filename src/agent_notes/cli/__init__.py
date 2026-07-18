@@ -30,6 +30,7 @@ from agent_notes.cli.verify import register_verify_parsers
 from agent_notes.cli.vocabulary import register_vocabulary_parsers
 from agent_notes.cli.work_items import register_work_item_parsers
 from agent_notes.cli.workspace import register_workspace_parsers
+from agent_notes.codex_lifecycle import register_codex_hook_parser
 
 
 def _install_claude_session_hook(repo_root: str) -> tuple[str, bool]:
@@ -230,6 +231,7 @@ def main() -> int:
     register_vocabulary_parsers(sub)
     register_workspace_parsers(sub)
     register_changes_parsers(sub)
+    register_codex_hook_parser(sub)
     register_events_parsers(sub)
     register_skills_parser(sub)
     register_harness_parser(sub)

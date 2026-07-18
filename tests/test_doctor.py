@@ -260,6 +260,7 @@ class TestDoctorJsonSuiteShape:
         assert payload["degraded"] == (payload["status"] == "degraded")
         assert self._required_regista_keys() <= set(payload["regista"])
         assert isinstance(payload["checks"], list) and payload["checks"]
+        assert "codex_harness" in {check["name"] for check in payload["checks"]}
         for c in payload["checks"]:
             assert {"name", "status", "detail"} <= set(c)
             assert c["status"] in {"ok", "warn", "fail", "skip"}

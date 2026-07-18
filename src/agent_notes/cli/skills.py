@@ -16,13 +16,32 @@ from agent_notes.cli.common import (
 def _repo_skills_root(override: Path | None = None) -> Path:
     """Resolve the directory containing skill subdirectories.
 
-    Defaults to the ``skills/`` directory inside the installed package
-    (``agent_notes/skills/``). The override is used by tests to point at a
-    fixture tree.
+    Skills ship at the repository root under ``skills/`` and are force-included
+    into wheels at ``agent_notes/skills/`` by ``pyproject.toml``. This resolver
+    honours both layouts:
+
+    * an installed wheel exposes them at the package-internal path
+      (``agent_notes/skills/``), resolved relative to this file;
+    * an editable install or a raw source checkout does not always honour
+      ``force-include``, so the package-internal path is absent and the real
+      source lives at the repository root (``<repo>/skills/``).
+
+    The package-internal path is preferred when present; otherwise the
+    repository-root path (four parents up from this file: ``cli/skills.py`` ->
+    ``cli`` -> ``agent_notes`` -> ``src`` -> repo root) is returned. The
+    override is used by tests to point at a fixture tree.
+
+    Returning a non-existent path is intentional only when neither layout is
+    found — callers (``install-skills``, ``install-harness``) treat an empty
+    discovery result as a hard failure rather than a silent no-op (WI-022).
     """
     if override is not None:
         return override
-    return Path(__file__).resolve().parent.parent / "skills"
+    here = Path(__file__).resolve()
+    pkg_internal = here.parent.parent / "skills"
+    if pkg_internal.is_dir():
+        return pkg_internal
+    return here.parents[3] / "skills"
 
 
 def _discover_skills(src_root: Path) -> list[Path]:
@@ -31,9 +50,14 @@ def _discover_skills(src_root: Path) -> list[Path]:
     Skips the `opencode/` subtree (legacy placeholder — opencode skills
     are now produced from the same SKILL.md files, see _to_opencode_body)
     and any directory that lacks a SKILL.md.
+
+    A missing or non-directory ``src_root`` yields an empty list rather than
+    raising, so callers (``install-skills``, ``install-harness``) surface a
+    contract-shaped "no skills found" failure instead of a traceback when an
+    operator points ``--source`` at a file or a nonexistent path (WI-022).
     """
     skills: list[Path] = []
-    if not src_root.exists():
+    if not src_root.is_dir():
         return skills
     for child in sorted(src_root.iterdir()):
         if not child.is_dir():
