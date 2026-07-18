@@ -92,12 +92,24 @@ agent-notes install-skills [--target claude|opencode] [--dry-run]
 ```
 
 Suite harness installation accepts `claude`, `opencode`, `codex`, `hermes`, or
-`all`. Codex currently returns a contract-shaped, non-zero `unsupported` result
-until Plan 019 lands. Stable `all` remains Claude and OpenCode until Codex's
-full adapter and conformance proof land atomically; component-private Hermes
-remains explicitly selectable and is never implicit.
+`all`. `agent-notes install-harness codex` installs the canonical skills under
+`$HOME/.agents/skills` and records hash-tracked ownership under `$CODEX_HOME`
+(default `~/.codex`). The repository is also a component-owned Codex plugin,
+with `plugins/agent-notes/.codex-plugin/plugin.json` containing a small,
+drift-checked bundle for suite marketplace composition. Keeping the plugin
+below `plugins/agent-notes` prevents Codex from packaging the checkout's
+multi-gigabyte `.venv`. Both paths install the same narrow lifecycle
+adapter: `SessionStart` injects bounded metadata-only orientation and `Stop`
+performs best-effort outbox reconciliation without requesting another turn.
+The direct fallback hash-owns only its groups in `$CODEX_HOME/hooks.json` and
+preserves Cairn/user hooks. Review and trust command hooks explicitly with
+Codex `/hooks`; doctor reports that trust as unverified because Codex exposes no
+machine-readable trust probe. Live skill conformance remains open in Plan 019,
+so stable `all` remains Claude and OpenCode until the full adapter set is
+promoted atomically. Component-private Hermes remains explicitly selectable and
+is never implicit.
 
-### Skills (Claude Code / opencode)
+### Skills (Claude Code / OpenCode / Codex)
 
 This repo ships skill prose under `skills/` that turns the CLI into
 a discoverable agent surface. Each skill carries the *judgment* —

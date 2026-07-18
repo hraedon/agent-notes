@@ -71,9 +71,14 @@ the per-workflow judgment in prose. Install with `agent-notes
 install-skills --target {claude,opencode}` (skills only) or
 `agent-notes install-harness {claude|opencode|codex|all}` (skills + env wiring
 + opencode plugin + opencode subagent definitions — Plan 017 WI-2.1 and
-WI-2.3). Codex is accepted but returns an explicit non-zero `unsupported`
-result until Plan 019 lands; stable `all` remains Claude + OpenCode and excludes
-candidate Codex and private Hermes. Both are
+WI-2.3). Codex installs the canonical skills under `$HOME/.agents/skills` and
+records hash-tracked ownership under `$CODEX_HOME`. It also hash-owns narrow
+`SessionStart` orientation and `Stop` reconciliation groups in
+`$CODEX_HOME/hooks.json`; the component plugin bundles the same canonical hook
+definitions below `plugins/agent-notes` (with drift checks against the canonical
+top-level skills). Hook trust remains an explicit operator action through `/hooks`.
+Stable `all` remains Claude + OpenCode
+and excludes candidate Codex and private Hermes. Both are
 idempotent; `--dry-run` / `--uninstall` supported. See
 Plan 017 §Implementation log for the opencode env-via-config-file
 decision (D1).
