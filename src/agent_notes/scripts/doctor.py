@@ -131,7 +131,28 @@ def _check_embedding() -> tuple[bool, str]:
         return False, _sanitize_conn_error(exc)
 
 
-def _check_links_audit() -> tuple[bool, str]:
+def _check_links_audit() -> tuple[bool | None, str]:
+    """Audit referential integrity of the local links table.
+
+    Two classes of edges live in ``links``:
+
+    * **Strict referential edges** — ``from_kind='work_item'`` source rows and
+      any memory-to-memory edge whose ``relationship`` is in the strict set
+      (``supersedes``, ``derived_from``, ``replaces``). These must resolve to a
+      row that exists in this database; a dangling strict edge is a real
+      integrity violation and fails the audit.
+
+    * **Soft knowledge-graph edges** — auto-created ``relates_to`` wikilinks
+      (see ``memory_model._auto_create_wikilinks``). The link writer intentionally
+      stores these with ``to_project = from_project`` even when the wikilink
+      target is a foreign-project or workspace-scoped anchor (e.g. a memory
+      body that says ``[[project-gpo-lens]]`` or ``[[user-central-pillars]]``).
+      Such targets legitimately do not exist in the local DB, so a dangling
+      ``relates_to`` memory edge is a **cross-project knowledge reference**,
+      not an integrity violation. These are reported as informational
+      (``skip``) rather than failing the audit, with the count disclosed so an
+      operator can see how many foreign references are unrouted.
+    """
     try:
         from agent_notes.core.db import _conn
 
@@ -148,6 +169,7 @@ def _check_links_audit() -> tuple[bool, str]:
             )
             dangle_wi_from = cur.fetchone()["cnt"]
 
+            # Strict memory edges: anything that is not a soft relates_to wikilink.
             cur.execute(
                 """
                 SELECT COUNT(*) AS cnt FROM links l
@@ -155,10 +177,12 @@ def _check_links_audit() -> tuple[bool, str]:
                   ON m.project_id = l.to_project
                   AND m.name = l.to_identifier
                   AND m.active = true
-                WHERE l.to_kind = 'memory' AND m.id IS NULL
+                WHERE l.to_kind = 'memory'
+                  AND m.id IS NULL
+                  AND COALESCE(l.relationship, '') <> 'relates_to'
                 """
             )
-            dangle_mem_to = cur.fetchone()["cnt"]
+            dangle_mem_to_strict = cur.fetchone()["cnt"]
 
             cur.execute(
                 """
@@ -167,17 +191,42 @@ def _check_links_audit() -> tuple[bool, str]:
                   ON m.project_id = l.from_project
                   AND m.name = l.from_identifier
                   AND m.active = true
-                WHERE l.from_kind = 'memory' AND m.id IS NULL
+                WHERE l.from_kind = 'memory'
+                  AND m.id IS NULL
+                  AND COALESCE(l.relationship, '') <> 'relates_to'
                 """
             )
-            dangle_mem_from = cur.fetchone()["cnt"]
+            dangle_mem_from_strict = cur.fetchone()["cnt"]
 
-        total = dangle_wi_from + dangle_mem_to + dangle_mem_from
-        if total:
+            # Soft cross-project knowledge references (relates_to wikilinks whose
+            # target lives in a sibling project's DB). Informational only.
+            cur.execute(
+                """
+                SELECT COUNT(*) AS cnt FROM links l
+                LEFT JOIN memories m
+                  ON m.project_id = l.to_project
+                  AND m.name = l.to_identifier
+                  AND m.active = true
+                WHERE l.to_kind = 'memory'
+                  AND m.id IS NULL
+                  AND COALESCE(l.relationship, '') = 'relates_to'
+                """
+            )
+            cross_project_refs = cur.fetchone()["cnt"]
+
+        strict_total = dangle_wi_from + dangle_mem_to_strict + dangle_mem_from_strict
+        if strict_total:
             return (
                 False,
-                f"Dangling links: work_item-from={dangle_wi_from}, "
-                f"memory-to={dangle_mem_to}, memory-from={dangle_mem_from}",
+                f"Dangling strict links: work_item-from={dangle_wi_from}, "
+                f"memory-to={dangle_mem_to_strict}, "
+                f"memory-from={dangle_mem_from_strict}",
+            )
+        if cross_project_refs:
+            return (
+                None,
+                f"No dangling strict links; {cross_project_refs} cross-project "
+                f"relates_to reference(s) resolve in sibling DBs",
             )
         return True, "No dangling links"
     except Exception as exc:
