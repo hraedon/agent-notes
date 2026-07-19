@@ -118,8 +118,11 @@ class TestDoctorDanglingLink:
                     "relates_to",
                 ),
             )
-            # Strict edge: a 'supersedes' memory link whose target is absent.
-            # This MUST fail the audit — strict referential integrity.
+            # Strict edge: uses a fabricated strict relationship value
+            # ('supersedes'). In production, the strict path catches any
+            # non-relates_to memory edge — 'supersedes' is a stand-in for
+            # "any non-relates_to value." No code path creates this
+            # relationship value in the links table today.
             cur.execute(
                 """
                 INSERT INTO links
@@ -169,6 +172,124 @@ class TestDoctorDanglingLink:
         assert ok is None, f"Expected informational skip, got ok={ok!r}: {detail}"
         assert "cross-project" in detail
         assert "1 cross-project" in detail
+
+    def test_doctor_orphan_to_deleted_memory_is_strict_failure(self):
+        """A relates_to wikilink to a soft-deleted memory is a local orphan,
+        not a cross-project reference. The audit must fail (not skip) and must
+        not misreport it as a cross-project ref.
+
+        Setup: create a target memory, create an inbound relates_to wikilink
+        from another memory, soft-delete the target. The link's target name
+        exists in the DB but is inactive — a real broken edge.
+        """
+        from agent_notes.core.db import _conn
+        from agent_notes.core.memory_model import add_memory, delete_memory
+        from agent_notes.scripts.doctor import _check_links_audit
+
+        # The class-level _seed fixture inserts a strict 'supersedes' edge and
+        # a soft 'relates_to' edge in a different project. The audit is global
+        # (not per-project), so clear those to get a clean baseline.
+        with _conn() as conn:
+            conn.execute(
+                "DELETE FROM links WHERE from_identifier IN ('NONEXISTENT', 'strict-source')"
+            )
+            conn.commit()
+
+        ws = coredb.get_or_create_workspace("orphan-ws", "Orphan WS")
+        proj = coredb.get_or_create_project(
+            ws.id, slug="orphan-proj", name="Orphan Proj", repo_root="/tmp"
+        )
+        coredb.add_vocabulary(ws.id, "memory_type", "note")
+
+        # Target memory that will be soft-deleted.
+        add_memory(ws.id, proj.id, "target-mem", "note", "target body")
+        # Source memory with a wikilink to the target.
+        add_memory(ws.id, proj.id, "source-mem", "note", "see [[target-mem]]")
+
+        # Sanity: before delete, the audit should be clean (both memories active).
+        ok, detail = _check_links_audit()
+        assert ok is True, f"Expected clean audit before delete, got: {detail}"
+
+        # Soft-delete the target — the inbound wikilink now dangles.
+        deleted = delete_memory(ws.id, proj.id, "target-mem")
+        assert deleted is not None, "delete_memory returned None — target not found"
+
+        ok, detail = _check_links_audit()
+        # Must be a failure (ok=False), NOT a skip (ok=None).
+        assert ok is False, f"Expected failure for local orphan, got ok={ok!r}: {detail}"
+        # Must NOT be misreported as a cross-project reference.
+        assert "cross-project" not in detail, f"Local orphan misreported as cross-project: {detail}"
+        assert "orphan" in detail.lower(), f"Expected orphan in detail: {detail}"
+
+    def test_doctor_reports_strict_failure_and_soft_count_together(self):
+        """When both a strict dangling edge and a soft cross-project edge are
+        present, the audit must fail (strict) AND disclose the soft count in
+        the same detail — so the operator sees the full picture, not just the
+        strict bucket, and the audit doesn't lie about being clean.
+        """
+        from agent_notes.core.db import _conn
+        from agent_notes.scripts.doctor import _check_links_audit
+
+        ws = coredb.get_or_create_workspace("both-ws", "Both WS")
+        proj = coredb.get_or_create_project(
+            ws.id, slug="both-proj", name="Both Proj", repo_root="/tmp"
+        )
+
+        with _conn() as conn:
+            cur = conn.cursor()
+            # Strict dangling edge: non-relates_to relationship, target absent.
+            cur.execute(
+                """
+                INSERT INTO links
+                    (from_kind, from_workspace, from_project, from_identifier,
+                     to_kind, to_workspace, to_project, to_identifier, relationship)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+                """,
+                (
+                    "memory",
+                    ws.id,
+                    proj.id,
+                    "strict-src",
+                    "memory",
+                    ws.id,
+                    proj.id,
+                    "strict-ghost",
+                    "derived_from",
+                ),
+            )
+            # Soft cross-project edge: relates_to, target absent locally.
+            cur.execute(
+                """
+                INSERT INTO links
+                    (from_kind, from_workspace, from_project, from_identifier,
+                     to_kind, to_workspace, to_project, to_identifier, relationship)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+                """,
+                (
+                    "memory",
+                    ws.id,
+                    proj.id,
+                    "soft-src",
+                    "memory",
+                    ws.id,
+                    proj.id,
+                    "foreign-ghost",
+                    "relates_to",
+                ),
+            )
+            conn.commit()
+
+        ok, detail = _check_links_audit()
+        # Must fail because of the strict edge.
+        assert ok is False, f"Expected failure, got ok={ok!r}: {detail}"
+        # Must contain the strict dangling count.
+        assert "Dangling strict links" in detail, f"Missing strict count: {detail}"
+        # Must also disclose the cross-project soft count (preferred behavior).
+        assert "cross-project" in detail, (
+            f"Expected cross-project count in strict-failure detail: {detail}"
+        )
 
 
 class TestDoctorSkipsOnDsnFailure:

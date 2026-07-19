@@ -134,24 +134,39 @@ def _check_embedding() -> tuple[bool, str]:
 def _check_links_audit() -> tuple[bool | None, str]:
     """Audit referential integrity of the local links table.
 
-    Two classes of edges live in ``links``:
+    Three classes of memory-to-memory edges live in ``links``:
 
     * **Strict referential edges** — ``from_kind='work_item'`` source rows and
-      any memory-to-memory edge whose ``relationship`` is in the strict set
-      (``supersedes``, ``derived_from``, ``replaces``). These must resolve to a
+      any memory-to-memory edge whose ``relationship`` is NOT ``relates_to``.
+      The strict set is intentionally negatively enumerated: ``relates_to`` is
+      the only known soft relationship today, and any new relationship defaults
+      to strict (safer) until explicitly added to the soft set. In practice
+      today this catches any future relationship type that should resolve
+      locally (e.g. a hypothetical ``derived_from``). These must resolve to a
       row that exists in this database; a dangling strict edge is a real
       integrity violation and fails the audit.
 
-    * **Soft knowledge-graph edges** — auto-created ``relates_to`` wikilinks
-      (see ``memory_model._auto_create_wikilinks``). The link writer intentionally
-      stores these with ``to_project = from_project`` even when the wikilink
-      target is a foreign-project or workspace-scoped anchor (e.g. a memory
-      body that says ``[[project-gpo-lens]]`` or ``[[user-central-pillars]]``).
-      Such targets legitimately do not exist in the local DB, so a dangling
-      ``relates_to`` memory edge is a **cross-project knowledge reference**,
-      not an integrity violation. These are reported as informational
-      (``skip``) rather than failing the audit, with the count disclosed so an
-      operator can see how many foreign references are unrouted.
+    * **Local orphan edges** — ``relates_to`` wikilinks whose target memory
+      *exists in this DB* but is inactive (``active = false``, i.e. soft-deleted
+      via ``delete_memory``). The source memory's body still contains the
+      ``[[name]]`` wikilink, but the target is gone — a real broken edge in the
+      local knowledge graph. These are integrity violations and fail the audit.
+      (The supersede path in ``add_memory`` does NOT create orphans: it creates
+      a new active memory with the same name, so inbound links resolve to the
+      replacement by name.)
+
+    * **Soft cross-project edges** — auto-created ``relates_to`` wikilinks
+      (see ``memory_model._auto_create_wikilinks``) whose target memory does
+      NOT exist in this DB at all (neither active nor inactive). The link
+      writer intentionally stores these with ``to_project = from_project``
+      even when the wikilink target is a foreign-project or workspace-scoped
+      anchor (e.g. a memory body that says ``[[project-gpo-lens]]`` or
+      ``[[user-central-pillars]]``). Such targets legitimately do not exist
+      in the local DB, so a dangling ``relates_to`` memory edge of this kind
+      is a **cross-project knowledge reference**, not an integrity violation.
+      These are reported as informational (``skip``) rather than failing the
+      audit, with the count disclosed so an operator can see how many foreign
+      references are unrouted.
     """
     try:
         from agent_notes.core.db import _conn
@@ -198,29 +213,66 @@ def _check_links_audit() -> tuple[bool | None, str]:
             )
             dangle_mem_from_strict = cur.fetchone()["cnt"]
 
-            # Soft cross-project knowledge references (relates_to wikilinks whose
-            # target lives in a sibling project's DB). Informational only.
+            # Local orphan relates_to refs: target memory EXISTS in this DB but
+            # is inactive (soft-deleted). A real broken edge — the source body
+            # still wikilinks [[name]] but the target is gone. This is distinct
+            # from a cross-project ref (where no row exists at all).
             cur.execute(
                 """
                 SELECT COUNT(*) AS cnt FROM links l
-                LEFT JOIN memories m
-                  ON m.project_id = l.to_project
-                  AND m.name = l.to_identifier
-                  AND m.active = true
                 WHERE l.to_kind = 'memory'
-                  AND m.id IS NULL
                   AND COALESCE(l.relationship, '') = 'relates_to'
+                  AND EXISTS (
+                    SELECT 1 FROM memories m
+                    WHERE m.project_id = l.to_project
+                      AND m.name = l.to_identifier
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM memories m
+                    WHERE m.project_id = l.to_project
+                      AND m.name = l.to_identifier
+                      AND m.active = true
+                  )
+                """
+            )
+            local_orphan_refs = cur.fetchone()["cnt"]
+
+            # Soft cross-project knowledge references (relates_to wikilinks
+            # whose target lives in a sibling project's DB — no row exists
+            # locally at all). Informational only.
+            cur.execute(
+                """
+                SELECT COUNT(*) AS cnt FROM links l
+                WHERE l.to_kind = 'memory'
+                  AND COALESCE(l.relationship, '') = 'relates_to'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM memories m
+                    WHERE m.project_id = l.to_project
+                      AND m.name = l.to_identifier
+                  )
                 """
             )
             cross_project_refs = cur.fetchone()["cnt"]
 
         strict_total = dangle_wi_from + dangle_mem_to_strict + dangle_mem_from_strict
         if strict_total:
-            return (
-                False,
+            # Report the strict failure with the soft context so the operator
+            # sees the full picture, not just the strict bucket.
+            detail = (
                 f"Dangling strict links: work_item-from={dangle_wi_from}, "
                 f"memory-to={dangle_mem_to_strict}, "
-                f"memory-from={dangle_mem_from_strict}",
+                f"memory-from={dangle_mem_from_strict}"
+            )
+            if local_orphan_refs:
+                detail += f"; local orphan relates_to refs={local_orphan_refs}"
+            if cross_project_refs:
+                detail += f"; cross-project relates_to refs={cross_project_refs}"
+            return False, detail
+        if local_orphan_refs:
+            return (
+                False,
+                f"Local orphan relates_to refs: {local_orphan_refs} "
+                f"(target memory soft-deleted; inbound wikilink dangles)",
             )
         if cross_project_refs:
             return (
