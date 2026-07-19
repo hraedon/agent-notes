@@ -14,7 +14,7 @@ dependencies = [
     { name = "platformdirs" },
     { name = "psycopg", extra = ["binary"] },
     { name = "psycopg-pool" },
-    { name = "regista" },
+    { name = "regista-hraedon" },
     { name = "sentence-transformers" },
     { name = "uvicorn" },
 ]
@@ -35,7 +35,7 @@ requires-dist = [
     { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
     { name = "psycopg-pool", specifier = ">=3.2" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0" },
-    { name = "regista", editable = "../regista" },
+    { name = "regista-hraedon", editable = "../regista" },
     { name = "sentence-transformers", specifier = ">=3.0" },
     { name = "testcontainers", extras = ["postgres"], marker = "extra == 'test'", specifier = ">=4.0" },
     { name = "uvicorn", specifier = ">=0.20" },
@@ -1471,7 +1471,7 @@ wheels = [
 ]
 
 [[package]]
-name = "regista"
+name = "regista-hraedon"
 version = "0.5.1"
 source = { editable = "../regista" }
 dependencies = [

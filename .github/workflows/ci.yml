@@ -34,8 +34,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # regista is a public sibling repo, not on PyPI — install from git.
-          pip install "regista @ git+https://github.com/hraedon/regista.git@main"
+          # regista-hraedon is published on PyPI (renamed distribution;
+          # the import name is still `regista`). Pinned to 0.5.1.
+          pip install "regista-hraedon==0.5.1"
           # ruff is not in the [test] extra; install it for the lint step.
           pip install ruff
           pip install -e ".[test]"
@@ -84,7 +85,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install "regista @ git+https://github.com/hraedon/regista.git@main"
+          pip install "regista-hraedon==0.5.1"
           pip install ruff
           pip install -e ".[test]"
 

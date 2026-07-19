@@ -13,7 +13,7 @@ dependencies = [
     "uvicorn>=0.20",
     "cryptography>=42.0",
     "platformdirs>=4.0",
-    "regista>=0.4.0",
+    "regista-hraedon>=0.5.1",
 ]
 
 [project.optional-dependencies]
@@ -34,12 +34,13 @@ agent-notes-web          = "agent_notes.web.app:main"
 
 
 [tool.uv.sources]
-# regista is a local sibling repo in the sf2 constellation, not published to
-# any package index. This mapping lets `uv lock` / `uv run` resolve it from the
-# checked-out source so the Makefile targets (make lint, make test) work without
-# a pre-built venv. Assumes the constellation layout (repos are siblings under a
-# common parent, e.g. /projects/{regista,agent-notes}).
-regista = { path = "../regista", editable = true }
+# regista-hraedon is published on PyPI (distribution renamed from `regista`;
+# import name remains `regista`). This editable mapping overrides the published
+# wheel with the local sibling checkout so `uv lock` / `uv run` and the Makefile
+# targets (make lint, make test) resolve against the working tree without a
+# published build per commit. Assumes the constellation layout (repos are
+# siblings under a common parent, e.g. /projects/{regista,agent-notes}).
+regista-hraedon = { path = "../regista", editable = true }
 
 [build-system]
 requires = ["hatchling"]
