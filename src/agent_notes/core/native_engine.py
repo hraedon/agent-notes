@@ -46,10 +46,13 @@ _BUDGET_LIMITS: dict[str, int] = {
 def _package_version() -> str:
     from importlib.metadata import PackageNotFoundError, version
 
-    try:
-        return version("agent-notes")
-    except PackageNotFoundError:
-        return "0.0.0"
+    # Published as agent-notes-hraedon; editable installs keep the old name.
+    for dist in ("agent-notes-hraedon", "agent-notes"):
+        try:
+            return version(dist)
+        except PackageNotFoundError:
+            continue
+    return "0.0.0"
 
 
 def _resolve_scope(scope: MemoryScope) -> tuple[int, int]:
