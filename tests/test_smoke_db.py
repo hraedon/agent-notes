@@ -29,12 +29,17 @@ def _apply_schema(dsn: str) -> None:
 
 @pytest.fixture(scope="module")
 def pg():
-    container = PostgresContainer("pgvector/pgvector:pg17")
+    # Check Docker availability BEFORE constructing the container: in current
+    # testcontainers, PostgresContainer.__init__ eagerly builds a DockerClient,
+    # which raises DockerException on a Docker-less host (e.g. windows-latest
+    # CI) outside any try/except — erroring instead of skipping. Mirror the
+    # conftest ephemeral_db fixture, which pings first and skips cleanly.
     try:
         docker.from_env().ping()
     except (docker.errors.DockerException, OSError) as exc:
         pytest.skip(f"Docker unavailable: {exc}")
 
+    container = PostgresContainer("pgvector/pgvector:pg17")
     try:
         container.start()
     except Exception as exc:
