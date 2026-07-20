@@ -40,6 +40,12 @@ jobs:
           # ruff is not in the [test] extra; install it for the lint step.
           pip install ruff
           pip install -e ".[test]"
+          # CLI contract v1 conformance kit (Plan 018 WI-2), pinned by SHA.
+          # Installed as a dedicated step — NOT a pyproject dependency — because
+          # it is a git+SHA direct reference, which PyPI forbids in uploaded
+          # metadata. Fails loudly if it can't install, so the conformance gate
+          # can't silently vanish (the test import-skips only when truly absent).
+          pip install "agent-suite @ git+https://github.com/hraedon/agent-suite.git@1825e6c706488d13e2823dcae9c6c9e8dc5c237c"
 
       - name: Lint
         run: ruff check src/ tests/
@@ -88,6 +94,12 @@ jobs:
           pip install "regista-hraedon==0.5.1"
           pip install ruff
           pip install -e ".[test]"
+          # CLI contract v1 conformance kit (Plan 018 WI-2), pinned by SHA.
+          # Installed as a dedicated step — NOT a pyproject dependency — because
+          # it is a git+SHA direct reference, which PyPI forbids in uploaded
+          # metadata. Fails loudly if it can't install, so the conformance gate
+          # can't silently vanish (the test import-skips only when truly absent).
+          pip install "agent-suite @ git+https://github.com/hraedon/agent-suite.git@1825e6c706488d13e2823dcae9c6c9e8dc5c237c"
 
       - name: Lint
         run: ruff check src/ tests/
