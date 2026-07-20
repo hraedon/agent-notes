@@ -1274,8 +1274,14 @@ def test_cli_configures_structlog_to_stderr(capsys):
     from agent_notes.cli import _configure_logging_stderr
 
     structlog.reset_defaults()
-    _configure_logging_stderr()
-    structlog.get_logger().warning("probe.event", k="v")
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "probe.event" in captured.err
+    try:
+        _configure_logging_stderr()
+        structlog.get_logger().warning("probe.event", k="v")
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "probe.event" in captured.err
+    finally:
+        # The configured factory captured pytest's replaced sys.stderr;
+        # leaving it bound would poison later tests once that stream is
+        # torn down. Reset to structlog's lazy defaults.
+        structlog.reset_defaults()

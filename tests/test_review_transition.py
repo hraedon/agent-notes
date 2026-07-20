@@ -472,7 +472,7 @@ class TestCliReview:
         )
         assert cmd_wi_review_accept(ns) != 0
         data = json.loads(capsys.readouterr().out)
-        assert "review gate" in data["error"]
+        assert "review gate" in data["error"]["message"]
 
     def test_cli_review_reject(self, default_project, capsys, monkeypatch):
         _to_in_review(default_project.id, "RV-CLI-04", monkeypatch)
