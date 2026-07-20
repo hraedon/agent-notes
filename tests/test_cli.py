@@ -149,7 +149,8 @@ def test_resolve_not_configured():
         result = _run("resolve", "--path", td, "--json", check=False)
         assert result.returncode == 3  # EXIT_NOT_CONFIGURED
         data = json.loads(result.stdout)
-        assert data["code"] == 3
+        assert data["ok"] is False
+        assert data["error"]["code"] == "PROJECT_NOT_RESOLVED"
 
 
 def test_resolve_reports_resolved_via():
@@ -190,8 +191,9 @@ def test_resolve_failure_is_structured_not_silent(subcmd):
         result = _run(*subcmd, "--path", td, "--json", check=False)
         assert result.returncode == 3, result.stderr
         data = json.loads(result.stdout)  # must be parseable JSON, not empty
-        assert data["code"] == 3
-        assert "PROJECT_NOT_REGISTERED" in data["error"]
+        assert data["ok"] is False
+        assert data["error"]["code"] == "PROJECT_NOT_RESOLVED"
+        assert "PROJECT_NOT_REGISTERED" in data["error"]["message"]
 
 
 def test_export_unregistered_path_emits_json_error():
@@ -200,7 +202,8 @@ def test_export_unregistered_path_emits_json_error():
     with tempfile.TemporaryDirectory() as td:
         result = _run("export", "--path", td, check=False)
         assert result.returncode == 3, result.stderr
-        assert "PROJECT_NOT_REGISTERED" in json.loads(result.stdout)["error"]
+        envelope = json.loads(result.stdout)
+        assert "PROJECT_NOT_REGISTERED" in envelope["error"]["message"]
 
 
 @pytest.mark.parametrize(
@@ -1259,4 +1262,26 @@ def test_export_index_refuses_when_repo_root_missing(default_project):
     )
     assert result.returncode == 1, result.stderr
     data = json.loads(result.stdout)
-    assert "repo root" in data["error"].lower()
+    assert "repo root" in data["error"]["message"].lower()
+
+
+def test_cli_configures_structlog_to_stderr(capsys):
+    """Stream discipline (suite CLI contract v1 §1): the CLI entry routes all
+    structlog output (regista's included) to stderr, so --json stdout stays
+    pure. WI-019's root cause was unconfigured structlog printing to stdout."""
+    import structlog
+
+    from agent_notes.cli import _configure_logging_stderr
+
+    structlog.reset_defaults()
+    try:
+        _configure_logging_stderr()
+        structlog.get_logger().warning("probe.event", k="v")
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "probe.event" in captured.err
+    finally:
+        # The configured factory captured pytest's replaced sys.stderr;
+        # leaving it bound would poison later tests once that stream is
+        # torn down. Reset to structlog's lazy defaults.
+        structlog.reset_defaults()

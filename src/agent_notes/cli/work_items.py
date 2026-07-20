@@ -12,6 +12,7 @@ from agent_notes.cli.common import (
     _add_common,
     _print_sub_help,
     _resolve,
+    emit_error,
     report_resolution_failure,
 )
 
@@ -57,11 +58,12 @@ def cmd_wi_file(args: argparse.Namespace) -> int:
             embedding=vec,
         )
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            print(f"Error: {exc}")
-        return EXIT_CONFLICT
+        return emit_error(
+            "VALIDATION_FAILED",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_CONFLICT,
+        )
 
     if use_json:
         print(json.dumps({"work_item": wi}, indent=2, default=str))
@@ -89,22 +91,23 @@ def cmd_wi_update(args: argparse.Namespace) -> int:
     if args.title is not None:
         fields["title"] = args.title
     if args.body is not None and args.append_body is not None:
-        if use_json:
-            msg = "--body and --append-body are mutually exclusive"
-            print(json.dumps({"error": msg}, indent=2))
-        else:
-            print("Error: --body and --append-body are mutually exclusive")
-        return EXIT_CONFLICT
+        return emit_error(
+            "FLAG_CONFLICT",
+            "--body and --append-body are mutually exclusive",
+            use_json=use_json,
+            exit_code=EXIT_CONFLICT,
+        )
     if args.body is not None:
         fields["body"] = args.body
     if args.append_body is not None:
         old = WorkItemModel.get_work_item(proj_id, args.identifier)
         if old is None:
-            if use_json:
-                print(json.dumps({"error": "not found"}, indent=2))
-            else:
-                print(f"Work item '{args.identifier}' not found.")
-            return EXIT_NOT_FOUND
+            return emit_error(
+                "NOT_FOUND",
+                f"Work item '{args.identifier}' not found.",
+                use_json=use_json,
+                exit_code=EXIT_NOT_FOUND,
+            )
         existing_body = WorkItemModel.get_work_item_body(proj_id, args.identifier) or ""
         existing = existing_body.rstrip()
         sep = "\n\n" if existing else ""
@@ -119,11 +122,12 @@ def cmd_wi_update(args: argparse.Namespace) -> int:
     if "body" in fields or "title" in fields:
         old = WorkItemModel.get_work_item(proj_id, args.identifier)
         if old is None:
-            if use_json:
-                print(json.dumps({"error": "not found"}, indent=2))
-            else:
-                print(f"Work item '{args.identifier}' not found.")
-            return EXIT_NOT_FOUND
+            return emit_error(
+                "NOT_FOUND",
+                f"Work item '{args.identifier}' not found.",
+                use_json=use_json,
+                exit_code=EXIT_NOT_FOUND,
+            )
         old_body = WorkItemModel.get_work_item_body(proj_id, args.identifier) or ""
         text = fields.get("title", old.get("title", "")) + " " + fields.get("body", old_body)
         fields["embedding"] = embed(text, task="document").tolist()
@@ -136,11 +140,12 @@ def cmd_wi_update(args: argparse.Namespace) -> int:
             **fields,
         )
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            print(f"Error: {exc}")
-        return EXIT_NOT_FOUND
+        return emit_error(
+            "NOT_FOUND",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_NOT_FOUND,
+        )
 
     if use_json:
         print(json.dumps({"work_item": wi}, indent=2, default=str))
@@ -162,11 +167,12 @@ def cmd_wi_get(args: argparse.Namespace) -> int:
 
     wi = WorkItemModel.get_work_item(proj_id, args.identifier)
     if wi is None:
-        if use_json:
-            print(json.dumps({"error": "not found"}, indent=2))
-        else:
-            print(f"Work item '{args.identifier}' not found.")
-        return EXIT_NOT_FOUND
+        return emit_error(
+            "NOT_FOUND",
+            f"Work item '{args.identifier}' not found.",
+            use_json=use_json,
+            exit_code=EXIT_NOT_FOUND,
+        )
 
     if use_json:
         wi.pop("embedding", None)
@@ -323,11 +329,12 @@ def cmd_wi_delete(args: argparse.Namespace) -> int:
 
     deleted = WorkItemModel.delete_work_item(proj_id, args.identifier)
     if not deleted:
-        if use_json:
-            print(json.dumps({"error": "not found"}, indent=2))
-        else:
-            print(f"Work item '{args.identifier}' not found.")
-        return EXIT_NOT_FOUND
+        return emit_error(
+            "NOT_FOUND",
+            f"Work item '{args.identifier}' not found.",
+            use_json=use_json,
+            exit_code=EXIT_NOT_FOUND,
+        )
 
     if use_json:
         print(json.dumps({"deleted": args.identifier}, indent=2))
@@ -352,11 +359,12 @@ def cmd_wi_close(args: argparse.Namespace) -> int:
             proj_id, args.identifier, force=getattr(args, "force", False)
         )
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            print(f"Error: {exc}")
-        return EXIT_NOT_FOUND
+        return emit_error(
+            "NOT_FOUND",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_NOT_FOUND,
+        )
 
     if use_json:
         print(json.dumps({"work_item": wi}, indent=2, default=str))
@@ -379,11 +387,12 @@ def cmd_wi_diagnose(args: argparse.Namespace) -> int:
     try:
         result = WorkItemModel.diagnose(proj_id, args.identifier)
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            print(f"Error: {exc}")
-        return EXIT_NOT_FOUND
+        return emit_error(
+            "NOT_FOUND",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_NOT_FOUND,
+        )
 
     if use_json:
         print(json.dumps(result, indent=2, default=str))
@@ -414,11 +423,12 @@ def cmd_wi_attest_gate(args: argparse.Namespace) -> int:
     try:
         wi = WorkItemModel.attest_gate_waiver(proj_id, args.identifier, reason=args.reason)
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            print(f"Error: {exc}")
-        return EXIT_NOT_FOUND
+        return emit_error(
+            "NOT_FOUND",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_NOT_FOUND,
+        )
 
     if use_json:
         print(json.dumps({"work_item": wi}, indent=2, default=str))
@@ -492,11 +502,12 @@ def cmd_wi_review_pass(args: argparse.Namespace) -> int:
             same_lineage_acknowledged=getattr(args, "same_lineage_acknowledged", False),
         )
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            print(f"Error: {exc}")
-        return EXIT_CONFLICT
+        return emit_error(
+            "VALIDATION_FAILED",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_CONFLICT,
+        )
 
     if use_json:
         print(json.dumps({"work_item": wi}, indent=2, default=str))
@@ -524,11 +535,12 @@ def cmd_wi_review_accept(args: argparse.Namespace) -> int:
             same_lineage_acknowledged=getattr(args, "same_lineage_acknowledged", False),
         )
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            print(f"Error: {exc}")
-        return EXIT_CONFLICT
+        return emit_error(
+            "VALIDATION_FAILED",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_CONFLICT,
+        )
 
     if use_json:
         print(json.dumps({"work_item": wi}, indent=2, default=str))
@@ -556,11 +568,12 @@ def cmd_wi_review_reject(args: argparse.Namespace) -> int:
             same_lineage_acknowledged=getattr(args, "same_lineage_acknowledged", False),
         )
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            print(f"Error: {exc}")
-        return EXIT_CONFLICT
+        return emit_error(
+            "VALIDATION_FAILED",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_CONFLICT,
+        )
 
     if use_json:
         print(json.dumps({"work_item": wi}, indent=2, default=str))
@@ -588,11 +601,12 @@ def cmd_wi_review_request_changes(args: argparse.Namespace) -> int:
             same_lineage_acknowledged=getattr(args, "same_lineage_acknowledged", False),
         )
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            print(f"Error: {exc}")
-        return EXIT_CONFLICT
+        return emit_error(
+            "VALIDATION_FAILED",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_CONFLICT,
+        )
 
     if use_json:
         print(json.dumps({"work_item": wi}, indent=2, default=str))
@@ -622,11 +636,12 @@ def cmd_wi_request(args: argparse.Namespace) -> int:
             kind=args.type,
         )
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            print(f"Error: {exc}")
-        return EXIT_CONFLICT
+        return emit_error(
+            "VALIDATION_FAILED",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_CONFLICT,
+        )
 
     if use_json:
         print(json.dumps({"request": req}, indent=2, default=str))
@@ -650,11 +665,12 @@ def cmd_wi_wait(args: argparse.Namespace) -> int:
     try:
         target_project, target_identifier = WorkItemModel.parse_address(args.target)
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            print(f"Error: {exc}")
-        return EXIT_CONFLICT
+        return emit_error(
+            "VALIDATION_FAILED",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_CONFLICT,
+        )
 
     try:
         wait = WorkItemModel.wait_on_work_item(
@@ -663,11 +679,12 @@ def cmd_wi_wait(args: argparse.Namespace) -> int:
             target_identifier=target_identifier,
         )
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            print(f"Error: {exc}")
-        return EXIT_NOT_FOUND
+        return emit_error(
+            "NOT_FOUND",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_NOT_FOUND,
+        )
 
     if use_json:
         print(json.dumps({"wait": wait}, indent=2, default=str))
@@ -691,11 +708,12 @@ def cmd_wi_link_cross(args: argparse.Namespace) -> int:
     try:
         target_project, target_identifier = WorkItemModel.parse_address(args.target)
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            print(f"Error: {exc}")
-        return EXIT_CONFLICT
+        return emit_error(
+            "VALIDATION_FAILED",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_CONFLICT,
+        )
 
     try:
         result = WorkItemModel.add_cross_project_link(
@@ -706,11 +724,12 @@ def cmd_wi_link_cross(args: argparse.Namespace) -> int:
             relationship=args.relationship,
         )
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            print(f"Error: {exc}")
-        return EXIT_NOT_FOUND
+        return emit_error(
+            "NOT_FOUND",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_NOT_FOUND,
+        )
 
     if use_json:
         print(json.dumps({"link": result}, indent=2, default=str))
@@ -749,11 +768,12 @@ def cmd_wi_ingest_ops(args: argparse.Namespace) -> int:
     use_json = getattr(args, "json", False)
     source_project = args.source_project
     if not source_project:
-        if use_json:
-            print(json.dumps({"error": "--source-project is required"}, indent=2))
-        else:
-            print("Error: --source-project is required")
-        return EXIT_CONFLICT
+        return emit_error(
+            "FLAG_MISSING",
+            "Error: --source-project is required",
+            use_json=use_json,
+            exit_code=EXIT_CONFLICT,
+        )
 
     import sys
 
@@ -764,11 +784,12 @@ def cmd_wi_ingest_ops(args: argparse.Namespace) -> int:
             with open(args.file, "r", encoding="utf-8") as f:
                 jsonl_data = f.read()
         except OSError as exc:
-            if use_json:
-                print(json.dumps({"error": f"Cannot read {args.file}: {exc}"}, indent=2))
-            else:
-                print(f"Error: cannot read {args.file}: {exc}")
-            return EXIT_NOT_FOUND
+            return emit_error(
+                "FILE_UNREADABLE",
+                f"Cannot read {args.file}: {exc}",
+                use_json=use_json,
+                exit_code=EXIT_NOT_FOUND,
+            )
     else:
         jsonl_data = sys.stdin.read()
 
@@ -813,11 +834,12 @@ def cmd_wi_claim(args: argparse.Namespace) -> int:
             ttl_seconds=args.ttl,
         )
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            print(f"Error: {exc}")
-        return EXIT_CONFLICT
+        return emit_error(
+            "VALIDATION_FAILED",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_CONFLICT,
+        )
 
     if use_json:
         print(json.dumps({"work_item": wi}, indent=2, default=str))
@@ -845,11 +867,12 @@ def cmd_wi_release(args: argparse.Namespace) -> int:
             actor_id=args.actor_id,
         )
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            print(f"Error: {exc}")
-        return EXIT_CONFLICT
+        return emit_error(
+            "VALIDATION_FAILED",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_CONFLICT,
+        )
 
     if use_json:
         print(json.dumps({"work_item": wi}, indent=2, default=str))
@@ -878,11 +901,12 @@ def cmd_wi_heartbeat(args: argparse.Namespace) -> int:
             ttl_seconds=args.ttl,
         )
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            print(f"Error: {exc}")
-        return EXIT_CONFLICT
+        return emit_error(
+            "VALIDATION_FAILED",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_CONFLICT,
+        )
 
     if use_json:
         print(json.dumps({"lease": lease}, indent=2, default=str))
