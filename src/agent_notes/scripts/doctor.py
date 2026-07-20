@@ -388,13 +388,20 @@ def _check_bridge_target() -> tuple[bool, str]:
 
 
 def _component_version() -> str:
-    """Return the installed agent-notes distribution version."""
+    """Return the installed agent-notes distribution version.
+
+    The published distribution is ``agent-notes-hraedon``; the pre-rename name
+    ``agent-notes`` is still used by editable/local installs. Try both so
+    version introspection survives the PyPI rename (parallels regista's fix).
+    """
     from importlib.metadata import version
 
-    try:
-        return version("agent-notes")
-    except Exception:
-        return "unknown"
+    for dist in ("agent-notes-hraedon", "agent-notes"):
+        try:
+            return version(dist)
+        except Exception:
+            continue
+    return "unknown"
 
 
 def _check_regista_reachable(cfg: reg_config.RegistaConfig) -> tuple[bool | None, str]:
