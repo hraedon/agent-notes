@@ -137,33 +137,61 @@ def default_actor():
     return resolve_actor()
 
 
-def reviewer_actor(
+def actor_with_overrides(
     actor_id: str | None = None,
     model_lineage: str | None = None,
+    *,
+    clear_principal: bool = False,
 ) -> Actor:
-    """Resolve an actor with optional identity overrides for review transitions.
+    """Resolve an actor with optional identity overrides.
 
-    Review-gate transitions (adversarial_pass, accept, reject, request_changes)
-    require a distinct actor identity from the work's authors. This helper
-    builds an Actor from the env-resolved config, applying per-call overrides
-    so a subagent can declare its own lineage without env-var mutation.
+    Used by both authoring operations (file, update, close) and review-gate
+    transitions (adversarial_pass, accept, reject, request_changes). This
+    helper builds an Actor from the env-resolved config, applying per-call
+    overrides so a subagent can declare its own lineage without env-var
+    mutation.
 
-    When ``actor_id`` is overridden, the env-resolved principal (``on_behalf_of``)
-    is cleared — a reviewer with a distinct identity is its own principal, not
-    acting on behalf of the author's principal. Without this, the gate's
-    separation-of-duties check would flag a "delegated self-review."
+    When ``actor_id`` is overridden and ``clear_principal=True``, the
+    env-resolved principal (``on_behalf_of``) is cleared — a reviewer with a
+    distinct identity is its own principal, not acting on behalf of the
+    author's principal. Without this, the gate's separation-of-duties check
+    would flag a "delegated self-review." When ``clear_principal=False``
+    (the default, used for authoring), the principal is preserved — the
+    agent is still acting on behalf of the human who invoked it, just with
+    a distinct per-session identity.
+
+    When only ``model_lineage`` is overridden (no ``actor_id``), the
+    principal is always preserved — the actor is still the same agent,
+    just declaring its lineage explicitly.
     """
     config = load_actor_config()
-    if actor_id is not None:
+    if actor_id is not None and clear_principal:
         config = dataclasses.replace(
             config,
             actor_id=actor_id,
             principal_id=None,
             principal_display_name=None,
         )
+    elif actor_id is not None:
+        config = dataclasses.replace(
+            config,
+            actor_id=actor_id,
+        )
     if model_lineage is not None:
         config = dataclasses.replace(config, model_lineage=model_lineage)
     return resolve_actor(config)
+
+
+def reviewer_actor(
+    actor_id: str | None = None,
+    model_lineage: str | None = None,
+) -> Actor:
+    """Deprecated alias for :func:`actor_with_overrides` with principal clearing.
+
+    Reviewers act on their own behalf, not on behalf of the author's
+    principal, so ``clear_principal=True`` is passed.
+    """
+    return actor_with_overrides(actor_id, model_lineage, clear_principal=True)
 
 
 def reset_face() -> None:

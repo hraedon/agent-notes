@@ -60,6 +60,8 @@ def cmd_wi_file(args: argparse.Namespace) -> int:
             external_refs=external_refs,
             diagnostic_keys=diagnostic_keys,
             embedding=vec,
+            actor_id=getattr(args, "actor_id", None),
+            model_lineage=getattr(args, "model_lineage", None),
         )
     except ValueError as exc:
         return emit_error(
@@ -141,6 +143,8 @@ def cmd_wi_update(args: argparse.Namespace) -> int:
             project_id=proj_id,
             identifier=args.identifier,
             force=getattr(args, "force", False),
+            actor_id=getattr(args, "actor_id", None),
+            model_lineage=getattr(args, "model_lineage", None),
             **fields,
         )
     except ValueError as exc:
@@ -360,7 +364,10 @@ def cmd_wi_close(args: argparse.Namespace) -> int:
 
     try:
         wi = WorkItemModel.close_work_item(
-            proj_id, args.identifier, force=getattr(args, "force", False)
+            proj_id, args.identifier,
+            force=getattr(args, "force", False),
+            actor_id=getattr(args, "actor_id", None),
+            model_lineage=getattr(args, "model_lineage", None),
         )
     except ValueError as exc:
         return emit_error(
@@ -939,6 +946,20 @@ def cmd_wi_requeue_expired(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
+def _add_author_identity(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--actor-id",
+        default=None,
+        help="Override the author's actor_id (default: AGENT_NOTES_ACTOR_ID env)",
+    )
+    parser.add_argument(
+        "--model-lineage",
+        default=None,
+        help="Declare the author's model lineage (default: AGENT_NOTES_MODEL_LINEAGE env). "
+        "Agents must declare this so the cross-lineage review gate can verify distinctness.",
+    )
+
+
 def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
     wi = sub.add_parser("work-item", help="Work item operations (Plan 008 kernel)")
     wi_sub = wi.add_subparsers(dest="wi_cmd")
@@ -952,6 +973,7 @@ def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
     wi_file.add_argument("--severity", default="medium")
     wi_file.add_argument("--external-refs", default=None)
     wi_file.add_argument("--diagnostic-keys", default=None)
+    _add_author_identity(wi_file)
     _add_common(wi_file)
     wi_file.set_defaults(func=cmd_wi_file)
 
@@ -974,6 +996,7 @@ def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
         default=False,
         help="Bypass the transition pre-flight check (Plan 013 WI-5; admin/repair only)",
     )
+    _add_author_identity(wi_update)
     _add_common(wi_update)
     wi_update.set_defaults(func=cmd_wi_update)
 
@@ -1052,6 +1075,7 @@ def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Admin/repair: write a terminal close instead of deferring to review",
     )
+    _add_author_identity(wi_close)
     _add_common(wi_close)
     wi_close.set_defaults(func=cmd_wi_close)
 

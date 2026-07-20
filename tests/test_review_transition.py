@@ -7,7 +7,7 @@ Covers both the native (degrade) and regista paths:
   accept is blocked (Plan 014 WI-2 — the gate cannot run off-regista).
 - Regista: review_transition threads the review_note into the transition
   payload so regista's cross-lineage validators accept it, and uses the
-  reviewer_actor helper for identity overrides.
+  actor_with_overrides helper for identity overrides.
 - CLI: review list / pass / accept / reject / request-changes.
 """
 
@@ -379,13 +379,182 @@ class TestRegistaReviewTransition:
             reset_face()
             reg.close()
 
+    def test_author_lineage_via_flag_not_env(
+        self, default_project, hmac_key_path, monkeypatch
+    ):
+        """Author declares model_lineage via the parameter, not the env var.
+
+        AGENT_NOTES_MODEL_LINEAGE is NOT set. The author passes
+        model_lineage="glm" directly to file_work_item / update_work_item /
+        close_work_item. A different-lineage reviewer (kimi) then performs
+        an adversarial pass WITHOUT same_lineage_acknowledged — the gate
+        should accept it because the lineages are genuinely distinct.
+
+        This is the regression test for the gap where authors could only
+        declare lineage via the env var, leaving it undeclared when the env
+        wasn't set — causing the gate to fail with "undeclared agent author."
+        """
+        monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "author-agent")
+        monkeypatch.setenv("AGENT_NOTES_PRINCIPAL_ID", "author@example.com")
+        monkeypatch.delenv("AGENT_NOTES_MODEL_LINEAGE", raising=False)
+
+        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        face = RegistaFace(reg)
+        reset_face()
+        set_face_for_test(face)
+
+        try:
+            WorkItemModel.file_work_item(
+                project_id=default_project.id,
+                identifier="RV-LIN-01",
+                title="lineage via flag",
+                body="body",
+                kind="bug",
+                status="open",
+                severity="medium",
+                embedding=_vec768(),
+                model_lineage="glm",
+            )
+            WorkItemModel.update_work_item(
+                project_id=default_project.id,
+                identifier="RV-LIN-01",
+                status="in_progress",
+                model_lineage="glm",
+            )
+            WorkItemModel.close_work_item(
+                default_project.id, "RV-LIN-01",
+                model_lineage="glm",
+            )
+
+            result = WorkItemModel.review_transition(
+                default_project.id,
+                "RV-LIN-01",
+                transition_name="adversarial_pass",
+                review_note="Cross-lineage pass — lineages are distinct.",
+                actor_id="reviewer-kimi",
+                model_lineage="kimi",
+            )
+            assert result["status"] == "in_human_review"
+
+            wi = WorkItemModel.get_work_item(default_project.id, "RV-LIN-01")
+            regista_id = wi["regista_work_item_id"]
+            events = face.history(regista_id)
+            author_events = [
+                e for e in events
+                if (getattr(e, "actor_metadata", None) or {}).get("model_lineage") == "glm"
+            ]
+            assert len(author_events) >= 1
+        finally:
+            reset_face()
+            reg.close()
+
+    def test_author_lineage_undeclared_still_requires_ack(
+        self, default_project, hmac_key_path, monkeypatch
+    ):
+        """When the author's lineage is undeclared (no env, no flag), the gate
+        still requires same_lineage_acknowledged — the fail-closed behavior."""
+        monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "author-agent")
+        monkeypatch.setenv("AGENT_NOTES_PRINCIPAL_ID", "author@example.com")
+        monkeypatch.delenv("AGENT_NOTES_MODEL_LINEAGE", raising=False)
+
+        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        face = RegistaFace(reg)
+        reset_face()
+        set_face_for_test(face)
+
+        try:
+            WorkItemModel.file_work_item(
+                project_id=default_project.id,
+                identifier="RV-LIN-02",
+                title="no lineage declared",
+                body="body",
+                kind="bug",
+                status="open",
+                severity="medium",
+                embedding=_vec768(),
+            )
+            WorkItemModel.update_work_item(
+                project_id=default_project.id,
+                identifier="RV-LIN-02",
+                status="in_progress",
+            )
+            WorkItemModel.close_work_item(default_project.id, "RV-LIN-02")
+
+            from regista._errors import RegistaError
+
+            with pytest.raises(RegistaError, match="undeclared"):
+                WorkItemModel.review_transition(
+                    default_project.id,
+                    "RV-LIN-02",
+                    transition_name="adversarial_pass",
+                    review_note="Should fail — author lineage undeclared.",
+                    actor_id="reviewer-kimi",
+                    model_lineage="kimi",
+                )
+        finally:
+            reset_face()
+            reg.close()
+
+
+class TestActorWithOverrides:
+    """Unit tests for the clear_principal behavior in actor_with_overrides."""
+
+    def test_clear_principal_true_clears_principal(self, monkeypatch):
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "env-agent")
+        monkeypatch.setenv("AGENT_NOTES_PRINCIPAL_ID", "alice@example.com")
+        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")
+
+        from agent_notes.core.face_factory import actor_with_overrides
+
+        actor = actor_with_overrides("reviewer-kimi", "kimi", clear_principal=True)
+        assert actor.actor_id == "reviewer-kimi"
+        assert actor.model_lineage == "kimi"
+        assert actor.on_behalf_of is None
+
+    def test_clear_principal_false_preserves_principal(self, monkeypatch):
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "env-agent")
+        monkeypatch.setenv("AGENT_NOTES_PRINCIPAL_ID", "alice@example.com")
+        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")
+
+        from agent_notes.core.face_factory import actor_with_overrides
+
+        actor = actor_with_overrides("author-kimi-42", "kimi", clear_principal=False)
+        assert actor.actor_id == "author-kimi-42"
+        assert actor.model_lineage == "kimi"
+        assert actor.on_behalf_of is not None
+        assert actor.on_behalf_of["principal_id"] == "alice@example.com"
+
+    def test_model_lineage_only_preserves_principal(self, monkeypatch):
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "env-agent")
+        monkeypatch.setenv("AGENT_NOTES_PRINCIPAL_ID", "alice@example.com")
+        monkeypatch.delenv("AGENT_NOTES_MODEL_LINEAGE", raising=False)
+
+        from agent_notes.core.face_factory import actor_with_overrides
+
+        actor = actor_with_overrides(None, "glm")
+        assert actor.actor_id == "env-agent"
+        assert actor.model_lineage == "glm"
+        assert actor.on_behalf_of is not None
+        assert actor.on_behalf_of["principal_id"] == "alice@example.com"
+
+    def test_no_overrides_matches_default_actor(self, monkeypatch):
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "env-agent")
+        monkeypatch.setenv("AGENT_NOTES_PRINCIPAL_ID", "alice@example.com")
+        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")
+
+        from agent_notes.core.face_factory import actor_with_overrides, default_actor
+
+        a1 = actor_with_overrides()
+        a2 = default_actor()
+        assert a1.actor_id == a2.actor_id
+        assert a1.model_lineage == a2.model_lineage
+        assert (a1.on_behalf_of or {}) == (a2.on_behalf_of or {})
+
 
 # ---------------------------------------------------------------------------
 # CLI — review list / pass / accept / reject / request-changes
-# ---------------------------------------------------------------------------
-
-
-class TestCliReview:
     def test_cli_review_list(self, default_project, capsys, monkeypatch):
         _native(monkeypatch)
         _to_in_review(default_project.id, "RV-CLI-01", monkeypatch)

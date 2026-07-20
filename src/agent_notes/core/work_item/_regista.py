@@ -36,6 +36,8 @@ def file_work_item(
     external_refs: dict | None,
     diagnostic_keys: dict | None,
     embedding: Any | None,
+    actor_id: str | None = None,
+    model_lineage: str | None = None,
 ) -> dict:
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
@@ -49,7 +51,7 @@ def file_work_item(
             identifier = cur.fetchone()[0]
 
     effective_title = title or identifier
-    actor = face_factory.default_actor()
+    actor = face_factory.actor_with_overrides(actor_id, model_lineage)
     norm_sid = normalize_source_identifier(identifier)
 
     # Idempotency guard (Plan 015): regista is the SoT, but the create-vs-update
@@ -143,6 +145,8 @@ def update_work_item(
     external_refs: dict | None,
     diagnostic_keys: dict | None,
     embedding: Any | None,
+    actor_id: str | None = None,
+    model_lineage: str | None = None,
 ) -> dict:
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
@@ -160,7 +164,7 @@ def update_work_item(
         old_body = kernel.get_blob(conn, old["body_hash"]) or ""
         wid = old["regista_work_item_id"]
 
-    actor = face_factory.default_actor()
+    actor = face_factory.actor_with_overrides(actor_id, model_lineage)
     custom_fields: dict[str, Any] = {}
     if title is not None:
         custom_fields["title"] = title or identifier
@@ -226,7 +230,13 @@ def update_work_item(
     return dict(mirrored)
 
 
-def close_work_item(face: Any, project_id: int, identifier: str) -> dict:
+def close_work_item(
+    face: Any,
+    project_id: int,
+    identifier: str,
+    actor_id: str | None = None,
+    model_lineage: str | None = None,
+) -> dict:
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         old = _common.load_work_item_row(conn, project_id, identifier)
@@ -237,7 +247,7 @@ def close_work_item(face: Any, project_id: int, identifier: str) -> dict:
         wid = old["regista_work_item_id"]
         state = old["status"]
 
-    actor = face_factory.default_actor()
+    actor = face_factory.actor_with_overrides(actor_id, model_lineage)
     # Plan 010 WI-3: close → submit_for_review → in_review. The agent cannot
     # reach `done` unilaterally (Invariant G); work awaits a cross-lineage
     # review pass + accept. `closed` (legacy terminal) is treated as `done`.
@@ -308,7 +318,9 @@ def review_transition(
             )
         wid = old["regista_work_item_id"]
 
-    actor = face_factory.reviewer_actor(actor_id, model_lineage)
+    actor = face_factory.actor_with_overrides(
+        actor_id, model_lineage, clear_principal=True,
+    )
     payload: dict[str, Any] = {"review_note": review_note}
     if same_lineage_acknowledged:
         payload["same_lineage_acknowledged"] = True

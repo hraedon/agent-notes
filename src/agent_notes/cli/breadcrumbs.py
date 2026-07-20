@@ -28,6 +28,7 @@ from agent_notes.cli.common import (
     emit_error,
     report_resolution_failure,
 )
+from agent_notes.cli.work_items import _add_author_identity
 from agent_notes.core import config as reg_config
 from agent_notes.core import outbox
 from agent_notes.core.lifecycle import map_legacy_to_canonical as _map_status
@@ -75,6 +76,8 @@ def cmd_bc_file(args: argparse.Namespace) -> int:
             external_refs=external_refs,
             diagnostic_keys=diagnostic_keys,
             embedding=vec,
+            actor_id=getattr(args, "actor_id", None),
+            model_lineage=getattr(args, "model_lineage", None),
         )
     except ValueError as exc:
         return emit_error(
@@ -156,6 +159,8 @@ def cmd_bc_update(args: argparse.Namespace) -> int:
             project_id=proj_id,
             identifier=args.identifier,
             force=getattr(args, "force", False),
+            actor_id=getattr(args, "actor_id", None),
+            model_lineage=getattr(args, "model_lineage", None),
             **fields,
         )
     except ValueError as exc:
@@ -590,6 +595,7 @@ def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
     bc_file.add_argument("--severity", default="medium")
     bc_file.add_argument("--external-refs", default=None)
     bc_file.add_argument("--diagnostic-keys", default=None)
+    _add_author_identity(bc_file)
     _add_common(bc_file)
     bc_file.set_defaults(func=cmd_bc_file)
 
@@ -612,6 +618,7 @@ def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
         default=False,
         help="Bypass the transition pre-flight check (Plan 013 WI-5; admin/repair only)",
     )
+    _add_author_identity(bc_update)
     _add_common(bc_update)
     bc_update.set_defaults(func=cmd_bc_update)
 

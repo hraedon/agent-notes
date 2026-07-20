@@ -49,6 +49,7 @@ def file_work_item(
     embedding: Any | None,
     frontmatter_version: int,
     actor_id: str | None,
+    model_lineage: str | None = None,
 ) -> dict:
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
@@ -77,6 +78,7 @@ def file_work_item(
             "diagnostic_keys": diagnostic_keys or {},
             "embedding": embedding,
             "frontmatter_version": frontmatter_version,
+            "model_lineage": model_lineage,
         }
 
         # The entity_id is the hash of the create op itself.
@@ -137,6 +139,7 @@ def update_work_item(
     embedding: Any | None = None,
     frontmatter_version: int | None = None,
     actor_id: str | None = None,
+    model_lineage: str | None = None,
     force: bool = False,
 ) -> dict:
     with _conn() as conn:
@@ -185,6 +188,8 @@ def update_work_item(
             "frontmatter_version"
         ):
             payload["frontmatter_version"] = frontmatter_version
+        if model_lineage is not None:
+            payload["model_lineage"] = model_lineage
 
         # If status changed, write a separate set_status op.
         status_changed = False
@@ -296,7 +301,11 @@ def update_work_item(
 
 
 def close_work_item_native_deferred(
-    project_id: int, identifier: str, old: dict, actor_id: str | None
+    project_id: int,
+    identifier: str,
+    old: dict,
+    actor_id: str | None,
+    model_lineage: str | None = None,
 ) -> dict:
     """Native (degrade) close that defers to ``in_review`` (Plan 014 A(b)).
 
@@ -327,16 +336,23 @@ def close_work_item_native_deferred(
             identifier=identifier,
             status="in_progress",
             actor_id=actor_id,
+            model_lineage=model_lineage,
         )
     return update_work_item(
         project_id=project_id,
         identifier=identifier,
         status="in_review",
         actor_id=actor_id,
+        model_lineage=model_lineage,
     )
 
 
-def close_work_item_force(project_id: int, identifier: str, actor_id: str | None) -> dict:
+def close_work_item_force(
+    project_id: int,
+    identifier: str,
+    actor_id: str | None,
+    model_lineage: str | None = None,
+) -> dict:
     """Native force-close: writes the legacy terminal ``close`` op (admin/repair)."""
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
@@ -350,12 +366,15 @@ def close_work_item_force(project_id: int, identifier: str, actor_id: str | None
             raise ValueError(f"Work item not found: {identifier!r} in project {project_id}")
 
         entity_id = old["entity_id"]
+        force_close_payload: dict = {"reason": "manual_close"}
+        if model_lineage is not None:
+            force_close_payload["model_lineage"] = model_lineage
         op = kernel.commit_op(
             conn,
             entity_id=entity_id,
             entity_type=ENTITY_TYPE,
             op_type="close",
-            payload={"reason": "manual_close"},
+            payload=force_close_payload,
             parent_op_ids=[entity_id],
             actor_id=actor_id,
         )
@@ -415,7 +434,7 @@ def attest_gate_waiver(project_id: int, identifier: str, reason: str, actor_id: 
             )
 
         actor = (
-            face_factory.reviewer_actor(actor_id, None)
+            face_factory.actor_with_overrides(actor_id, None, clear_principal=True)
             if actor_id
             else face_factory.default_actor()
         )

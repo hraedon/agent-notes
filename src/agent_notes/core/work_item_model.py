@@ -94,6 +94,7 @@ class WorkItemModel:
         embedding: Any | None = None,
         frontmatter_version: int = 1,
         actor_id: str | None = None,
+        model_lineage: str | None = None,
     ) -> dict:
         face = face_factory.get_face()
         if face is not None:
@@ -109,6 +110,8 @@ class WorkItemModel:
                 external_refs,
                 diagnostic_keys,
                 embedding,
+                actor_id=actor_id,
+                model_lineage=model_lineage,
             )
         return _native.file_work_item(
             project_id,
@@ -123,6 +126,7 @@ class WorkItemModel:
             embedding,
             frontmatter_version,
             actor_id,
+            model_lineage=model_lineage,
         )
 
     @classmethod
@@ -140,6 +144,7 @@ class WorkItemModel:
         embedding: Any | None = None,
         frontmatter_version: int | None = None,
         actor_id: str | None = None,
+        model_lineage: str | None = None,
         force: bool = False,
     ) -> dict:
         face = face_factory.get_face()
@@ -156,6 +161,8 @@ class WorkItemModel:
                 external_refs,
                 diagnostic_keys,
                 embedding,
+                actor_id=actor_id,
+                model_lineage=model_lineage,
             )
         return _native.update_work_item(
             project_id,
@@ -170,7 +177,8 @@ class WorkItemModel:
             embedding,
             frontmatter_version,
             actor_id,
-            force,
+            model_lineage=model_lineage,
+            force=force,
         )
 
     @classmethod
@@ -202,6 +210,7 @@ class WorkItemModel:
         project_id: int,
         identifier: str,
         actor_id: str | None = None,
+        model_lineage: str | None = None,
         force: bool = False,
     ) -> dict:
         """Close a work item.
@@ -220,14 +229,22 @@ class WorkItemModel:
         hatch that writes the legacy terminal ``close`` op.
         """
         if force:
-            return _native.close_work_item_force(project_id, identifier, actor_id)
+            return _native.close_work_item_force(
+                project_id, identifier, actor_id, model_lineage=model_lineage,
+            )
         face = face_factory.get_face()
         if face is not None:
-            return _regista.close_work_item(face, project_id, identifier)
+            return _regista.close_work_item(
+                face, project_id, identifier,
+                actor_id=actor_id,
+                model_lineage=model_lineage,
+            )
         old = cls.get_work_item(project_id, identifier)
         if old is None:
             raise ValueError(f"Work item not found: {identifier!r} in project {project_id}")
-        return _native.close_work_item_native_deferred(project_id, identifier, old, actor_id)
+        return _native.close_work_item_native_deferred(
+            project_id, identifier, old, actor_id, model_lineage=model_lineage,
+        )
 
     @classmethod
     def attest_gate_waiver(
