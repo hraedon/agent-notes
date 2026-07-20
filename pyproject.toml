@@ -20,11 +20,13 @@ dependencies = [
 test = [
     "pytest>=8.0",
     "testcontainers[postgres]>=4.0",
-    # CLI contract v1 conformance kit (Plan 018 WI-2), consumed pinned — never
-    # copied — from the public agent-suite repo. Bump the SHA to adopt a newer
-    # kit; a change here is a deliberate contract-revision event.
-    "agent-suite @ git+https://github.com/hraedon/agent-suite.git@1825e6c706488d13e2823dcae9c6c9e8dc5c237c",
 ]
+
+# NOTE: the CLI contract v1 conformance kit (agent_suite.conformance, Plan 018
+# WI-2) is intentionally NOT declared here. It is a git+SHA direct reference,
+# which PyPI forbids in uploaded package metadata (even inside an extra). CI
+# installs it as a separate pinned step (see .github/workflows/ci.yml); the
+# conformance test import-skips when it is absent.
 
 [project.scripts]
 agent-notes             = "agent_notes.cli:main"
@@ -49,12 +51,6 @@ regista-hraedon = { path = "../regista", editable = true }
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-
-[tool.hatch.metadata]
-# The conformance kit is pinned as a git+SHA direct reference in the `test`
-# extra (Plan 018 WI-2); hatchling requires this opt-in to allow it. Only the
-# test extra uses a direct reference — runtime/published deps stay on PyPI.
-allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_notes"]
