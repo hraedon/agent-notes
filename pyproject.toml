@@ -61,6 +61,8 @@ select = ["E", "F", "I", "N", "W"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not slow' --strict-markers"
 markers = [
     "postgres: requires a real Postgres instance (regista pg15 test DB; set REGISTA_TEST_DSN)",
+    "slow: subprocess/embedding-heavy tests, skipped by default (run with -m slow)",
 ]

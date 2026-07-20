@@ -16,9 +16,18 @@ pytestmark = pytest.mark.usefixtures("ephemeral_db")
 
 _CLI = [sys.executable, "-m", "agent_notes.cli"]
 
+_HINDSIGHT_ENV_KEYS = (
+    "AGENT_NOTES_MEMORY_ENGINE",
+    "HINDSIGHT_URL",
+    "HINDSIGHT_API_KEY",
+    "HINDSIGHT_TENANT",
+    "HINDSIGHT_TIMEOUT",
+)
+
 
 def _run(*args: str, env: dict | None = None, check: bool = True) -> subprocess.CompletedProcess:
-    merged_env = {**os.environ, **(env or {})}
+    merged_env = {k: v for k, v in os.environ.items() if k not in _HINDSIGHT_ENV_KEYS}
+    merged_env.update(env or {})
     return subprocess.run(
         _CLI + list(args),
         capture_output=True,

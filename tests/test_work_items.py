@@ -1401,6 +1401,7 @@ class TestResolveStatusLatticeUnit:
 
 
 class TestCliWorkItem:
+    @pytest.mark.slow
     def test_cli_file_work_item(self, default_project, capsys):
         from agent_notes.cli.work_items import cmd_wi_file
 

@@ -241,6 +241,7 @@ def test_link_add_bad_ref_does_not_traceback():
     assert "Error" in result.stderr and "Traceback" not in result.stderr
 
 
+@pytest.mark.slow
 def test_breadcrumb_file(default_project):
     result = _run(
         "breadcrumb",
@@ -319,6 +320,7 @@ def test_breadcrumb_find(default_project):
     assert "BC-CLI-002" in identifiers
 
 
+@pytest.mark.slow
 def test_memory_add(default_project):
     result = _run(
         "memory",
@@ -673,6 +675,7 @@ def test_install_skills_opencode_skips_opencode_subdir():
         assert names == {"demo-skill"}
 
 
+@pytest.mark.slow
 def test_breadcrumb_update_append_body(default_project):
     from agent_notes.core.work_item_model import WorkItemModel
 
@@ -850,6 +853,7 @@ def test_changes_since(default_project):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_search_all(default_project):
     from agent_notes.core.memory_model import add_memory
     from agent_notes.core.work_item_model import WorkItemModel
@@ -891,6 +895,7 @@ def test_search_all(default_project):
     assert "BC-SEARCH-CLI-1" in identifiers
 
 
+@pytest.mark.slow
 def test_search_breadcrumb_only(default_project):
     from agent_notes.core.memory_model import add_memory
     from agent_notes.core.work_item_model import WorkItemModel
@@ -931,6 +936,7 @@ def test_search_breadcrumb_only(default_project):
         assert r["kind"] == "breadcrumb"
 
 
+@pytest.mark.slow
 def test_search_memory_only(default_project):
     from agent_notes.core.memory_model import add_memory
 
@@ -1003,6 +1009,7 @@ def test_export_produces_valid_json(default_project):
     assert "export-mem-1" in mem_names
 
 
+@pytest.mark.slow
 def test_import_round_trip(default_project):
     """Export, delete the original, re-import, verify data survives."""
     from agent_notes.core.memory_model import add_memory, delete_memory
@@ -1093,6 +1100,7 @@ def test_memory_list(default_project):
     assert "list-test-mem" in names
 
 
+@pytest.mark.slow
 def test_memory_search(default_project):
     from agent_notes.core.memory_model import add_memory
 
