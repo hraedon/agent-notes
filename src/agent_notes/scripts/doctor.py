@@ -689,7 +689,7 @@ def _probe_codex_agent_notes_plugin() -> tuple[str, str]:
     enabled = [entry for entry in matches if entry.get("enabled") is not False]
     if enabled:
         try:
-            expected_version = importlib.metadata.version("agent-notes")
+            expected_version = importlib.metadata.version("agent-notes-hraedon")
         except importlib.metadata.PackageNotFoundError:
             expected_version = "1.0.0"
         versions = {entry.get("version") for entry in enabled}
