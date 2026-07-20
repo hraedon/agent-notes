@@ -24,8 +24,12 @@ def _wi_format(wi: dict) -> str:
         f"Created: {wi['created_at']}",
         f"Updated: {wi['updated_at']}",
         "",
-        "(Body stored as content-addressed blob; use `get --with-body` to view)",
     ]
+    body = wi.get("body")
+    if body:
+        lines.append(body)
+    else:
+        lines.append("(Body stored as content-addressed blob; use `get --with-body` to view)")
     return "\n".join(lines)
 
 
