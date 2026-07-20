@@ -12,6 +12,45 @@ EXIT_NOT_CONFIGURED = 3
 EXIT_CONFLICT = 4
 
 
+def emit_error(
+    code: str,
+    message: str,
+    *,
+    use_json: bool,
+    detail: str | None = None,
+    retryable: bool = False,
+    exit_code: int = EXIT_GENERIC,
+) -> int:
+    """Report an error per the suite CLI contract v1 and return the exit code.
+
+    Under ``--json`` the common error envelope is the single stdout
+    document; otherwise the human message goes to *stderr*. The numeric
+    exit codes keep agent-notes' decision-52 taxonomy (2/3/4) for
+    compatibility; the envelope's ``code`` carries the stable semantic.
+    """
+    if use_json:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": code,
+                        "message": message,
+                        "detail": detail,
+                        "retryable": retryable,
+                        "partial": None,
+                    },
+                },
+                indent=2,
+            )
+        )
+    else:
+        print(f"Error: {message}", file=sys.stderr)
+        if detail:
+            print(f"  {detail}", file=sys.stderr)
+    return exit_code
+
+
 def _resolve(
     ws_slug: str | None, proj_slug: str | None, path: str | None
 ) -> tuple[int, int, str, str]:
@@ -121,10 +160,12 @@ def report_resolution_failure(
             "could not resolve a project/workspace. Pass --path to a registered "
             "repo, or --workspace/--project, or use --scope global."
         )
-    if use_json:
-        print(json.dumps({"error": detail, "code": code}, indent=2))
-    else:
-        print(f"Error: {detail}", file=sys.stderr)
+    emit_error(
+        "PROJECT_NOT_RESOLVED",
+        detail,
+        use_json=use_json,
+        exit_code=code,
+    )
 
 
 def _output(data: Any, use_json: bool) -> None:

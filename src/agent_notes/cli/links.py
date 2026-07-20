@@ -2,19 +2,25 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 
-from agent_notes.cli.common import EXIT_GENERIC, EXIT_NOT_FOUND, EXIT_SUCCESS, _print_sub_help
+from agent_notes.cli.common import (
+    EXIT_GENERIC,
+    EXIT_NOT_FOUND,
+    EXIT_SUCCESS,
+    _print_sub_help,
+    emit_error,
+)
 
 
 def _emit_ref_error(exc: Exception, use_json: bool) -> int:
     """Report a malformed/unresolvable link ref as a clean structured error
     instead of letting the ValueError surface as an uncaught traceback."""
-    if use_json:
-        print(json.dumps({"error": str(exc), "code": EXIT_GENERIC}, indent=2))
-    else:
-        print(f"Error: {exc}", file=sys.stderr)
-    return EXIT_GENERIC
+    return emit_error(
+        "OPERATION_FAILED",
+        str(exc),
+        use_json=use_json,
+        exit_code=EXIT_GENERIC,
+    )
 
 
 def _parse_link_ref(ref: str) -> tuple[str, str, str, str]:

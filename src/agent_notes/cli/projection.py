@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 
 from agent_notes.cli.common import (
     EXIT_NOT_CONFIGURED,
     EXIT_SUCCESS,
     _add_common,
     _resolve,
+    emit_error,
     report_resolution_failure,
 )
 from agent_notes.core import projection
@@ -30,11 +30,12 @@ def cmd_projection_rebuild(args: argparse.Namespace) -> int:
     face = get_face()
     if face is None:
         msg = "regista writes not enabled; set REGISTA_DSN and AGENT_NOTES_REGISTA_WRITES=1"
-        if use_json:
-            print(json.dumps({"error": msg}, indent=2))
-        else:
-            print(f"Error: {msg}", file=sys.stderr)
-        return EXIT_NOT_CONFIGURED
+        return emit_error(
+            "NOT_CONFIGURED",
+            msg,
+            use_json=use_json,
+            exit_code=EXIT_NOT_CONFIGURED,
+        )
 
     with _conn() as conn:
         report = projection.rebuild_from_regista(conn, face, project_id=proj_id)

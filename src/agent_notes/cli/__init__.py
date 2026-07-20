@@ -163,11 +163,14 @@ def cmd_resolve(path: str | None, use_json: bool) -> int:
     try:
         result = db_resolve_project(target)
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc), "code": EXIT_NOT_CONFIGURED}))
-        else:
-            print(exc)
-        return EXIT_NOT_CONFIGURED
+        from agent_notes.cli.common import emit_error
+
+        return emit_error(
+            "PROJECT_NOT_RESOLVED",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_NOT_CONFIGURED,
+        )
     if use_json:
         print(json.dumps(result, indent=2, default=str))
     else:
@@ -188,7 +191,26 @@ def cmd_doctor(use_json: bool, skip_embed: bool = False, check_embed: bool = Fal
     return doctor_run(skip_embed=skip_embed, check_embed=check_embed)
 
 
+def _configure_logging_stderr() -> None:
+    """Route all structlog output to stderr (suite CLI contract v1 §1).
+
+    regista (imported as a library) logs through structlog; unconfigured
+    structlog prints to stdout, which contaminates every ``--json``
+    consumer (WI-019's root cause). Configure explicitly at CLI entry so
+    the fix doesn't depend on which regista version is installed.
+    """
+    import sys
+
+    import structlog
+
+    structlog.configure(
+        wrapper_class=structlog.make_filtering_bound_logger(20),
+        logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
+    )
+
+
 def main() -> int:
+    _configure_logging_stderr()
     parser = argparse.ArgumentParser(
         prog="agent-notes",
         description="agent-notes CLI — sync interface to breadcrumbs, memories, and search",

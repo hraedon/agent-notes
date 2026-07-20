@@ -11,6 +11,7 @@ from agent_notes.cli.common import (
     _add_common,
     _print_sub_help,
     _resolve,
+    emit_error,
     report_resolution_failure,
 )
 
@@ -40,11 +41,12 @@ def cmd_mem_add(args: argparse.Namespace) -> int:
             embedding=vec,
         )
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            print(f"Error: {exc}")
-        return EXIT_CONFLICT
+        return emit_error(
+            "VALIDATION_FAILED",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_CONFLICT,
+        )
 
     if use_json:
         print(json.dumps({"memory": mem}, indent=2, default=str))
@@ -71,11 +73,12 @@ def cmd_mem_get(args: argparse.Namespace) -> int:
 
     mem = get_memory(ws_id, proj_id, args.name)
     if mem is None:
-        if use_json:
-            print(json.dumps({"error": "not found"}, indent=2))
-        else:
-            print(f"Memory '{args.name}' not found.")
-        return EXIT_NOT_FOUND
+        return emit_error(
+            "NOT_FOUND",
+            f"Memory '{args.name}' not found.",
+            use_json=use_json,
+            exit_code=EXIT_NOT_FOUND,
+        )
 
     if use_json:
         print(json.dumps({"memory": mem}, indent=2, default=str))
@@ -167,11 +170,12 @@ def cmd_mem_delete(args: argparse.Namespace) -> int:
 
     row = delete_memory(ws_id, proj_id, args.name)
     if row is None:
-        if use_json:
-            print(json.dumps({"error": "not found"}, indent=2))
-        else:
-            print(f"Memory '{args.name}' not found (or already deleted).")
-        return EXIT_NOT_FOUND
+        return emit_error(
+            "NOT_FOUND",
+            f"Memory '{args.name}' not found (or already deleted).",
+            use_json=use_json,
+            exit_code=EXIT_NOT_FOUND,
+        )
     if use_json:
         print(json.dumps({"deleted": args.name, "id": row["id"]}, indent=2, default=str))
     else:
@@ -192,11 +196,12 @@ def cmd_mem_update(args: argparse.Namespace) -> int:
 
     if args.body is None and args.attributes is None:
         msg = "At least one of --body or --attributes is required"
-        if use_json:
-            print(json.dumps({"error": msg}, indent=2))
-        else:
-            print(f"Error: {msg}")
-        return EXIT_CONFLICT
+        return emit_error(
+            "VALIDATION_FAILED",
+            msg,
+            use_json=use_json,
+            exit_code=EXIT_CONFLICT,
+        )
 
     attributes = json.loads(args.attributes) if args.attributes else None
     try:
@@ -208,11 +213,12 @@ def cmd_mem_update(args: argparse.Namespace) -> int:
             attributes=attributes,
         )
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            print(f"Error: {exc}")
-        return EXIT_NOT_FOUND
+        return emit_error(
+            "NOT_FOUND",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_NOT_FOUND,
+        )
 
     if use_json:
         print(json.dumps({"memory": mem}, indent=2, default=str))

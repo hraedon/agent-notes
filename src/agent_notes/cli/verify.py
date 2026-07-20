@@ -10,6 +10,7 @@ from agent_notes.cli.common import (
     EXIT_SUCCESS,
     _add_common,
     _print_sub_help,
+    emit_error,
 )
 
 
@@ -28,11 +29,12 @@ def cmd_verify(args: argparse.Namespace) -> int:
         try:
             public_key = base64.b64decode(args.public_key)
         except Exception as exc:
-            if use_json:
-                print(json.dumps({"error": f"Invalid --public-key: {exc}"}, indent=2))
-            else:
-                print(f"Error: invalid --public-key: {exc}")
-            return EXIT_GENERIC
+            return emit_error(
+                "INVALID_ARGUMENT",
+                f"Invalid --public-key: {exc}",
+                use_json=use_json,
+                exit_code=EXIT_GENERIC,
+            )
 
     from agent_notes.core.verifier import (
         verify_all,
@@ -78,11 +80,12 @@ def cmd_verify(args: argparse.Namespace) -> int:
             result.failed += gate_result.failed
             result.violations.extend(gate_result.violations)
     except RuntimeError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            print(f"Error: {exc}")
-        return EXIT_NOT_CONFIGURED
+        return emit_error(
+            "NOT_CONFIGURED",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_NOT_CONFIGURED,
+        )
 
     if use_json:
         output = {

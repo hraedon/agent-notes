@@ -25,6 +25,7 @@ from agent_notes.cli.common import (
     _add_common,
     _print_sub_help,
     _resolve,
+    emit_error,
     report_resolution_failure,
 )
 from agent_notes.core import config as reg_config
@@ -76,11 +77,12 @@ def cmd_bc_file(args: argparse.Namespace) -> int:
             embedding=vec,
         )
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            print(f"Error: {exc}")
-        return EXIT_CONFLICT
+        return emit_error(
+            "VALIDATION_FAILED",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_CONFLICT,
+        )
 
     if use_json:
         body = WorkItemModel.get_work_item_body(proj_id, wi["identifier"]) or ""
@@ -109,22 +111,23 @@ def cmd_bc_update(args: argparse.Namespace) -> int:
     if args.title is not None:
         fields["title"] = args.title
     if args.body is not None and args.append_body is not None:
-        if use_json:
-            msg = "--body and --append-body are mutually exclusive"
-            print(json.dumps({"error": msg}, indent=2))
-        else:
-            print("Error: --body and --append-body are mutually exclusive")
-        return EXIT_CONFLICT
+        return emit_error(
+            "FLAG_CONFLICT",
+            "--body and --append-body are mutually exclusive",
+            use_json=use_json,
+            exit_code=EXIT_CONFLICT,
+        )
     if args.body is not None:
         fields["body"] = args.body
     if args.append_body is not None:
         old = WorkItemModel.get_work_item(proj_id, args.identifier)
         if old is None:
-            if use_json:
-                print(json.dumps({"error": "not found"}, indent=2))
-            else:
-                print(f"Work item '{args.identifier}' not found.")
-            return EXIT_NOT_FOUND
+            return emit_error(
+                "NOT_FOUND",
+                f"Work item '{args.identifier}' not found.",
+                use_json=use_json,
+                exit_code=EXIT_NOT_FOUND,
+            )
         existing = (WorkItemModel.get_work_item_body(proj_id, args.identifier) or "").rstrip()
         sep = "\n\n" if existing else ""
         fields["body"] = f"{existing}{sep}{args.append_body}"
@@ -138,11 +141,12 @@ def cmd_bc_update(args: argparse.Namespace) -> int:
     if "body" in fields or "title" in fields:
         old = WorkItemModel.get_work_item(proj_id, args.identifier)
         if old is None:
-            if use_json:
-                print(json.dumps({"error": "not found"}, indent=2))
-            else:
-                print(f"Work item '{args.identifier}' not found.")
-            return EXIT_NOT_FOUND
+            return emit_error(
+                "NOT_FOUND",
+                f"Work item '{args.identifier}' not found.",
+                use_json=use_json,
+                exit_code=EXIT_NOT_FOUND,
+            )
         old_body = WorkItemModel.get_work_item_body(proj_id, args.identifier) or ""
         text = fields.get("title", old.get("title", "")) + " " + fields.get("body", old_body)
         fields["embedding"] = embed(text, task="document").tolist()
@@ -155,11 +159,12 @@ def cmd_bc_update(args: argparse.Namespace) -> int:
             **fields,
         )
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": str(exc)}, indent=2))
-        else:
-            print(f"Error: {exc}")
-        return EXIT_NOT_FOUND
+        return emit_error(
+            "NOT_FOUND",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_NOT_FOUND,
+        )
 
     if use_json:
         body = WorkItemModel.get_work_item_body(proj_id, args.identifier) or ""
@@ -182,11 +187,12 @@ def cmd_bc_get(args: argparse.Namespace) -> int:
 
     wi = WorkItemModel.get_work_item(proj_id, args.identifier)
     if wi is None:
-        if use_json:
-            print(json.dumps({"error": "not found"}, indent=2))
-        else:
-            print(f"Work item '{args.identifier}' not found.")
-        return EXIT_NOT_FOUND
+        return emit_error(
+            "NOT_FOUND",
+            f"Work item '{args.identifier}' not found.",
+            use_json=use_json,
+            exit_code=EXIT_NOT_FOUND,
+        )
 
     body = WorkItemModel.get_work_item_body(proj_id, args.identifier) or ""
 
@@ -309,11 +315,12 @@ def cmd_bc_delete(args: argparse.Namespace) -> int:
 
     deleted = WorkItemModel.delete_work_item(proj_id, args.identifier)
     if not deleted:
-        if use_json:
-            print(json.dumps({"error": "not found"}, indent=2))
-        else:
-            print(f"Work item '{args.identifier}' not found.")
-        return EXIT_NOT_FOUND
+        return emit_error(
+            "NOT_FOUND",
+            f"Work item '{args.identifier}' not found.",
+            use_json=use_json,
+            exit_code=EXIT_NOT_FOUND,
+        )
 
     if use_json:
         print(json.dumps({"deleted": args.identifier}, indent=2))
@@ -337,11 +344,12 @@ def cmd_bc_sync(args: argparse.Namespace) -> int:
     directory = args.from_files or (Path(args.path) / "breadcrumbs" if args.path else None)
     if not directory or not Path(directory).is_dir():
         msg = f"breadcrumb directory not found: {directory!r} (pass --from-files)"
-        if use_json:
-            print(json.dumps({"error": msg}, indent=2))
-        else:
-            print(f"Error: {msg}", file=sys.stderr)
-        return EXIT_GENERIC
+        return emit_error(
+            "OPERATION_FAILED",
+            msg,
+            use_json=use_json,
+            exit_code=EXIT_GENERIC,
+        )
 
     summary = sync_breadcrumbs_from_dir(
         proj_id,
@@ -416,11 +424,12 @@ def cmd_bc_export_index(args: argparse.Namespace) -> int:
                 "cannot determine repo root for this project; pass --output to "
                 "choose the output path explicitly."
             )
-            if use_json:
-                print(json.dumps({"error": msg}, indent=2))
-            else:
-                print(f"Error: {msg}", file=sys.stderr)
-            return EXIT_GENERIC
+            return emit_error(
+                "OPERATION_FAILED",
+                msg,
+                use_json=use_json,
+                exit_code=EXIT_GENERIC,
+            )
         out_path = Path(repo_root) / "OPEN_WORK_ITEMS.txt"
 
     # Guard (WI-011/WI-012): refuse to write the generated index into the repo

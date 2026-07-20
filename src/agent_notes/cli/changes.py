@@ -4,7 +4,7 @@ import argparse
 import json
 from datetime import datetime
 
-from agent_notes.cli.common import EXIT_GENERIC, EXIT_SUCCESS, _print_sub_help
+from agent_notes.cli.common import EXIT_GENERIC, EXIT_SUCCESS, _print_sub_help, emit_error
 
 
 def cmd_changes_since(args: argparse.Namespace) -> int:
@@ -14,11 +14,12 @@ def cmd_changes_since(args: argparse.Namespace) -> int:
     try:
         since = datetime.fromisoformat(args.since)
     except ValueError as exc:
-        if use_json:
-            print(json.dumps({"error": f"invalid timestamp: {exc}"}, indent=2))
-        else:
-            print(f"Invalid timestamp: {exc}")
-        return EXIT_GENERIC
+        return emit_error(
+            "INVALID_ARGUMENT",
+            f"invalid timestamp: {exc}",
+            use_json=use_json,
+            exit_code=EXIT_GENERIC,
+        )
 
     rows = cl_changes_since(since, limit=min(args.limit or 50, 200))
     if use_json:
