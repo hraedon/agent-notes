@@ -5,6 +5,8 @@
 # so dev and CI compose against the artifact the suite ships. Override the
 # substrate deliberately with DEV_AGAINST=main|<ref>|sibling (see
 # docs/develop-against-lock.md). Same install shape CI uses.
+# Uses bare `python` (not `uv run` like the targets below): dev-install
+# bootstraps the environment itself, so it must not assume a resolved uv venv.
 dev:
 	python scripts/dev-install.py
 
