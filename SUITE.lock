@@ -5,11 +5,17 @@
 # release is green when every component's SUITE.lock agrees and the suite-
 # interop CI drives one work-item across both faces to `done` (blueprint §2.2).
 #
-# The spine is a local sibling repo (not published to a package index), so the
-# resolution for a fresh install is: clone regista at the locked SHA, then
-# `pip install -e ../regista` (or build a wheel from that SHA). The dev layout
-# uses an editable source (pyproject.toml [tool.uv.sources]); this file pins
-# the SHA that editable source must point at for a known-good pair.
+# This is the in-repo *single source of truth for what to develop against*
+# (Plan 019 B2). It must AGREE with the umbrella agent-suite/SUITE.lock
+# ([components.regista] version + revision there); the umbrella is the generated
+# authority and this face-local copy is vendored so agent-notes dev + CI resolve
+# the spine WITHOUT cloning agent-suite. `scripts/dev-install.py` reads
+# `[spine].version` and installs `regista-hraedon==<version>` from PyPI by
+# default; `scripts/suite_lock.py` is the resolver. See docs/develop-against-lock.md.
+#
+# Regista is published to PyPI as `regista-hraedon` (import name stays `regista`).
+# The pinned SHA/`describe` still records the exact commit for the local sibling
+# workflow (`DEV_AGAINST=sibling`, and scripts/check_suite_lock.py).
 
 [component]
 name = "agent-notes"
@@ -17,11 +23,20 @@ version = "1.0.0"
 
 [spine]
 name = "regista"
-# The git SHA of regista this agent-notes release was tested against.
-# Resolve with: git -C ../regista checkout <sha>
-sha = "24aa820a9e56a17e3d46498e1d874906d465769e"
-describe = "v0.5.1-rc1-62-g24aa820"
-pyproject_floor = "regista>=0.4.0"
+# PyPI distribution (renamed from `regista`; import name is still `regista`).
+distribution = "regista-hraedon"
+repo = "hraedon/regista"
+# The released PyPI version this agent-notes release develops + tests against.
+# Must equal agent-suite/SUITE.lock [components.regista].version.
+version = "0.5.3"
+# The git SHA of regista this agent-notes release was tested against == the
+# umbrella's [components.regista].revision == the v0.5.3 tag commit.
+# Resolve the local sibling with: git -C ../regista checkout <sha>
+sha = "9718b941939884fee94c260f19efe3e4040c456b"
+describe = "v0.5.3"
+# Mirrors the floor declared in pyproject.toml (the published lower bound); the
+# exact version to develop against is `version` above, not this floor.
+pyproject_floor = "regista>=0.5.1"
 
 [envelope]
 # Regista event-envelope + canonical-workflow versions the face writes.

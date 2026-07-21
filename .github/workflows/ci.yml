@@ -31,18 +31,14 @@ jobs:
           path: ~/.cache/huggingface
           key: hf-${{ runner.os }}-nomic-embed-text-v1.5
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          # regista-hraedon is published on PyPI (renamed distribution;
-          # the import name is still `regista`). Pinned to 0.5.1.
-          pip install "regista-hraedon==0.5.1"
-          # ruff is not in the [test] extra; install it for the lint step.
-          pip install ruff
-          # The CLI contract v1 conformance kit (Plan 018 WI-2) is now a normal
-          # pinned dependency in the [test] extra (agent-suite-conformance==1.0.0,
-          # Plan 019 B1) installed by the line above — no git+SHA step needed.
-          pip install -e ".[test]"
+      # Develop-against-lock (Plan 019 B2): dev-install reads SUITE.lock (the
+      # single source of truth for what to develop against) and installs regista
+      # at the pinned released version — regista-hraedon==<[spine].version> — not
+      # a hardcoded pin or a sibling @main. Same install shape as local `make dev`.
+      # regista's floor and the conformance kit (agent-suite-conformance==1.0.0,
+      # Plan 019 B1) come from the [test] extra dev-install installs.
+      - name: Install dependencies (against the SUITE.lock substrate — Plan 019 B2)
+        run: python scripts/dev-install.py
 
       - name: Lint
         run: ruff check src/ tests/
@@ -85,15 +81,10 @@ jobs:
           python-version: "3.13"
           cache: pip
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install "regista-hraedon==0.5.1"
-          pip install ruff
-          # The CLI contract v1 conformance kit (Plan 018 WI-2) is now a normal
-          # pinned dependency in the [test] extra (agent-suite-conformance==1.0.0,
-          # Plan 019 B1) installed by the line above — no git+SHA step needed.
-          pip install -e ".[test]"
+      # Same develop-against-lock install shape as the Linux lane (Plan 019 B2);
+      # dev-install.py is pure-Python and runs identically on Windows.
+      - name: Install dependencies (against the SUITE.lock substrate — Plan 019 B2)
+        run: python scripts/dev-install.py
 
       - name: Lint
         run: ruff check src/ tests/

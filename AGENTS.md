@@ -20,12 +20,18 @@ Conventions and quick reference for agents (and humans) working on agent-notes.
 ## Build / test / lint
 
 ```bash
-uv pip install -e ".[test]"
+make dev            # install deps against the SUITE.lock-locked substrate (Plan 019 B2)
 
 make test           # runs pytest against ephemeral Postgres (testcontainers)
 make lint           # ruff
 make fmt            # ruff format
 ```
+
+**Develop against the locked substrate.** `SUITE.lock` is the single source of
+truth for *what to develop against*: `make dev` (and CI) install regista at the
+released version it pins, not `main`/an editable checkout, so integration skew
+surfaces before interop time. For deliberate cross-member work, set
+`DEV_AGAINST=main|<ref>|sibling`. See `docs/develop-against-lock.md`.
 
 Tests for triggers, recursive CTEs, and `change_log` semantics must run against real Postgres — no DB mocks for those. Use `testcontainers[postgres]` (already in `[test]` extras) for ephemeral instances in CI.
 
