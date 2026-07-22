@@ -16,6 +16,7 @@ works in fast tests.
 from __future__ import annotations
 
 import re
+import uuid
 from typing import Any, Protocol
 
 from agent_notes.core.actor import Actor
@@ -57,6 +58,7 @@ class _RegistaLike(Protocol):
     def get_work_item(self, *args: Any, **kwargs: Any) -> Any: ...
     def query_work_items(self, **kwargs: Any) -> Any: ...
     def read_events(self, **kwargs: Any) -> Any: ...
+    def read_events_since(self, *args: Any, **kwargs: Any) -> Any: ...
     def acquire_claim(self, *args: Any, **kwargs: Any) -> Any: ...
     def heartbeat_claim(self, *args: Any, **kwargs: Any) -> Any: ...
     def release_claim(self, *args: Any, **kwargs: Any) -> None: ...
@@ -184,6 +186,7 @@ class RegistaFace:
         *,
         payload: dict | None = None,
         custom_fields: dict | None = None,
+        event_id: uuid.UUID | None = None,
         expected_event_seq: int | None = None,
     ) -> str:
         ac = self._ac(actor)
@@ -195,6 +198,7 @@ class RegistaFace:
             actor_metadata=ac["actor_metadata"],
             payload=payload,
             custom_fields=custom_fields,
+            event_id=event_id,
             on_behalf_of=ac["on_behalf_of"],
             expected_event_seq=expected_event_seq,
         )
@@ -268,6 +272,16 @@ class RegistaFace:
 
     def history(self, work_item_id: Any) -> list[Any]:
         return list(self._reg.read_events(work_item_id=work_item_id, limit=10_000))
+
+    def read_events_since(
+        self,
+        work_item_id: Any,
+        after_seq: int,
+        *,
+        limit: int = 100,
+    ) -> list[Any]:
+        """Read authoritative events after ``after_seq`` for reconciliation."""
+        return list(self._reg.read_events_since(work_item_id, after_seq, limit=limit))
 
     # ------------------------------------------------------------------
     # Note entities (Plan 018 WI-1.1/1.2): non-workflow knowledge entities

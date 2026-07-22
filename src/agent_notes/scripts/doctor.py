@@ -75,6 +75,7 @@ def _check_schema() -> tuple[bool, str]:
         "op_log_events",
         "work_item_sequences",
         "work_item_leases",
+        "review_delegation_attempts",
     }
     try:
         from agent_notes.core.db import _conn

@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -503,6 +504,245 @@ class TestPositiveReconcile:
         assert report2.replayed == 1
         assert face.get(wid).current_state == "done"
         assert count_ops(_PROJECT) == 0
+
+    def test_transition_replay_preserves_event_id_and_model_lineage(
+        self,
+        outbox_env: Path,
+        signer: LocalKeySigner,
+        face,
+    ) -> None:
+        reviewer = Actor(
+            actor_id="reviewer",
+            display_name="Reviewer",
+            model_lineage="opus",
+        )
+        wid, _ = face.create_breadcrumb(reviewer, title="Transition target")
+        event_id = uuid.uuid4()
+        next_event_seq = face.get(wid).next_event_seq
+        outface = OutboxAwareFace(
+            face, project=_PROJECT, signer=signer, unreachable_probe=lambda: True
+        )
+
+        outface.transition_breadcrumb(
+            reviewer,
+            wid,
+            "start",
+            payload={"review_artifact_digest": "sha256:test"},
+            event_id=event_id,
+            expected_event_seq=next_event_seq,
+        )
+
+        queued = verify_envelope(read_all(_PROJECT)[0].envelope, signer.public_key())
+        assert queued["args"]["event_id"] == str(event_id)
+        assert queued["args"]["actor"]["model_lineage"] == "opus"
+
+        report = reconcile(_PROJECT, face=face, signer=signer)
+        assert report.replayed == 1
+        events = face.read_events_since(wid, next_event_seq - 1)
+        assert len(events) == 1
+        assert events[0].event_id == event_id
+        assert events[0].payload["review_artifact_digest"] == "sha256:test"
+        assert events[0].actor_metadata["model_lineage"] == "opus"
+
+
+class TestRegistaReconciliationSurface:
+    def test_event_id_cas_and_history_since(self, actor: Actor, face) -> None:
+        wid, _ = face.create_breadcrumb(actor, title="Reconcile target")
+        before = face.get(wid)
+        event_id = uuid.uuid4()
+
+        state = face.transition_breadcrumb(
+            actor,
+            wid,
+            "start",
+            payload={"review_artifact_digest": "sha256:artifact"},
+            event_id=event_id,
+            expected_event_seq=before.next_event_seq,
+        )
+
+        assert state == "in_progress"
+        events = face.read_events_since(wid, before.last_event_seq)
+        assert len(events) == 1
+        assert events[0].event_id == event_id
+        assert events[0].event_seq == before.next_event_seq
+        assert events[0].payload["review_artifact_digest"] == "sha256:artifact"
+
+    def test_lost_transition_response_reconciles_exact_committed_event(
+        self,
+        outbox_env: Path,
+        signer: LocalKeySigner,
+        actor: Actor,
+        face,
+    ) -> None:
+        import psycopg
+
+        class CommitThenDrop:
+            def __init__(self, base) -> None:
+                self._base = base
+
+            def __getattr__(self, name):
+                return getattr(self._base, name)
+
+            def transition_breadcrumb(self, *args, **kwargs):
+                self._base.transition_breadcrumb(*args, **kwargs)
+                raise psycopg.OperationalError("simulated lost response")
+
+        wid, _ = face.create_breadcrumb(actor, title="Lost response target")
+        event_id = uuid.uuid4()
+        next_event_seq = face.get(wid).next_event_seq
+        outface = OutboxAwareFace(
+            CommitThenDrop(face),
+            project=_PROJECT,
+            signer=signer,
+        )
+
+        state = outface.transition_breadcrumb(
+            actor,
+            wid,
+            "start",
+            payload={"review_artifact_digest": "sha256:lost-response"},
+            event_id=event_id,
+            expected_event_seq=next_event_seq,
+        )
+
+        assert state == ""
+        assert count_ops(_PROJECT) == 1
+        assert face.get(wid).current_state == "in_progress"
+
+        report = reconcile(_PROJECT, face=face, signer=signer)
+        assert report.replayed == 1
+        assert report.conflicts == 0
+        assert count_ops(_PROJECT) == 0
+        matching = [event for event in face.history(wid) if event.event_id == event_id]
+        assert len(matching) == 1
+
+    def test_reconciliation_tolerates_additive_authoritative_metadata(
+        self,
+        outbox_env: Path,
+        signer: LocalKeySigner,
+        actor: Actor,
+        face,
+    ) -> None:
+        class AugmentingReadFace:
+            def __init__(self, base) -> None:
+                self._base = base
+
+            def __getattr__(self, name):
+                return getattr(self._base, name)
+
+            def read_events_since(self, *args, **kwargs):
+                return [
+                    replace(
+                        event,
+                        payload={**(event.payload or {}), "store_added": True},
+                        actor_metadata={
+                            **(event.actor_metadata or {}),
+                            "store_added": True,
+                        },
+                    )
+                    for event in self._base.read_events_since(*args, **kwargs)
+                ]
+
+        wid, _ = face.create_breadcrumb(actor, title="Additive metadata target")
+        event_id = uuid.uuid4()
+        next_event_seq = face.get(wid).next_event_seq
+        outface = OutboxAwareFace(
+            face, project=_PROJECT, signer=signer, unreachable_probe=lambda: True
+        )
+        outface.transition_breadcrumb(
+            actor,
+            wid,
+            "start",
+            payload={"review_artifact_digest": "sha256:stable"},
+            event_id=event_id,
+            expected_event_seq=next_event_seq,
+        )
+        face.transition_breadcrumb(
+            actor,
+            wid,
+            "start",
+            payload={"review_artifact_digest": "sha256:stable"},
+            event_id=event_id,
+            expected_event_seq=next_event_seq,
+        )
+
+        report = reconcile(_PROJECT, face=AugmentingReadFace(face), signer=signer)
+        assert report.replayed == 1
+        assert report.conflicts == 0
+        assert count_ops(_PROJECT) == 0
+
+    def test_different_event_at_expected_sequence_remains_conflicted(
+        self,
+        outbox_env: Path,
+        signer: LocalKeySigner,
+        actor: Actor,
+        face,
+    ) -> None:
+        wid, _ = face.create_breadcrumb(actor, title="Collision target")
+        queued_event_id = uuid.uuid4()
+        next_event_seq = face.get(wid).next_event_seq
+        outface = OutboxAwareFace(
+            face, project=_PROJECT, signer=signer, unreachable_probe=lambda: True
+        )
+        outface.transition_breadcrumb(
+            actor,
+            wid,
+            "start",
+            payload={"review_artifact_digest": "sha256:queued"},
+            event_id=queued_event_id,
+            expected_event_seq=next_event_seq,
+        )
+
+        face.transition_breadcrumb(
+            actor,
+            wid,
+            "start",
+            payload={"review_artifact_digest": "sha256:other"},
+            event_id=uuid.uuid4(),
+            expected_event_seq=next_event_seq,
+        )
+        report = reconcile(_PROJECT, face=face, signer=signer)
+
+        assert report.replayed == 0
+        assert report.conflicts == 1
+        assert report.conflict_details[0]["reason"] == "event_id_mismatch"
+        assert count_ops(_PROJECT) == 1
+
+    def test_same_event_id_with_different_payload_remains_conflicted(
+        self,
+        outbox_env: Path,
+        signer: LocalKeySigner,
+        actor: Actor,
+        face,
+    ) -> None:
+        wid, _ = face.create_breadcrumb(actor, title="Payload binding target")
+        event_id = uuid.uuid4()
+        next_event_seq = face.get(wid).next_event_seq
+        outface = OutboxAwareFace(
+            face, project=_PROJECT, signer=signer, unreachable_probe=lambda: True
+        )
+        outface.transition_breadcrumb(
+            actor,
+            wid,
+            "start",
+            payload={"review_artifact_digest": "sha256:queued"},
+            event_id=event_id,
+            expected_event_seq=next_event_seq,
+        )
+        face.transition_breadcrumb(
+            actor,
+            wid,
+            "start",
+            payload={"review_artifact_digest": "sha256:other"},
+            event_id=event_id,
+            expected_event_seq=next_event_seq,
+        )
+
+        report = reconcile(_PROJECT, face=face, signer=signer)
+        assert report.replayed == 0
+        assert report.conflicts == 1
+        assert report.conflict_details[0]["reason"] == "payload_mismatch"
+        assert count_ops(_PROJECT) == 1
 
 
 class TestReportOutput:

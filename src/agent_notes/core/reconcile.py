@@ -105,6 +105,71 @@ def _parse_wid(wid_str: str | None) -> uuid.UUID | None:
     return uuid.UUID(wid_str)
 
 
+def _reconcile_committed_transition(
+    face: Any,
+    wid: uuid.UUID | None,
+    actor: Any,
+    args: dict,
+) -> tuple[bool, str | None]:
+    """Recognize a transition whose commit response was lost.
+
+    Returns ``(True, None)`` for an exact authoritative match,
+    ``(False, reason)`` when another event occupies the expected sequence, and
+    ``(False, None)`` when no event exists yet and replay should proceed.
+    """
+    event_id_raw = args.get("event_id")
+    expected_seq = args.get("expected_event_seq")
+    if wid is None or event_id_raw is None or expected_seq is None:
+        return False, None
+    try:
+        event_id = uuid.UUID(str(event_id_raw))
+        expected_seq = int(expected_seq)
+    except (TypeError, ValueError):
+        return False, "invalid_reconciliation_identity"
+    if expected_seq < 1:
+        return False, "invalid_reconciliation_sequence"
+
+    events = face.read_events_since(wid, expected_seq - 1, limit=1)
+    if not events:
+        return False, None
+    event = events[0]
+    expected_payload = args.get("payload")
+    expected_metadata = actor.actor_metadata()
+    actual_payload = getattr(event, "payload", None)
+    payload_matches = actual_payload == expected_payload
+    if isinstance(expected_payload, dict) and isinstance(actual_payload, dict):
+        payload_matches = all(
+            key in actual_payload and actual_payload[key] == value
+            for key, value in expected_payload.items()
+        )
+    actual_metadata = getattr(event, "actor_metadata", None) or {}
+    metadata_matches = all(
+        key in actual_metadata and actual_metadata[key] == value
+        for key, value in expected_metadata.items()
+    )
+    checks = (
+        (getattr(event, "event_seq", None) == expected_seq, "event_seq_mismatch"),
+        (getattr(event, "event_id", None) == event_id, "event_id_mismatch"),
+        (getattr(event, "work_item_id", None) == wid, "work_item_mismatch"),
+        (
+            getattr(event, "transition", None) == args.get("transition_name"),
+            "transition_mismatch",
+        ),
+        (getattr(event, "actor_id", None) == actor.actor_id, "actor_id_mismatch"),
+        (getattr(event, "actor_kind", None) == actor.actor_kind, "actor_kind_mismatch"),
+        (metadata_matches, "actor_metadata_mismatch"),
+        (
+            getattr(event, "on_behalf_of", None) == actor.on_behalf_of,
+            "delegation_mismatch",
+        ),
+        (payload_matches, "payload_mismatch"),
+    )
+    for matched, reason in checks:
+        if not matched:
+            return False, reason
+    return True, None
+
+
 def reconcile(
     project: str,
     *,
@@ -163,6 +228,29 @@ def reconcile(
             rejected_details.append(detail)
             _write_sidecar(project, entry.session, "rejected.jsonl", detail)
             continue
+
+        if op_type == "transition":
+            already_applied, binding_conflict = _reconcile_committed_transition(
+                face, wid, actor, args
+            )
+            if binding_conflict is not None:
+                conflicts += 1
+                detail = {
+                    "session": entry.session,
+                    "client_seq": entry.client_seq,
+                    "op": op_type,
+                    "work_item_id": str(wid) if wid else None,
+                    "expected_state": expected_state,
+                    "reason": binding_conflict,
+                }
+                conflict_details.append(detail)
+                _write_sidecar(project, entry.session, "conflicts.jsonl", detail)
+                continue
+            if already_applied:
+                outbox.remove_ops(project, entry.session, {entry.client_seq})
+                _maybe_clear_pending_sync(wid)
+                replayed += 1
+                continue
 
         conflict = _check_conflict(face, wid, expected_state)
         if conflict is not None:
@@ -243,6 +331,9 @@ def _dispatch(
         face.amend_breadcrumb(actor, wid, **args)
     elif op_type == "transition":
         transition_name = args.pop("transition_name")
+        event_id = args.get("event_id")
+        if event_id is not None:
+            args["event_id"] = uuid.UUID(str(event_id))
         face.transition_breadcrumb(actor, wid, transition_name, **args)
     elif op_type == "comment":
         body = args.pop("body")

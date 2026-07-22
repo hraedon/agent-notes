@@ -229,6 +229,7 @@ def _actor_to_dict(actor: Actor) -> dict:
         "display_name": actor.display_name,
         "on_behalf_of": actor.on_behalf_of,
         "role": actor.role,
+        "model_lineage": actor.model_lineage,
     }
 
 
@@ -239,6 +240,7 @@ def dict_to_actor(d: dict) -> Actor:
         display_name=d.get("display_name", ""),
         on_behalf_of=d.get("on_behalf_of"),
         role=d.get("role", "agent"),
+        model_lineage=d.get("model_lineage"),
     )
 
 
@@ -281,6 +283,15 @@ class OutboxAwareFace:
 
     def history(self, work_item_id: Any) -> list[Any]:
         return self._base.history(work_item_id)
+
+    def read_events_since(
+        self,
+        work_item_id: Any,
+        after_seq: int,
+        *,
+        limit: int = 100,
+    ) -> list[Any]:
+        return self._base.read_events_since(work_item_id, after_seq, limit=limit)
 
     def pending_count(self) -> int:
         return count_ops(self._project)
@@ -436,6 +447,7 @@ class OutboxAwareFace:
         *,
         payload: dict | None = None,
         custom_fields: dict | None = None,
+        event_id: uuid.UUID | None = None,
         expected_event_seq: int | None = None,
     ) -> str:
         if transition_name.startswith(_TERMINAL_PREFIX) or transition_name in _TERMINAL_TRANSITIONS:
@@ -449,6 +461,7 @@ class OutboxAwareFace:
             transition_name=transition_name,
             payload=payload,
             custom_fields=custom_fields,
+            event_id=str(event_id) if event_id is not None else None,
             expected_event_seq=expected_event_seq,
         )
         if self._is_unreachable():
@@ -461,6 +474,7 @@ class OutboxAwareFace:
                 transition_name,
                 payload=payload,
                 custom_fields=custom_fields,
+                event_id=event_id,
                 expected_event_seq=expected_event_seq,
             )
             self.last_op_outboxed = False
@@ -502,9 +516,7 @@ class OutboxAwareFace:
     ) -> Any:
         kwargs = dict(transition=transition, payload=payload)
         if self._is_unreachable():
-            self._enqueue_op(
-                "note_append", actor, entity_id, None, _kind="note", **kwargs
-            )
+            self._enqueue_op("note_append", actor, entity_id, None, _kind="note", **kwargs)
             return None
         try:
             result = self._base.append_note(
@@ -514,9 +526,7 @@ class OutboxAwareFace:
             self._maybe_clear_note_pending(entity_id)
             return result
         except _TRANSPORT_ERRORS:
-            self._enqueue_op(
-                "note_append", actor, entity_id, None, _kind="note", **kwargs
-            )
+            self._enqueue_op("note_append", actor, entity_id, None, _kind="note", **kwargs)
             return None
 
     def read_note_events(self, entity_id: Any) -> list[Any]:
