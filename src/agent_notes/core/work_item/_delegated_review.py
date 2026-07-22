@@ -114,6 +114,7 @@ class ReviewRequest:
     head_revision: str
     harness: str
     requested_model: str
+    accepted_reported_models: tuple[str, ...] = ()
     timeout_seconds: float = 600.0
     identity_assurance: IdentityAssurance = IdentityAssurance.ASSERTED
     acknowledge_asserted_reviewer: bool = False
@@ -415,7 +416,8 @@ def _validate_process_identity(request: ReviewRequest, process: ReviewProcessRes
         raise DelegatedReviewError(
             ReviewErrorCode.IDENTITY_MISMATCH, "runner requested-model mismatch"
         )
-    if process.reported_model != request.requested_model:
+    accepted_models = {request.requested_model, *request.accepted_reported_models}
+    if process.reported_model not in accepted_models:
         raise DelegatedReviewError(
             ReviewErrorCode.IDENTITY_MISMATCH, "runner reported-model mismatch"
         )

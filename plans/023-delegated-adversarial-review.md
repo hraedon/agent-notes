@@ -644,3 +644,30 @@ a companion track.
   with no blockers.
 - Verification: `make lint` clean; `make test` reports 937 passed, 3 skipped,
   and 9 deselected.
+
+### 2026-07-22 — WI-044 Claude reference adapter slice
+
+- Added a shared bounded subprocess boundary that launches argument vectors in
+  a fresh process group, drains stdout and stderr independently under hard
+  caps, and terminates the complete group on timeout, cancellation, or output
+  overflow.
+- Added the private Claude print-mode adapter using safe mode, an empty strict
+  MCP configuration, only `Read`, `Grep`, and `Glob`, and Claude's native
+  `--json-schema` structured-output sink. Session and model identity come only
+  from the machine result envelope; display text and stderr are never accepted
+  as review results.
+- Added explicit per-request reported-model aliases without relaxing requested
+  model matching, plus real-subprocess conformance tests for stream separation,
+  output caps, process-tree cleanup, identity mismatch, permission denial, and
+  malformed machine envelopes.
+- OpenCode remains intentionally unimplemented: its JSON event stream has no
+  structured-result sink, and the installed adversarial profiles are
+  subagent-only with mutation-capable `agent-notes` permissions. Qualification
+  requires a hash-owned primary reviewer plus a typed plugin result sink and
+  confined read-only Git tools; parsing assistant text would violate D4.
+- This slice remains private and does not perform lifecycle transitions or add
+  a public delegation CLI.
+- Qwen's adversarial pass found a timeout-classification edge case after child
+  streams close; it was fixed and covered by a regression test. Verification:
+  `make lint` clean; `make test` reports 952 passed, 3 skipped, and 9
+  deselected.
