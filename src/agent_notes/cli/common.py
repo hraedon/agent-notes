@@ -125,6 +125,28 @@ def _resolve_impl(
             raise SystemExit(EXIT_NOT_CONFIGURED)
         return ws.id, proj.id, ws.slug, proj.slug
 
+    # Nothing was selected explicitly. Before failing, look at where the caller
+    # is standing: an agent working inside a registered repo should not have to
+    # name the project it is obviously in. This runs last, so it can only turn
+    # a NOT_CONFIGURED exit into a resolution — never override an explicit
+    # selector, never change an invocation that already worked.
+    from agent_notes.core.project_discovery import discover_project
+
+    discovered = discover_project()
+    if discovered is not None:
+        ws = next((w for w in list_workspaces() if w.slug == discovered.workspace), None)
+        if ws is not None:
+            proj = next(
+                (
+                    p
+                    for p in list_projects(workspace_id=ws.id)
+                    if p.slug == discovered.project
+                ),
+                None,
+            )
+            if proj is not None:
+                return ws.id, proj.id, ws.slug, proj.slug
+
     raise SystemExit(EXIT_NOT_CONFIGURED)
 
 
@@ -156,9 +178,16 @@ def report_resolution_failure(
         except Exception:  # pragma: no cover - defensive: DB/transport issue
             detail = None
     if detail is None:
+        # No --path was given, so cwd discovery is what actually failed. Name
+        # the directory that was tried — "pass --path" is unhelpful advice when
+        # the caller is already standing in the directory they mean.
+        import os as _os
+
         detail = (
-            "could not resolve a project/workspace. Pass --path to a registered "
-            "repo, or --workspace/--project, or use --scope global."
+            f"could not resolve a project/workspace: {_os.getcwd()!r} is not "
+            "inside a registered project. Run `agent-notes init` there, or pass "
+            "--path to a registered repo, or --workspace/--project, or use "
+            "--scope global."
         )
     emit_error(
         "PROJECT_NOT_RESOLVED",

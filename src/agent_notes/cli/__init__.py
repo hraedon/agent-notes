@@ -1,7 +1,9 @@
 """agent-notes CLI (Plan 004 Phase 9a).
 
 Noun/verb argparse tree: `agent-notes breadcrumb file`, `agent-notes memory add`, etc.
-All commands accept `--path` (default cwd) and resolve via `core.db.resolve_project`.
+All commands accept `--path` and resolve via `core.db.resolve_project`. With no
+`--path` / `--workspace` / `--project`, the project is discovered from the cwd
+(`core.project_discovery`); an unregistered directory stays unresolved.
 `--json` produces machine-parseable output. Stable exit codes per decision 52.
 """
 
