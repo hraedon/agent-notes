@@ -226,18 +226,32 @@ class WorkItemModel:
         the two paths agree on the one provenance-critical invariant ("no
         unilateral completion") instead of the old behavior where native ``close``
         wrote a terminal op with no gate. ``force=True`` is the admin/repair escape
-        hatch that writes the legacy terminal ``close`` op.
+        hatch: on the native path it writes the legacy terminal ``close`` op; on the
+        regista path it terminalizes through the workflow (``done``) via
+        :meth:`update_work_item`. Routing the face check first (matching
+        :meth:`update_work_item`) matters: a regista-synced item has no native op
+        chain, so the native force-close cannot fold it (it used to raise
+        ``fold_work_item returned None``).
         """
-        if force:
-            return _native.close_work_item_force(
-                project_id, identifier, actor_id, model_lineage=model_lineage,
-            )
         face = face_factory.get_face()
         if face is not None:
+            if force:
+                return cls.update_work_item(
+                    project_id=project_id,
+                    identifier=identifier,
+                    status="done",
+                    actor_id=actor_id,
+                    model_lineage=model_lineage,
+                    force=True,
+                )
             return _regista.close_work_item(
                 face, project_id, identifier,
                 actor_id=actor_id,
                 model_lineage=model_lineage,
+            )
+        if force:
+            return _native.close_work_item_force(
+                project_id, identifier, actor_id, model_lineage=model_lineage,
             )
         old = cls.get_work_item(project_id, identifier)
         if old is None:

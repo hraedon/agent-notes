@@ -546,14 +546,24 @@ def cmd_bc_reconcile(args: argparse.Namespace) -> int:
     for ident, info in hits.items():
         wi = by_id[ident]
         applied = False
+        error: str | None = None
         if args.apply:
             refs = dict(wi.get("external_refs") or {})
             refs["resolved_by_commit"] = info["commit"]
             refs["resolved_by_subject"] = info["subject"]
-            WorkItemModel.update_work_item(
-                proj_id, ident, status="closed", external_refs=refs, force=True
-            )
-            applied = True
+            try:
+                WorkItemModel.update_work_item(
+                    proj_id, ident, status="closed", external_refs=refs, force=True
+                )
+                applied = True
+            except Exception as exc:
+                # A work item in a state with no direct terminal transition
+                # (e.g. in_review, which must go through the review gate)
+                # cannot be auto-closed. Do not let one such item abort the
+                # whole reconcile; record the failure and continue so the
+                # operator sees every suggestion and can close the stragglers
+                # by hand.
+                error = f"{type(exc).__name__}: {exc}"
         results.append(
             {
                 "identifier": ident,
@@ -562,6 +572,7 @@ def cmd_bc_reconcile(args: argparse.Namespace) -> int:
                 "commit": info["commit"],
                 "subject": info["subject"],
                 "applied": applied,
+                "error": error,
             }
         )
     results.sort(key=lambda r: r["identifier"])
@@ -574,9 +585,16 @@ def cmd_bc_reconcile(args: argparse.Namespace) -> int:
         print("No open work items appear resolved in git history.")
         return EXIT_SUCCESS
 
-    verb = "Resolved" if args.apply else "Would resolve"
     for r in results:
-        print(f"  {verb} {r['identifier']} — {r['commit']} {r['subject']!r}")
+        if r["applied"]:
+            print(f"  Resolved {r['identifier']} — {r['commit']} {r['subject']!r}")
+        elif args.apply and r["error"]:
+            print(
+                f"  Could not auto-close {r['identifier']} "
+                f"({r['current_status']}): {r['error']}"
+            )
+        else:
+            print(f"  Would resolve {r['identifier']} — {r['commit']} {r['subject']!r}")
     if not args.apply:
         print(f"\n{len(results)} suggestion(s). Re-run with --apply to update the DB.")
     return EXIT_SUCCESS
