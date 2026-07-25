@@ -76,8 +76,12 @@ def cmd_orient(args: argparse.Namespace) -> int:
 
         _proj = next((p for p in list_projects(workspace_id=ws_id) if p.id == proj_id), None)
         _repo_root = _proj.repo_root if _proj else None
+        _proj_slug = _proj.slug if _proj else None
         drift = scan_git_for_resolutions(
-            _repo_root, [wi["identifier"] for wi in open_wis], lookback=200
+            _repo_root,
+            [wi["identifier"] for wi in open_wis],
+            lookback=200,
+            project_slug=_proj_slug,
         )
 
     cfg = reg_config.regista_config()

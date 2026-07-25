@@ -152,7 +152,7 @@ def test_reconcile_apply_continues_past_an_unclosable_item(monkeypatch, capsys):
     )
     monkeypatch.setattr(
         "agent_notes.core.git_reconcile.scan_git_for_resolutions",
-        lambda root, ids, lookback=500: {
+        lambda root, ids, lookback=500, project_slug=None: {
             "X-1": {"commit": "aaaaaaa", "subject": "resolve X-1"},
             "X-2": {"commit": "bbbbbbb", "subject": "resolve X-2"},
         },
@@ -200,7 +200,7 @@ def test_reconcile_dry_run_reports_no_errors(monkeypatch, capsys):
     )
     monkeypatch.setattr(
         "agent_notes.core.git_reconcile.scan_git_for_resolutions",
-        lambda root, ids, lookback=500: {"X-9": {"commit": "ccccccc", "subject": "s"}},
+        lambda root, ids, lookback=500, project_slug=None: {"X-9": {"commit": "ccccccc", "subject": "s"}},
     )
 
     rc = cmd_bc_reconcile(_ns(apply=False))

@@ -43,6 +43,14 @@ jobs:
       - name: Lint
         run: ruff check src/ tests/
 
+      # Typing gate (Sol P0-6): mypy runs in baseline mode while the 119-error
+      # backlog is burned down. Remove continue-on-error and the baseline
+      # exemption once the error count reaches zero. The config lives in
+      # pyproject.toml [tool.mypy].
+      - name: Typecheck (mypy baseline — burn-down in progress)
+        continue-on-error: true
+        run: pip install mypy types-PyYAML && mypy src/agent_notes/ --no-error-summary
+
       # Postgres comes from testcontainers (Docker is preinstalled on ubuntu runners),
       # so no service block is needed here.
       - name: Test

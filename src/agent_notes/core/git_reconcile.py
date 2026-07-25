@@ -68,11 +68,27 @@ def _has_unnegated_match(pattern: re.Pattern[str], message: str) -> bool:
     return False
 
 
+def _is_foreign_project_match(
+    identifier: str, message: str, project_slug: str
+) -> bool:
+    """True if the identifier appears in *message* prefixed by a *different*
+    project slug (e.g. ``other-project:WI-022`` when *project_slug* is
+    ``agent-suite``). Such matches indicate the commit is about a work item in
+    another project and must not trigger a closure suggestion here.
+    """
+    foreign = re.compile(
+        rf"\b(?!{re.escape(project_slug)})[a-z0-9][\w-]*:{re.escape(identifier)}\b",
+        re.IGNORECASE,
+    )
+    return bool(foreign.search(message))
+
+
 def scan_git_for_resolutions(
     repo_root: str | Path | None,
     identifiers: list[str],
     *,
     lookback: int = 400,
+    project_slug: str | None = None,
 ) -> dict[str, dict[str, str]]:
     """Find open breadcrumbs that a recent commit resolves.
 
@@ -81,6 +97,13 @@ def scan_git_for_resolutions(
     such commit. Read-only and fail-safe: returns ``{}`` when ``repo_root`` is
     missing, is not a git work tree, or git is unavailable — reconciliation is
     advisory and must never break the caller.
+
+    When ``project_slug`` is provided, an identifier match is only accepted if
+    the commit message references the identifier with a project-qualified form
+    (``<project_slug>:<identifier>``) OR the identifier appears with resolution
+    intent without a *different* project prefix. This prevents false closures
+    when plan-local WI-xxx identifiers in one project collide with work-item
+    identifiers in another (Sol P0-5 / agent-notes WI-032).
     """
     if not identifiers or not repo_root:
         return {}
@@ -127,6 +150,8 @@ def scan_git_for_resolutions(
         message = f"{subject}\n{body}"
         for ident, pat in patterns.items():
             if ident not in found and _has_unnegated_match(pat, message):
+                if project_slug and _is_foreign_project_match(ident, message, project_slug):
+                    continue
                 found[ident] = {"commit": sha[:12], "subject": subject}
         if len(found) == len(identifiers):
             break

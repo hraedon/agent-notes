@@ -540,7 +540,9 @@ def cmd_bc_reconcile(args: argparse.Namespace) -> int:
 
     open_wis = WorkItemModel.query_work_items(project_id=proj_id, is_open=True, limit=200)
     by_id = {wi["identifier"]: wi for wi in open_wis}
-    hits = scan_git_for_resolutions(repo_root, list(by_id), lookback=args.lookback)
+    hits = scan_git_for_resolutions(
+        repo_root, list(by_id), lookback=args.lookback, project_slug=proj_slug
+    )
 
     results: list[dict] = []
     for ident, info in hits.items():
