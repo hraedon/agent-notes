@@ -1366,7 +1366,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agent-suite-conformance", marker = "extra == 'dev'", specifier = "==1.0.0" },
+    { name = "agent-suite-conformance", marker = "python_full_version >= '3.12' and extra == 'dev'", specifier = "==1.0.0" },
     { name = "asn1crypto", marker = "extra == 'timestamping'", specifier = ">=1.5" },
     { name = "azure-identity", marker = "extra == 'azure'", specifier = ">=1.16" },
     { name = "azure-keyvault-secrets", marker = "extra == 'azure'", specifier = ">=4.8" },
@@ -1389,7 +1389,7 @@ requires-dist = [
     { name = "python-dateutil", specifier = ">=2.9" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rfc8785", marker = "extra == 'vendor-check'", specifier = "==0.1.4" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5,<0.16" },
     { name = "structlog", specifier = ">=24.1" },
     { name = "types-jsonschema", marker = "extra == 'dev'" },
     { name = "types-python-dateutil", marker = "extra == 'dev'" },
