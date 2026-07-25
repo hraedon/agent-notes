@@ -74,7 +74,10 @@ def main(argv: list[str] | None = None) -> int:
         [*pip, *regista_req],
     ]
     if not args.no_ruff:
-        steps.append([*pip, "ruff"])
+        # Pinned below 0.16: that release expanded the default rule set, so an
+        # unpinned install turns CI red on unchanged code the day it ships.
+        # The rest of the suite pins the same range.
+        steps.append([*pip, "ruff>=0.5,<0.16"])
     # The [test] extra carries pytest, testcontainers, and the pinned conformance
     # kit (agent-suite-conformance==1.0.0). regista is already resolved above, so
     # this editable install just satisfies the floor with the locked version.
