@@ -25,6 +25,10 @@ MAX_RUNNER_STDERR_BYTES = 64 * 1024
 MAX_VERSION_BYTES = 4096
 
 
+class RunnerUnsupportedPlatformError(RuntimeError):
+    """The bounded-process runner cannot enforce its guarantees on this platform."""
+
+
 class RunnerProtocolError(ValueError):
     """The harness completed but did not satisfy its machine-output contract."""
 
@@ -67,9 +71,29 @@ def run_bounded_process(
     max_stdout_bytes: int = MAX_RUNNER_STDOUT_BYTES,
     max_stderr_bytes: int = MAX_RUNNER_STDERR_BYTES,
 ) -> BoundedProcessResult:
-    """Run an argument-vector command with bounded, separated output streams."""
+    """Run an argument-vector command with bounded, separated output streams.
+
+    POSIX only, deliberately and explicitly. Two of the guarantees in the name
+    are implemented with POSIX-only primitives: the output bounds come from a
+    ``selectors`` loop over the child's pipes (on Windows ``DefaultSelector``
+    handles sockets, not pipes), and the timeout is enforced by signalling the
+    child's process *group* via ``os.killpg``, which has no Windows analogue —
+    ``terminate()`` would leave grandchildren running, so a runaway harness
+    would outlive its own timeout.
+
+    Rather than degrade quietly into a runner that cannot actually bound
+    output or kill what it started, refuse up front. Delegated review is a
+    trust boundary: a timeout that does not stop the process, or a cap that
+    does not cap, is worse than an unavailable feature.
+    """
     if not argv or timeout_seconds <= 0:
         raise ValueError("runner argv and positive timeout are required")
+    if os.name == "nt":
+        raise RunnerUnsupportedPlatformError(
+            "delegated review runners are not supported on Windows: bounded "
+            "output and process-group timeout enforcement rely on POSIX "
+            "selectors and killpg. Run delegated review from Linux/WSL."
+        )
     process = subprocess.Popen(
         list(argv),
         cwd=cwd,

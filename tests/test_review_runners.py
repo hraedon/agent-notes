@@ -24,6 +24,15 @@ from agent_notes.core.work_item._review_runners import (
     run_bounded_process,
 )
 
+# The bounded-process runner is POSIX-only by construction (selectors over
+# pipes, killpg for process-group timeouts) and now refuses on Windows rather
+# than degrading. These tests drive that runner, so they are POSIX-only too.
+# The Windows gap itself is covered by test_runner_refuses_on_windows.
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason="delegated review runners are POSIX-only; see RunnerUnsupportedPlatformError",
+)
+
 
 def _git(repo: Path, *args: str) -> str:
     return subprocess.run(
@@ -251,3 +260,23 @@ def test_schema_is_strict_and_result_parser_remains_authoritative() -> None:
     assert schema["additionalProperties"] is False
     assert set(schema["required"]) == set(schema["properties"])
     assert os.path.sep not in json.dumps(schema) or os.path.sep == "/"
+
+
+# This one must NOT be skipped on Windows — it is the Windows behaviour.
+@pytest.mark.skipif(os.name == "nt", reason="simulated on POSIX; real on Windows")
+def test_runner_refuses_on_windows(monkeypatch, tmp_path):
+    """Refuse up front rather than degrade into an unenforceable bound.
+
+    A runner that cannot kill the process group or cap the output stream is
+    worse than no runner: delegated review would report a timeout while the
+    harness kept running. Simulated by forcing os.name, so the guard is
+    covered on the platform CI actually runs.
+    """
+    from agent_notes.core.work_item._review_runners import (
+        RunnerUnsupportedPlatformError,
+    )
+
+    monkeypatch.setattr(os, "name", "nt")
+    with pytest.raises(RunnerUnsupportedPlatformError) as exc:
+        run_bounded_process([sys.executable, "-c", "pass"], cwd=tmp_path, timeout_seconds=5)
+    assert "Windows" in str(exc.value)
