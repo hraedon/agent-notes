@@ -200,7 +200,9 @@ def test_reconcile_dry_run_reports_no_errors(monkeypatch, capsys):
     )
     monkeypatch.setattr(
         "agent_notes.core.git_reconcile.scan_git_for_resolutions",
-        lambda root, ids, lookback=500, project_slug=None: {"X-9": {"commit": "ccccccc", "subject": "s"}},
+        lambda root, ids, lookback=500, project_slug=None: {
+            "X-9": {"commit": "ccccccc", "subject": "s"}
+        },
     )
 
     rc = cmd_bc_reconcile(_ns(apply=False))
