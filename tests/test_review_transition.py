@@ -104,6 +104,28 @@ class TestNativeReviewTransition:
         )
         assert result["status"] == "in_human_review"
 
+    def test_repeated_adversarial_pass_is_rejected_not_a_silent_noop(
+        self, default_project, monkeypatch
+    ):
+        _to_in_review(default_project.id, "RV-NOOP", monkeypatch)
+        WorkItemModel.review_transition(
+            default_project.id,
+            "RV-NOOP",
+            transition_name="adversarial_pass",
+            review_note="pass",
+            actor_id="r1",
+            model_lineage="kimi",
+        )
+        with pytest.raises(ValueError, match="already in"):
+            WorkItemModel.review_transition(
+                default_project.id,
+                "RV-NOOP",
+                transition_name="adversarial_pass",
+                review_note="pass again",
+                actor_id="r2",
+                model_lineage="glm",
+            )
+
     def test_review_note_stored_in_diagnostic_keys(self, default_project, monkeypatch):
         _to_in_review(default_project.id, "RV-02", monkeypatch)
         result = WorkItemModel.review_transition(

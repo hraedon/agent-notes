@@ -4,6 +4,8 @@ import argparse
 import json
 from typing import Any
 
+from regista._errors import RegistaError
+
 from agent_notes.cli.common import (
     EXIT_CONFLICT,
     EXIT_NOT_CONFIGURED,
@@ -512,7 +514,7 @@ def cmd_wi_review_pass(args: argparse.Namespace) -> int:
             model_lineage=getattr(args, "model_lineage", None),
             same_lineage_acknowledged=getattr(args, "same_lineage_acknowledged", False),
         )
-    except ValueError as exc:
+    except (ValueError, RegistaError) as exc:
         return emit_error(
             "VALIDATION_FAILED",
             str(exc),
@@ -545,7 +547,7 @@ def cmd_wi_review_accept(args: argparse.Namespace) -> int:
             model_lineage=getattr(args, "model_lineage", None),
             same_lineage_acknowledged=getattr(args, "same_lineage_acknowledged", False),
         )
-    except ValueError as exc:
+    except (ValueError, RegistaError) as exc:
         return emit_error(
             "VALIDATION_FAILED",
             str(exc),
@@ -578,7 +580,7 @@ def cmd_wi_review_reject(args: argparse.Namespace) -> int:
             model_lineage=getattr(args, "model_lineage", None),
             same_lineage_acknowledged=getattr(args, "same_lineage_acknowledged", False),
         )
-    except ValueError as exc:
+    except (ValueError, RegistaError) as exc:
         return emit_error(
             "VALIDATION_FAILED",
             str(exc),
@@ -611,7 +613,7 @@ def cmd_wi_review_request_changes(args: argparse.Namespace) -> int:
             model_lineage=getattr(args, "model_lineage", None),
             same_lineage_acknowledged=getattr(args, "same_lineage_acknowledged", False),
         )
-    except ValueError as exc:
+    except (ValueError, RegistaError) as exc:
         return emit_error(
             "VALIDATION_FAILED",
             str(exc),

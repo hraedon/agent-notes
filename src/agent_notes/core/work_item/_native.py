@@ -518,10 +518,16 @@ def review_transition(
             raise ValueError(
                 f"Cannot accept {identifier!r} to 'done' in degrade mode: "
                 "completion requires regista's cross-lineage review gate. "
-                "Use force=True only for admin/repair."
+                "For admin/repair use 'agent-notes work-item close --force' "
+                "or 'work-item update --status done --force'."
             )
 
-        # Validate the transition shape (raises ValueError for illegal).
+        if old["status"] == target_status:
+            raise ValueError(
+                f"{identifier!r} is already in {target_status!r}; "
+                f"'{transition_name}' would be a no-op."
+            )
+
         _lifecycle_transition_for(old["status"], target_status)
 
         # Write the set_status op with review_note in the payload so the

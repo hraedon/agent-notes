@@ -28,6 +28,14 @@ def cmd_mem_add(args: argparse.Namespace) -> int:
     from agent_notes.core.embed import embed
     from agent_notes.core.memory_model import add_memory
 
+    if not args.body or not args.body.strip():
+        return emit_error(
+            "VALIDATION_FAILED",
+            "--body must be a non-empty string",
+            use_json=use_json,
+            exit_code=EXIT_CONFLICT,
+        )
+
     vec = embed(args.body, task="document").tolist()
     attributes = json.loads(args.attributes) if args.attributes else {}
     try:

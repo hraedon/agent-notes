@@ -536,7 +536,7 @@ def cmd_bc_reconcile(args: argparse.Namespace) -> int:
             print(json.dumps({"error": msg, "results": []}))
         else:
             print(msg, file=sys.stderr)
-        return EXIT_SUCCESS
+        return EXIT_NOT_CONFIGURED
 
     open_wis = WorkItemModel.query_work_items(project_id=proj_id, is_open=True, limit=200)
     by_id = {wi["identifier"]: wi for wi in open_wis}
@@ -579,9 +579,11 @@ def cmd_bc_reconcile(args: argparse.Namespace) -> int:
         )
     results.sort(key=lambda r: r["identifier"])
 
+    had_apply_errors = args.apply and any(r.get("error") for r in results)
+
     if use_json:
         print(json.dumps({"results": results, "applied": args.apply}, indent=2, default=str))
-        return EXIT_SUCCESS
+        return EXIT_CONFLICT if had_apply_errors else EXIT_SUCCESS
 
     if not results:
         print("No open work items appear resolved in git history.")
@@ -599,7 +601,7 @@ def cmd_bc_reconcile(args: argparse.Namespace) -> int:
             print(f"  Would resolve {r['identifier']} — {r['commit']} {r['subject']!r}")
     if not args.apply:
         print(f"\n{len(results)} suggestion(s). Re-run with --apply to update the DB.")
-    return EXIT_SUCCESS
+    return EXIT_CONFLICT if had_apply_errors else EXIT_SUCCESS
 
 
 def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
