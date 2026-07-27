@@ -64,6 +64,19 @@ def _get_subcommands(*noun_path: str) -> list[str]:
     return []
 
 
+def _manifest_covers_path(path: str, manifest_names: set[str]) -> bool:
+    """Return true when ``path`` is a declared leaf or an intermediate group.
+
+    On Windows, argparse can wrap or omit a nested group's choices in the
+    intermediate ``--help`` output. A group such as ``work-item review`` is
+    still covered when the manifest declares descendants such as
+    ``work-item review pass``; it must not be misclassified as a missing leaf.
+    """
+    return path in manifest_names or any(
+        name.startswith(f"{path} ") for name in manifest_names
+    )
+
+
 def test_manifest_schema_is_valid(manifest: dict) -> None:
     """The manifest has the required top-level fields and every command entry
     has the required per-command fields (contract §6 normative schema)."""
@@ -154,13 +167,24 @@ def test_live_commands_are_not_absent_from_manifest(manifest: dict) -> None:
                         if full3 not in manifest_names:
                             missing.append(full3)
                 else:
-                    if full not in manifest_names:
+                    if not _manifest_covers_path(full, manifest_names):
                         missing.append(full)
 
     assert missing == [], (
         f"Live parser commands absent from the manifest ({len(missing)}):\n"
         + "\n".join(f"  {m}" for m in sorted(missing))
     )
+
+
+def test_intermediate_group_is_covered_by_manifest_descendants() -> None:
+    """Regression: Windows may not expose third-level choices in group help."""
+    names = {
+        "work-item review list",
+        "work-item review pass",
+        "work-item review reject",
+    }
+    assert _manifest_covers_path("work-item review", names)
+    assert not _manifest_covers_path("work-item missing-group", names)
 
 
 def test_manifest_includes_recovery_commands(manifest: dict) -> None:
