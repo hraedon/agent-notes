@@ -12,6 +12,16 @@ reconcile path covers offline-append as it does for breadcrumbs.
 
 See ``docs/note-entity-contract.md`` for the entity shape and the
 breadcrumb-vs-memory/reflection split decision.
+
+Split-brain contract (Profile A/B remediation)
+----------------------------------------------
+The signed regista event is committed *before* the local projection write.
+If the local write then fails, the note exists in regista but not in the
+local ``memories`` table. ``NoteProjectionError`` makes this state explicit:
+it carries the ``regista_note_id`` so the caller can report the partial
+commit and point the operator at ``rebuild_from_regista`` for recovery.
+The error is never swallowed into a clean success — the CLI maps it to a
+``PROJECTION_FAILED`` envelope with a nonzero exit code.
 """
 
 from __future__ import annotations
@@ -28,6 +38,31 @@ from agent_notes.core.change_log import write_change
 from agent_notes.core.db import _conn
 
 _log = logging.getLogger(__name__)
+
+
+class NoteProjectionError(Exception):
+    """The regista event committed but the local projection write failed.
+
+    The note *is* in regista (the signed event is durable); the local
+    ``memories`` row is missing or stale. Recovery: call
+    ``rebuild_from_regista(face, project_id=...)`` to re-derive the
+    projection from the authoritative event log.
+
+    Attributes:
+        regista_note_id: The entity_id of the committed note event.
+        operation: Which write operation failed ('add', 'update', 'delete').
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        regista_note_id: uuid.UUID,
+        operation: str,
+    ) -> None:
+        super().__init__(message)
+        self.regista_note_id = regista_note_id
+        self.operation = operation
 
 KIND = "memory"
 
@@ -125,7 +160,13 @@ def add_memory(
     attributes: dict | None = None,
     embedding: Any | None = None,
 ) -> dict:
-    """Write a memory as a signed note entity, then mirror to local projection."""
+    """Write a memory as a signed note entity, then mirror to local projection.
+
+    Split-brain contract: the regista event commits first. If the local
+    projection write then fails, ``NoteProjectionError`` is raised carrying
+    the ``regista_note_id`` — the note IS in regista and recoverable via
+    ``rebuild_from_regista``. The error is never reported as a clean success.
+    """
     from agent_notes.core.memory_model import _auto_create_wikilinks
 
     actor = face_factory.default_actor()
@@ -152,47 +193,77 @@ def add_memory(
         )
         note_outboxed = getattr(face, "last_op_outboxed", False)
 
-    with _conn() as conn:
-        ws_id = _resolve_workspace(conn, project_id)
-        existing = _find_existing_note(conn, project_id, name)
-        old_id = None
-        if existing:
-            old_id = existing["id"]
-            _supersede_old(conn, old_id)
-            if face is not None and existing.get("regista_note_id") is not None:
-                face.append_note(
-                    actor,
-                    existing["regista_note_id"],
-                    transition=_NOTE_SUPERSEDED,
-                    payload={"superseded_by": str(note_uuid)},
-                )
-                if getattr(face, "last_op_outboxed", False):
-                    _mark_note_pending(conn, existing["regista_note_id"], True)
+    # The regista event is now committed (unless outboxed). The local
+    # projection write below is best-effort relative to regista: if it
+    # fails, the note still exists in the authoritative store. We catch
+    # the failure and raise NoteProjectionError so the caller can report
+    # the partial commit and point the operator at rebuild_from_regista.
+    #
+    # Track the supersede append outcome separately: if the old note's
+    # note_superseded event committed but the local projection then fails,
+    # both entity_ids are involved in the split-brain.
+    supersede_committed_id: uuid.UUID | None = None
+    try:
+        with _conn() as conn:
+            ws_id = _resolve_workspace(conn, project_id)
+            existing = _find_existing_note(conn, project_id, name)
+            old_id = None
+            if existing:
+                old_id = existing["id"]
+                _supersede_old(conn, old_id)
+                if face is not None and existing.get("regista_note_id") is not None:
+                    face.append_note(
+                        actor,
+                        existing["regista_note_id"],
+                        transition=_NOTE_SUPERSEDED,
+                        payload={"superseded_by": str(note_uuid)},
+                    )
+                    if getattr(face, "last_op_outboxed", False):
+                        _mark_note_pending(conn, existing["regista_note_id"], True)
+                    else:
+                        supersede_committed_id = uuid.UUID(
+                            str(existing["regista_note_id"])
+                        )
 
-        row = _mirror_note_to_projection(
-            conn,
-            workspace_id=ws_id,
-            project_id=project_id,
-            name=name,
-            memory_type=memory_type,
-            body=body,
-            attributes=attributes,
-            embedding=embedding,
-            regista_note_id=note_uuid if face is not None else None,
-            supersedes=old_id,
-            pending_sync=note_outboxed,
-        )
-        _auto_create_wikilinks(conn, ws_id, project_id, name, body)
-        write_change(
-            conn,
-            kind=KIND,
-            workspace_id=ws_id,
-            project_id=project_id,
-            identifier=name,
-            event="filed",
-            payload={"memory_type": memory_type, "id": row["id"]},
-        )
-        conn.commit()
+            row = _mirror_note_to_projection(
+                conn,
+                workspace_id=ws_id,
+                project_id=project_id,
+                name=name,
+                memory_type=memory_type,
+                body=body,
+                attributes=attributes,
+                embedding=embedding,
+                regista_note_id=note_uuid if face is not None else None,
+                supersedes=old_id,
+                pending_sync=note_outboxed,
+            )
+            _auto_create_wikilinks(conn, ws_id, project_id, name, body)
+            write_change(
+                conn,
+                kind=KIND,
+                workspace_id=ws_id,
+                project_id=project_id,
+                identifier=name,
+                event="filed",
+                payload={"memory_type": memory_type, "id": row["id"]},
+            )
+            conn.commit()
+    except NoteProjectionError:
+        raise
+    except Exception as exc:
+        if face is not None and not note_outboxed:
+            involved = [f"entity_id={note_uuid}"]
+            if supersede_committed_id is not None:
+                involved.append(f"superseded_entity_id={supersede_committed_id}")
+            raise NoteProjectionError(
+                f"regista note event committed ({', '.join(involved)}) but local "
+                f"projection write failed: {exc}. Recover with "
+                f"'agent-notes memory rebuild-from-regista --project <slug>'.",
+                regista_note_id=note_uuid,
+                operation="add",
+            ) from exc
+        raise
 
     return row
 
@@ -213,69 +284,99 @@ def update_memory(
     body: str | None = None,
     attributes: dict | None = None,
 ) -> dict:
-    """Update a memory: append a note_updated event, then mirror to projection."""
+    """Update a memory: append a note_updated event, then mirror to projection.
+
+    Split-brain contract: same as ``add_memory`` — the regista event commits
+    first; a local projection failure raises ``NoteProjectionError``.
+    """
     face = face_factory.get_face()
     actor = face_factory.default_actor()
 
+    # Read the existing row before touching regista so we can raise a clean
+    # ValueError (not a NoteProjectionError) when the memory simply doesn't exist.
     with _conn() as conn:
-        ws_id = _resolve_workspace(conn, project_id)
         existing = _find_existing_note(conn, project_id, name)
-        if existing is None:
-            raise ValueError(f"Memory '{name}' not found (or deleted)")
+    if existing is None:
+        raise ValueError(f"Memory '{name}' not found (or deleted)")
 
-        merged_attrs = dict(existing.get("attributes") or {})
-        if attributes is not None:
-            merged_attrs.update(attributes)
-
-        note_id = existing.get("regista_note_id")
-        if face is not None and note_id is not None:
-            payload: dict[str, Any] = {
-                "note_subtype": _note_subtype_for(existing["memory_type"]),
-                "memory_type": existing["memory_type"],
-                "name": name,
-            }
-            if body is not None:
-                payload["body"] = body
-            if attributes is not None:
-                payload["attributes"] = merged_attrs
-            face.append_note(
-                actor,
-                note_id,
-                transition=_NOTE_UPDATED,
-                payload=payload,
-            )
-
-        cur = conn.cursor(row_factory=dict_row)
-        sets = ["updated_at = now()"]
-        params: list[Any] = []
+    note_id = existing.get("regista_note_id")
+    regista_committed = False
+    if face is not None and note_id is not None:
+        payload: dict[str, Any] = {
+            "note_subtype": _note_subtype_for(existing["memory_type"]),
+            "memory_type": existing["memory_type"],
+            "name": name,
+        }
         if body is not None:
-            sets.append("body = %s")
-            params.append(body)
+            payload["body"] = body
         if attributes is not None:
-            sets.append("attributes = %s")
-            params.append(psycopg.types.json.Jsonb(merged_attrs))
-        params.extend([project_id, workspace_id, name])
-        cur.execute(
-            f"UPDATE memories SET {', '.join(sets)} "
-            "WHERE project_id = %s AND workspace_id = %s AND name = %s AND active = true "
-            "RETURNING id, workspace_id, project_id, name, memory_type, body, "
-            "active, supersedes, attributes, regista_note_id, created_at, updated_at",
-            params,
+            merged_attrs = dict(existing.get("attributes") or {})
+            merged_attrs.update(attributes)
+            payload["attributes"] = merged_attrs
+        face.append_note(
+            actor,
+            note_id,
+            transition=_NOTE_UPDATED,
+            payload=payload,
         )
-        row = cur.fetchone()
-        if row is None:
-            raise ValueError(f"Memory '{name}' not found (or deleted)")
+        regista_committed = not getattr(face, "last_op_outboxed", False)
 
-        write_change(
-            conn,
-            kind=KIND,
-            workspace_id=ws_id,
-            project_id=project_id,
-            identifier=name,
-            event="updated",
-            payload={"fields": [k for k in ("body", "attributes") if locals().get(k) is not None]},
-        )
-        conn.commit()
+    try:
+        with _conn() as conn:
+            ws_id = _resolve_workspace(conn, project_id)
+            merged_attrs = dict(existing.get("attributes") or {})
+            if attributes is not None:
+                merged_attrs.update(attributes)
+
+            cur = conn.cursor(row_factory=dict_row)
+            sets = ["updated_at = now()"]
+            params: list[Any] = []
+            if body is not None:
+                sets.append("body = %s")
+                params.append(body)
+            if attributes is not None:
+                sets.append("attributes = %s")
+                params.append(psycopg.types.json.Jsonb(merged_attrs))
+            params.extend([project_id, workspace_id, name])
+            cur.execute(
+                f"UPDATE memories SET {', '.join(sets)} "
+                "WHERE project_id = %s AND workspace_id = %s AND name = %s AND active = true "
+                "RETURNING id, workspace_id, project_id, name, memory_type, body, "
+                "active, supersedes, attributes, regista_note_id, created_at, updated_at",
+                params,
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError(f"Memory '{name}' not found (or deleted)")
+
+            write_change(
+                conn,
+                kind=KIND,
+                workspace_id=ws_id,
+                project_id=project_id,
+                identifier=name,
+                event="updated",
+                payload={
+                    "fields": [
+                        k for k in ("body", "attributes") if locals().get(k) is not None
+                    ]
+                },
+            )
+            conn.commit()
+    except NoteProjectionError:
+        raise
+    except ValueError:
+        raise
+    except Exception as exc:
+        if regista_committed and note_id is not None:
+            raise NoteProjectionError(
+                f"regista note_updated event committed (entity_id={note_id}) but "
+                f"local projection write failed: {exc}. Recover with "
+                f"'agent-notes memory rebuild-from-regista --project <slug>'.",
+                regista_note_id=uuid.UUID(str(note_id)),
+                operation="update",
+            ) from exc
+        raise
 
     return dict(row)
 
@@ -285,12 +386,17 @@ def delete_memory(
     project_id: int,
     name: str,
 ) -> dict | None:
-    """Soft-delete a memory: append a note_deleted event, then flip active=false."""
+    """Soft-delete a memory: append a note_deleted event, then flip active=false.
+
+    Split-brain contract: same as ``add_memory`` — the regista event commits
+    first; a local projection failure raises ``NoteProjectionError``.
+    """
     face = face_factory.get_face()
     actor = face_factory.default_actor()
 
+    # Read the existing row before touching regista so a missing memory is a
+    # clean None return, not a NoteProjectionError.
     with _conn() as conn:
-        ws_id = _resolve_workspace(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             "SELECT id, regista_note_id FROM memories "
@@ -298,36 +404,54 @@ def delete_memory(
             (project_id, workspace_id, name),
         )
         existing = cur.fetchone()
-        if existing is None:
-            return None
+    if existing is None:
+        return None
 
-        note_id = existing.get("regista_note_id")
-        if face is not None and note_id is not None:
-            face.append_note(
-                actor,
-                note_id,
-                transition=_NOTE_DELETED,
-                payload={},
+    note_id = existing.get("regista_note_id")
+    regista_committed = False
+    if face is not None and note_id is not None:
+        face.append_note(
+            actor,
+            note_id,
+            transition=_NOTE_DELETED,
+            payload={},
+        )
+        regista_committed = not getattr(face, "last_op_outboxed", False)
+
+    try:
+        with _conn() as conn:
+            ws_id = _resolve_workspace(conn, project_id)
+            cur = conn.cursor(row_factory=dict_row)
+            cur.execute(
+                "UPDATE memories SET active = false "
+                "WHERE id = %s RETURNING id",
+                (existing["id"],),
             )
+            row = cur.fetchone()
 
-        cur.execute(
-            "UPDATE memories SET active = false "
-            "WHERE id = %s RETURNING id",
-            (existing["id"],),
-        )
-        row = cur.fetchone()
-
-        write_change(
-            conn,
-            kind=KIND,
-            workspace_id=ws_id,
-            project_id=project_id,
-            identifier=name,
-            event="deleted",
-            payload={"id": row["id"]},
-        )
-        conn.commit()
-        return dict(row)
+            write_change(
+                conn,
+                kind=KIND,
+                workspace_id=ws_id,
+                project_id=project_id,
+                identifier=name,
+                event="deleted",
+                payload={"id": row["id"]},
+            )
+            conn.commit()
+            return dict(row)
+    except NoteProjectionError:
+        raise
+    except Exception as exc:
+        if regista_committed and note_id is not None:
+            raise NoteProjectionError(
+                f"regista note_deleted event committed (entity_id={note_id}) but "
+                f"local projection write failed: {exc}. Recover with "
+                f"'agent-notes memory rebuild-from-regista --project <slug>'.",
+                regista_note_id=uuid.UUID(str(note_id)),
+                operation="delete",
+            ) from exc
+        raise
 
 
 def _resolve_memory_type(folded: dict) -> str:
@@ -408,7 +532,7 @@ def rebuild_from_regista(
                         """
                         UPDATE memories SET
                             memory_type = %s, body = %s, attributes = %s,
-                            embedding = COALESCE(%s, embedding),
+                            embedding = COALESCE(%s::vector, embedding),
                             active = %s, updated_at = now()
                         WHERE id = %s
                         """,
@@ -516,3 +640,106 @@ def _fold_note_events(events: list[Any]) -> dict:
         elif transition == _NOTE_DELETED:
             state["active"] = False
     return state
+
+
+def check_projection_drift(face: Any, *, project_id: int) -> dict:
+    """Read-only drift check: regista note entities vs local memories table.
+
+    Detects two drift classes:
+
+    1. **Missing** — a regista note entity has no local row at all (hard crash
+       between the regista commit and the local projection write).
+    2. **Stale** — a local row exists but its content diverges from the folded
+       authoritative state (hard crash during an update or delete: the regista
+       event committed but the local UPDATE/DELETE did not).
+
+    For each entity the authoritative state is folded from its event log using
+    ``_fold_note_events`` and compared field-by-field against the local row.
+    Mismatches are reported with named reasons and entity IDs so monitoring can
+    gate on the result.
+
+    This is a diagnostic — it never mutates. Repair is ``rebuild_from_regista``.
+
+    Returns a dict with:
+      - ``drifted``: total count of entities with any drift (missing + stale)
+      - ``missing_entity_ids``: entities present in regista but absent locally
+      - ``stale``: list of dicts with ``entity_id``, ``name``, ``reasons``
+      - ``local_only``: count of local rows whose regista_note_id has no
+        corresponding regista entity (expected after a schema wipe, not a bug)
+      - ``regista_entity_count`` / ``local_row_count``: totals for context
+    """
+    from agent_notes.core.db import _conn as _get_conn
+
+    note_events = face.list_note_entities()
+    regista_ids = {str(evt.effective_entity_id) for evt in note_events}
+
+    with _get_conn() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            "SELECT regista_note_id, name, memory_type, body, active "
+            "FROM memories "
+            "WHERE project_id = %s AND regista_note_id IS NOT NULL",
+            (project_id,),
+        )
+        local_rows: dict[str, dict] = {
+            str(row["regista_note_id"]): row for row in cur.fetchall()
+        }
+
+    local_ids = set(local_rows.keys())
+    missing_locally = sorted(regista_ids - local_ids)
+    local_only = sorted(local_ids - regista_ids)
+
+    # Stale detection: fold authoritative state and compare to local row.
+    stale: list[dict] = []
+    for latest_evt in note_events:
+        entity_id = str(latest_evt.effective_entity_id)
+        if entity_id not in local_rows:
+            continue  # already counted as missing
+        try:
+            events = face.read_note_events(latest_evt.effective_entity_id)
+            if not events:
+                continue
+            folded = _fold_note_events(events)
+            local = local_rows[entity_id]
+            reasons: list[str] = []
+
+            # Compare active flag (catches crashed delete/supersede).
+            if local["active"] != folded["active"]:
+                reasons.append(
+                    f"active: local={local['active']} authoritative={folded['active']}"
+                )
+            # Compare body (catches crashed update).
+            if folded["body"] and local["body"] != folded["body"]:
+                reasons.append("body mismatch")
+            # Compare name (catches crashed rename via update).
+            if folded["name"] and local["name"] != folded["name"]:
+                reasons.append(
+                    f"name: local={local['name']!r} authoritative={folded['name']!r}"
+                )
+            # Compare memory_type (catches crashed type change).
+            authoritative_type = _resolve_memory_type(folded)
+            if local["memory_type"] != authoritative_type:
+                reasons.append(
+                    f"memory_type: local={local['memory_type']!r} "
+                    f"authoritative={authoritative_type!r}"
+                )
+
+            if reasons:
+                stale.append({
+                    "entity_id": entity_id,
+                    "name": local["name"],
+                    "reasons": reasons,
+                })
+        except Exception:
+            _log.warning(
+                "drift check failed for entity %s", entity_id, exc_info=True
+            )
+
+    return {
+        "drifted": len(missing_locally) + len(stale),
+        "missing_entity_ids": missing_locally,
+        "stale": stale,
+        "local_only": len(local_only),
+        "regista_entity_count": len(regista_ids),
+        "local_row_count": len(local_ids),
+    }

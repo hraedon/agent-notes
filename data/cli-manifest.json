@@ -1,0 +1,505 @@
+{
+  "cli_contract_version": 1,
+  "manifest_schema_version": 1,
+  "component": "agent-notes",
+  "distribution": "agent-notes-hraedon",
+  "commands": [
+    {
+      "name": "init",
+      "mutability": "mutating",
+      "json": false,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "resolve",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "doctor",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "breadcrumb file",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "breadcrumb update",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "breadcrumb get",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "breadcrumb find",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "breadcrumb delete",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "breadcrumb sync",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "breadcrumb export-index",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "breadcrumb reconcile",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item file",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item update",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item get",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item find",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item ready",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item claimable",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item claim",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item release",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item heartbeat",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item requeue-expired",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item close",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item delete",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item diagnose",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item attest-gate",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item review list",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item review pass",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item review accept",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item review reject",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item review request-changes",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item request",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item wait",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item link-cross",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item export-ops",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item ingest-ops",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "work-item rebuild-cache",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "memory add",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "memory get",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "memory list",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "memory search",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "memory update",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "memory delete",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "memory rebuild-from-regista",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "memory check-drift",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "memory-provider describe",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "memory-provider configure",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "memory-provider doctor",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "link add",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "link remove",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "link trace",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "vocabulary list",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "vocabulary add",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "vocabulary archive",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "workspace list",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "changes since",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "changes archive",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "events tail",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "ndjson",
+      "aliases": []
+    },
+    {
+      "name": "install-skills",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "install-harness",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "export",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "import",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "orient",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "outbox status",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "outbox reconcile",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "projection rebuild-from-regista",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "migrate-to-regista",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "search all",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "search breadcrumb",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "search memory",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "verify run",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "contract",
+      "aliases": [],
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document"
+    }
+  ]
+}

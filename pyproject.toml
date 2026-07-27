@@ -60,6 +60,7 @@ packages = ["src/agent_notes"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "skills" = "agent_notes/skills"
+"data/cli-manifest.json" = "agent_notes/cli-manifest.json"
 
 [tool.ruff]
 line-length = 100

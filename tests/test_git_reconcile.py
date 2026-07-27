@@ -103,3 +103,48 @@ def test_non_git_directory_is_safe(tmp_path):
 
 def test_empty_identifiers_short_circuits(repo):
     assert scan_git_for_resolutions(repo, []) == {}
+
+
+# ---------------------------------------------------------------------------
+# project_slug filtering (dd11628 / agent-notes WI-032)
+# ---------------------------------------------------------------------------
+
+
+def test_foreign_project_match_excluded(repo):
+    """A commit that references an identifier with a *different* project slug
+    prefix (e.g. ``other-project:WI-022``) must NOT trigger a closure
+    suggestion for this project."""
+    _commit(repo, "resolve other-project:WI-022: fix the thing")
+    hits = scan_git_for_resolutions(
+        repo, ["WI-022"], project_slug="agent-suite"
+    )
+    assert hits == {}
+
+
+def test_same_project_qualified_match_accepted(repo):
+    """A commit that references an identifier with the *same* project slug
+    prefix (e.g. ``agent-suite:WI-022``) IS accepted."""
+    _commit(repo, "resolve agent-suite:WI-022: fix the thing")
+    hits = scan_git_for_resolutions(
+        repo, ["WI-022"], project_slug="agent-suite"
+    )
+    assert "WI-022" in hits
+
+
+def test_unqualified_match_accepted_with_project_slug(repo):
+    """A commit that references an identifier without any project prefix is
+    still accepted (the foreign-project guard only rejects *different*
+    project prefixes, not unqualified references)."""
+    _commit(repo, "resolve WI-022: fix the thing")
+    hits = scan_git_for_resolutions(
+        repo, ["WI-022"], project_slug="agent-suite"
+    )
+    assert "WI-022" in hits
+
+
+def test_no_project_slug_accepts_all_matches(repo):
+    """Without a project_slug, all resolution-intent matches are accepted
+    (backward-compatible behavior)."""
+    _commit(repo, "resolve other-project:WI-022: fix the thing")
+    hits = scan_git_for_resolutions(repo, ["WI-022"])
+    assert "WI-022" in hits

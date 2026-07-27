@@ -57,7 +57,10 @@ def test_wheel_force_includes_the_canonical_skill_tree() -> None:
         project = tomllib.load(stream)
 
     force_include = project["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]
-    assert force_include == {"skills": "agent_notes/skills"}
+    assert force_include == {
+        "skills": "agent_notes/skills",
+        "data/cli-manifest.json": "agent_notes/cli-manifest.json",
+    }
 
 
 def test_plugin_bundle_excludes_checkout_and_virtualenv() -> None:

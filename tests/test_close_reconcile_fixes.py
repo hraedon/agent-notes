@@ -173,7 +173,11 @@ def test_reconcile_apply_continues_past_an_unclosable_item(monkeypatch, capsys):
     )
 
     rc = cmd_bc_reconcile(_ns(apply=True))
-    assert rc == 0
+    # Post-eeb8eb2 (9ab81ab): apply errors now return EXIT_CONFLICT (4), not
+    # EXIT_SUCCESS (0). The reconcile ran and reported per-item errors; the
+    # nonzero exit signals "some items could not be auto-closed" without
+    # aborting the whole run.
+    assert rc == 4  # EXIT_CONFLICT
     out = json.loads(capsys.readouterr().out)
     by_id = {r["identifier"]: r for r in out["results"]}
     assert by_id["X-1"]["applied"] is True
@@ -210,3 +214,93 @@ def test_reconcile_dry_run_reports_no_errors(monkeypatch, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["results"][0]["applied"] is False
     assert out["results"][0]["error"] is None
+
+
+# ── Fix 3 (9ab81ab): memory add rejects empty body ───────────────────────
+
+
+def test_mem_add_empty_body_returns_validation_error(capsys, monkeypatch):
+    """cmd_mem_add with an empty --body returns a VALIDATION_FAILED envelope
+    and a nonzero exit code (not a silent success or a traceback)."""
+    from agent_notes.cli.memory import cmd_mem_add
+
+    monkeypatch.setattr(
+        "agent_notes.cli.memory._resolve",
+        lambda *a, **k: (1, 1, "ws", "proj"),
+    )
+    ns = argparse.Namespace(
+        workspace=None, project=None, path="/projects/x",
+        json=True, name="test-mem", type="note",
+        body="   ",  # whitespace-only body
+        attributes=None,
+    )
+    rc = cmd_mem_add(ns)
+    assert rc != 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert out["error"]["code"] == "VALIDATION_FAILED"
+
+
+# ── Fix 4 (9ab81ab): review CLI catches RegistaError ─────────────────────
+
+
+def test_review_pass_cli_catches_regista_error(default_project, hmac_key_path, monkeypatch, capsys):
+    """When the review gate raises RegistaError (e.g. undeclared author
+    lineage), the CLI catches it and emits a VALIDATION_FAILED envelope
+    instead of a traceback."""
+    from agent_notes.cli.work_items import cmd_wi_review_pass
+
+    monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
+    monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "author-agent")
+    monkeypatch.setenv("AGENT_NOTES_PRINCIPAL_ID", "author@example.com")
+    monkeypatch.delenv("AGENT_NOTES_MODEL_LINEAGE", raising=False)
+
+    reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+    face = RegistaFace(reg)
+    reset_face()
+    set_face_for_test(face)
+    try:
+        # File and drive to in_review without declaring model_lineage.
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="RV-CLI-ERR",
+            title="regista error test",
+            body="body",
+            kind="bug",
+            status="open",
+            severity="medium",
+            embedding=_vec768(),
+        )
+        WorkItemModel.update_work_item(
+            project_id=default_project.id,
+            identifier="RV-CLI-ERR",
+            status="in_progress",
+        )
+        WorkItemModel.close_work_item(default_project.id, "RV-CLI-ERR")
+
+        # The adversarial_pass should raise RegistaError (undeclared lineage).
+        # The CLI must catch it and return a VALIDATION_FAILED envelope.
+        ns = argparse.Namespace(
+            workspace=None, project=None, path="/projects/sf2",
+            json=True, identifier="RV-CLI-ERR",
+            note="This should fail cleanly",
+            actor_id="reviewer-kimi",
+            model_lineage="kimi",
+            same_lineage_acknowledged=False,
+        )
+        rc = cmd_wi_review_pass(ns)
+        assert rc != 0, "CLI must not return exit 0 on RegistaError"
+        captured = capsys.readouterr()
+        # structlog may write key-loading info to stdout in the full suite.
+        # The CLI error envelope is a pretty-printed JSON document (indent=2)
+        # so it starts with '{\n  "ok":'. Find it by locating the last
+        # '"ok":' marker and backing up to the preceding '{'.
+        ok_pos = captured.out.rindex('"ok":')
+        brace_pos = captured.out.rindex("{", 0, ok_pos)
+        out = json.loads(captured.out[brace_pos:])
+        assert out["ok"] is False
+        assert out["error"]["code"] == "VALIDATION_FAILED"
+        assert "Traceback" not in captured.err
+    finally:
+        reset_face()
+        reg.close()

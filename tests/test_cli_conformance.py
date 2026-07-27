@@ -1,8 +1,9 @@
 """agent-notes' CLI run through the CLI contract v1 conformance kit (Plan 018 WI-2).
 
-The kit is the centrally versioned package ``agent_suite.conformance``, consumed
-pinned (never copied) from the public agent-suite repo. These are agent-notes'
-component-side fixtures against its own CLI.
+The kit is consumed as the pinned ``agent-suite-conformance==1.0.0`` test
+dependency. The published wheel exposes ``agent_suite_conformance``; the legacy
+``agent_suite.conformance`` PEP 420 layout remains a source-checkout fallback.
+These are agent-notes' component-side fixtures against its own CLI.
 
 Every case is hermetic: it strips the store configuration
 (``AGENT_NOTES_DSN`` / ``AGENT_NOTES_REGISTA_DSN`` / ``REGISTA_DSN``) so results
@@ -15,14 +16,14 @@ those codes satisfy.
 from __future__ import annotations
 
 import sys
+from collections.abc import Collection
 
 import pytest
 
-# The conformance kit is installed by CI as a dedicated pinned step (it is a
-# git+SHA direct reference, which PyPI forbids in package metadata, so it is not
-# a pyproject dependency). Skip cleanly if it is absent — but note CI installs it
-# in a step that fails loudly, so a missing kit in CI never silently skips here.
-conformance = pytest.importorskip("agent_suite.conformance")
+try:
+    import agent_suite_conformance as conformance
+except ModuleNotFoundError:
+    conformance = pytest.importorskip("agent_suite.conformance")
 
 BrokenPipeCase = conformance.BrokenPipeCase
 ErrorCase = conformance.ErrorCase
@@ -38,6 +39,27 @@ _CLI = (sys.executable, "-m", "agent_notes.cli")
 # Strip any store configuration inherited from the environment (including the
 # CI testcontainer) so the cases below never depend on a reachable database.
 _HERMETIC_UNSET = ("AGENT_NOTES_DSN", "AGENT_NOTES_REGISTA_DSN", "REGISTA_DSN", "REGISTA_PROJECT")
+
+
+def _assert_cases_declared(
+    minimum: int = 1,
+    **named_groups: Collection[object],
+) -> None:
+    """Fail collection if any declared contract dimension has too few cases."""
+    if minimum < 1:
+        raise ValueError(f"minimum must be >= 1, got {minimum}")
+    if not named_groups:
+        raise AssertionError("the conformance guard protects no case dimensions")
+    short = sorted(
+        (name, len(group))
+        for name, group in named_groups.items()
+        if len(group) < minimum
+    )
+    if short:
+        which = ", ".join(f"{name} ({count})" for name, count in short)
+        raise AssertionError(
+            f"conformance dimensions below minimum {minimum}: {which}"
+        )
 
 
 SUCCESS_CASES = [
@@ -67,6 +89,18 @@ USAGE_CASES = [
 BROKEN_PIPE_CASES = [
     BrokenPipeCase(name="memory-list-broken-pipe", argv=(*_CLI, "memory", "list", "--json")),
 ]
+
+# WI-026 meta-guard (layer 1): fail collection loudly if any contract dimension
+# is empty. A zero-case dimension enforces nothing and — because this module is
+# the kit-importing surface — would be indistinguishable from a pass in green CI.
+# The whole-module-skip class (layer 2) is covered by test_conformance_meta_guard.py.
+_assert_cases_declared(
+    minimum=1,
+    success=SUCCESS_CASES,
+    error=ERROR_CASES,
+    usage=USAGE_CASES,
+    broken_pipe=BROKEN_PIPE_CASES,
+)
 
 
 @pytest.mark.parametrize("case", SUCCESS_CASES, ids=lambda c: c.name)

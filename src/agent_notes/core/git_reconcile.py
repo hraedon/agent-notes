@@ -75,12 +75,20 @@ def _is_foreign_project_match(
     project slug (e.g. ``other-project:WI-022`` when *project_slug* is
     ``agent-suite``). Such matches indicate the commit is about a work item in
     another project and must not trigger a closure suggestion here.
+
+    A same-project prefix (``agent-suite:WI-022``) is NOT foreign. An
+    unqualified reference (bare ``WI-022``) is also not foreign — only a
+    *different* project prefix triggers exclusion.
     """
-    foreign = re.compile(
-        rf"\b(?!{re.escape(project_slug)})[a-z0-9][\w-]*:{re.escape(identifier)}\b",
+    qualified = re.compile(
+        rf"\b([a-z0-9][\w-]*):{re.escape(identifier)}\b",
         re.IGNORECASE,
     )
-    return bool(foreign.search(message))
+    for m in qualified.finditer(message):
+        prefix = m.group(1)
+        if prefix.lower() != project_slug.lower():
+            return True
+    return False
 
 
 def scan_git_for_resolutions(

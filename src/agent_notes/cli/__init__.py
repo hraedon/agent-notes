@@ -211,6 +211,63 @@ def _configure_logging_stderr() -> None:
     )
 
 
+def _cmd_contract() -> int:
+    """Emit the committed CLI contract manifest (contract §6 discovery).
+
+    Loads the manifest from package data (``agent_notes/cli-manifest.json``,
+    included in the wheel via hatch ``force-include``). In a source checkout
+    (editable install) the package resource is absent, so a fallback reads
+    from the repo-relative ``data/cli-manifest.json``. Prints the manifest as
+    a pure JSON document to stdout. Exit 0 on success; if the manifest is
+    missing from both locations (a packaging error), emits the common error
+    envelope and exits 1.
+    """
+    from importlib.resources import files
+    from pathlib import Path
+
+    from agent_notes.cli.common import EXIT_GENERIC, emit_error
+
+    manifest_text: str | None = None
+
+    # Primary: package data (wheel install).
+    try:
+        resource = files("agent_notes").joinpath("cli-manifest.json")
+        manifest_text = resource.read_text(encoding="utf-8")
+    except (OSError, TypeError):
+        pass
+
+    # Fallback: source checkout (editable install) — the manifest lives at
+    # <repo>/data/cli-manifest.json, three levels up from this file.
+    if manifest_text is None:
+        try:
+            repo_root = Path(__file__).resolve().parent.parents[2]
+            fallback_path = repo_root / "data" / "cli-manifest.json"
+            manifest_text = fallback_path.read_text(encoding="utf-8")
+        except OSError:
+            pass
+
+    if manifest_text is None:
+        return emit_error(
+            "MANIFEST_UNAVAILABLE",
+            "cannot load cli-manifest.json from package data or source checkout",
+            use_json=True,
+            exit_code=EXIT_GENERIC,
+        )
+
+    try:
+        manifest = json.loads(manifest_text)
+    except json.JSONDecodeError as exc:
+        return emit_error(
+            "MANIFEST_UNAVAILABLE",
+            f"cli-manifest.json is not valid JSON: {exc}",
+            use_json=True,
+            exit_code=EXIT_GENERIC,
+        )
+
+    print(json.dumps(manifest, indent=2, ensure_ascii=False))
+    return EXIT_SUCCESS
+
+
 def main() -> int:
     _configure_logging_stderr()
     parser = argparse.ArgumentParser(
@@ -266,6 +323,15 @@ def main() -> int:
     register_projection_parsers(sub)
     register_admin_parsers(sub)
 
+    contract_p = sub.add_parser(
+        "contract",
+        help="Emit the CLI contract manifest (contract §6 discovery)",
+    )
+    contract_p.add_argument(
+        "--json", action="store_true", default=True,
+        help="Emit as JSON (default; the manifest is always JSON)",
+    )
+
     args = parser.parse_args()
 
     if args.version:
@@ -284,6 +350,8 @@ def main() -> int:
             skip_embed=getattr(args, "skip_embed", False),
             check_embed=getattr(args, "check_embed", False),
         )
+    if args.command == "contract":
+        return _cmd_contract()
 
     func = getattr(args, "func", None)
     if func is not None:
