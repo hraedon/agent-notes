@@ -302,7 +302,7 @@ vocabulary entries continue to work; new entries should use `wi_*`.
 | `agent-notes-trigger-loop` | — | Cross-project wake routing (optional, P3) |
 | `agent-notes-web` | — | Read-only browser viewer |
 | `agent-notes-setup` | — | Alias for `migrate --all` |
-| `agent-notes-migrate` | — | Schema migrations from `schema/*.sql` |
+| `agent-notes-migrate` | — | Schema migrations. The DDL ships inside the wheel (`agent_notes/schema/`) and is resolved with `importlib.resources`, so `--all` works on an artifact-only host with no checkout; `--list [--json]` reports the migrations found and where they resolved from, without needing a database |
 | `agent-notes-doctor` | — | Health check: DSN, schema, model, links audit |
 | `agent-notes-import-reflections` | — | One-time reflection import |
 

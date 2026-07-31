@@ -25,6 +25,11 @@ test = [
     # by a separate CI step — which PyPI forbids in uploaded metadata; now a
     # published wheel, so it lives here like any other test dep.
     "agent-suite-conformance==1.0.0",
+    # tests/test_wheel_install.py builds the wheel and installs it where no
+    # source tree is reachable (WI-047). `--no-isolation` uses these directly,
+    # so the gate needs no network.
+    "build",
+    "hatchling",
 ]
 dev = [
     "mypy>=1.10",
@@ -61,6 +66,13 @@ packages = ["src/agent_notes"]
 [tool.hatch.build.targets.wheel.force-include]
 "skills" = "agent_notes/skills"
 "data/cli-manifest.json" = "agent_notes/cli-manifest.json"
+# WI-047: the migration DDL must travel inside the wheel, or an artifact-only
+# host can never migrate the projection database. Resolved at run time through
+# importlib.resources against this exact location — see
+# agent_notes/scripts/migrate.py. tests/test_wheel_install.py asserts the
+# packaged set equals schema/*.sql, so a new migration that is not packaged
+# fails the suite rather than the operator.
+"schema" = "agent_notes/schema"
 
 [tool.ruff]
 line-length = 100

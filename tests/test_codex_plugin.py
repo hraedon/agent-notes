@@ -60,6 +60,9 @@ def test_wheel_force_includes_the_canonical_skill_tree() -> None:
     assert force_include == {
         "skills": "agent_notes/skills",
         "data/cli-manifest.json": "agent_notes/cli-manifest.json",
+        # WI-047: the migration DDL must reach an artifact-only host. Asserted
+        # by contents, not just by mapping, in tests/test_wheel_install.py.
+        "schema": "agent_notes/schema",
     }
 
 
