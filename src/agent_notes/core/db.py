@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import os
 import threading
 from dataclasses import dataclass, field
@@ -18,6 +19,7 @@ from psycopg_pool import ConnectionPool
 
 _pool: ConnectionPool | None = None
 _pool_lock = threading.Lock()
+_close_registered = False
 
 
 def _reset_pool() -> None:
@@ -33,7 +35,7 @@ if hasattr(os, "register_at_fork"):
 
 
 def _get_pool() -> ConnectionPool:
-    global _pool
+    global _pool, _close_registered
     if _pool is None:
         with _pool_lock:
             if _pool is None:
@@ -47,6 +49,12 @@ def _get_pool() -> ConnectionPool:
                     open=True,
                     kwargs={"row_factory": dict_row},
                 )
+                if not _close_registered:
+                    # Close before interpreter finalization: ConnectionPool.__del__
+                    # joins its worker threads, and Thread.join() raises
+                    # PythonFinalizationError at shutdown on Python >= 3.14 (WI-046).
+                    atexit.register(close_pool)
+                    _close_registered = True
     return _pool
 
 
