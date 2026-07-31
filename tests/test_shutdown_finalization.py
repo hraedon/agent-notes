@@ -15,6 +15,7 @@ creation, so the pool closes *before* the finalization window and
 
 from __future__ import annotations
 
+import atexit
 import os
 import subprocess
 import sys
@@ -31,6 +32,10 @@ pytestmark = pytest.mark.usefixtures("ephemeral_db")
 # creation and can assert the pool really was closed at exit — not merely
 # that the traceback happened to be absent (pre-fix, an unlucky GC ordering
 # was needed to surface it).
+#
+# Deliberately NOT marked `slow` despite being a subprocess test: CI never
+# runs the slow lane, and this guards a release criterion (WI-046 — clean
+# 3.14 shutdown), so it must stay in the default gate.
 _SHUTDOWN_SCRIPT = """
 import atexit
 import time
@@ -49,9 +54,14 @@ db.list_workspaces()  # real work through the pool
 
 # Occupy a worker so it is mid-task at interpreter exit — the in-flight
 # shape that made ConnectionPool.__del__ join a live thread at shutdown.
+# Duck-typed against psycopg_pool's worker loop (isinstance(StopWorker)
+# check + task.run()); `tick` aliases `run` in case a future psycopg_pool
+# dispatches through MaintenanceTask.tick instead.
 class _Slow:
     def run(self):
         time.sleep(1.0)
+
+    tick = run
 
 
 db.get_pool().run_task(_Slow())
@@ -73,11 +83,31 @@ def test_shutdown_is_clean_and_pool_closed_at_exit():
     assert "POOL_CLOSED" in proc.stdout, proc.stdout
 
 
-def test_close_pool_is_registered_once_and_idempotent():
+def test_close_pool_is_registered_once_and_idempotent(monkeypatch):
+    calls = []
+    real_register = atexit.register
+
+    def _counting_register(fn, *args, **kwargs):
+        if fn is coredb.close_pool:
+            calls.append(fn)
+        return real_register(fn, *args, **kwargs)
+
+    monkeypatch.setattr(atexit, "register", _counting_register)
+
     coredb.close_pool()
     assert coredb._pool is None
     coredb.get_pool()
+    first_registrations = len(calls)
     assert coredb._close_registered is True
+
+    # closing and re-creating the pool must not stack registrations: the
+    # original atexit hook is late-bound to the module global, so one
+    # registration covers every future pool in the process.
+    coredb.close_pool()
+    coredb.get_pool()
+    assert len(calls) == first_registrations
+    assert first_registrations <= 1  # 0 if an earlier test already registered
+
     coredb.close_pool()
     coredb.close_pool()
     assert coredb._pool is None
