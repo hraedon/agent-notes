@@ -211,6 +211,36 @@ def _configure_logging_stderr() -> None:
     )
 
 
+def _resolved_version() -> str:
+    """Return the installed distribution version for this package (WI-048).
+
+    The import package is ``agent_notes`` but the published distribution is
+    ``agent-notes-hraedon``, so ``version("agent-notes")`` raised an unhandled
+    ``PackageNotFoundError`` on every wheel/PyPI install — the first command the
+    deployment guide tells the operator to run ended in a traceback. Resolve the
+    distribution *from the import package* via ``packages_distributions()`` so a
+    future distribution rename cannot break this again, with the current
+    distribution name as an explicit fallback, and degrade to a legible string
+    (never a traceback) when no metadata is installed at all.
+    """
+    from importlib.metadata import (
+        PackageNotFoundError,
+        packages_distributions,
+        version,
+    )
+
+    top_level = __package__.split(".", 1)[0]  # "agent_notes"
+    candidates = list(packages_distributions().get(top_level) or [])
+    if "agent-notes-hraedon" not in candidates:
+        candidates.append("agent-notes-hraedon")
+    for dist_name in candidates:
+        try:
+            return version(dist_name)
+        except PackageNotFoundError:
+            continue
+    return f"unknown (no installed distribution metadata for {top_level})"
+
+
 def _cmd_contract() -> int:
     """Emit the committed CLI contract manifest (contract §6 discovery).
 
@@ -335,9 +365,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.version:
-        from importlib.metadata import version
-
-        print(version("agent-notes"))
+        print(_resolved_version())
         return EXIT_SUCCESS
 
     if args.command == "init":
