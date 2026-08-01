@@ -24,10 +24,51 @@ _HINDSIGHT_ENV_KEYS = (
     "HINDSIGHT_TIMEOUT",
 )
 
+# Config-file discovery pins for CLI subprocesses, populated by
+# ``_hermetic_discovery``. See that fixture for why these exist (WI-029).
+_DISCOVERY_PINS: dict[str, str] = {}
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _hermetic_discovery(tmp_path_factory):
+    """Pin suite.env / config-file discovery for every subprocess in this module.
+
+    Stripping ``_HINDSIGHT_ENV_KEYS`` keeps live *values* out of the subprocess
+    environment, but engine selection also reads suite.env *files*:
+    ``agent_notes.core.suite_env.user_suite_env_path()`` consults
+    ``AGENT_SUITE_CONFIG`` only when it is set and otherwise falls back to
+    platformdirs discovery (``$XDG_CONFIG_HOME``/``$HOME`` ->
+    ``~/.config/agent-suite/suite.env``). So any subprocess env that does not
+    carry the conftest env-var pins reads the operator's real suite.env — on a
+    host bootstrapped with ``AGENT_NOTES_MEMORY_ENGINE=hindsight`` that flips
+    the resolved engine and can even reach the live backend (WI-029).
+
+    Pin both layers: the override env vars point at nonexistent files (this is
+    the only way to mask ``/etc/agent-suite/suite.env``, which HOME cannot
+    cover), and the discovery roots (``HOME``/``XDG_CONFIG_HOME``) point at an
+    empty temp home so code paths that skip the override vars find nothing
+    either. ``_run`` applies these last so a caller-built env dict (e.g. a full
+    ``os.environ`` copy) cannot undo them.
+    """
+    home = tmp_path_factory.mktemp("mp-cli-home")
+    missing = home / "nonexistent"
+    _DISCOVERY_PINS.update({
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "AGENT_SUITE_CONFIG": str(missing / "suite.env"),
+        "AGENT_SUITE_SYSTEM_CONFIG": str(missing / "suite.env"),
+        "AGENT_NOTES_CONFIG": str(missing / "config.json"),
+    })
+    yield
+    _DISCOVERY_PINS.clear()
+
 
 def _run(*args: str, env: dict | None = None, check: bool = True) -> subprocess.CompletedProcess:
     merged_env = {k: v for k, v in os.environ.items() if k not in _HINDSIGHT_ENV_KEYS}
     merged_env.update(env or {})
+    # Discovery pins go last: hermeticity must survive caller-supplied env
+    # dicts, not just the default os.environ inheritance (WI-029).
+    merged_env.update(_DISCOVERY_PINS)
     return subprocess.run(
         _CLI + list(args),
         capture_output=True,
@@ -168,11 +209,16 @@ def test_configure_native_via_env():
 
 
 def test_configure_default():
-    env = dict(os.environ)
-    env.pop("AGENT_NOTES_MEMORY_ENGINE", None)
+    """No engine configured anywhere resolves to native via the default.
+
+    ``_run`` already strips ``AGENT_NOTES_MEMORY_ENGINE`` from the inherited
+    environment and pins file discovery, so no explicit env is passed. The
+    previous version passed a full ``os.environ`` copy with only the engine
+    key popped, which re-added the stripped ``HINDSIGHT_*`` values and left
+    hermeticity to whatever the process env happened to carry (WI-029).
+    """
     result = _run(
         "memory-provider", "configure", "--json",
-        env=env,
         check=False,
     )
     assert result.returncode == 0, result.stderr

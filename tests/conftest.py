@@ -65,6 +65,11 @@ def _hermetic_config(tmp_path_factory):
         # Principal_id (Plan 017 WI-4.2) — clear so tests control their own.
         "AGENT_NOTES_PRINCIPAL_ID",
         "REGISTA_PRINCIPAL_ID",
+        # Project slug (WI-029 sweep) — the per-user suite.env overlay exports
+        # AGENT_NOTES_PROJECT on bootstrapped hosts; inherited into the test
+        # process it overrides every RegistaConfig().project and breaks
+        # projection-sync assertions that pin their own project.
+        "AGENT_NOTES_PROJECT",
     )
     saved = {k: os.environ.get(k) for k in keys}
     os.environ["AGENT_NOTES_CONFIG"] = str(cfg)
