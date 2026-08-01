@@ -164,22 +164,26 @@ class WorkItemModel:
                 actor_id=actor_id,
                 model_lineage=model_lineage,
             )
-        return _native.update_work_item(
-            project_id,
-            identifier,
-            title,
-            body,
-            kind,
-            status,
-            severity,
-            external_refs,
-            diagnostic_keys,
-            embedding,
-            frontmatter_version,
-            actor_id,
-            model_lineage=model_lineage,
-            force=force,
-        )
+        with _native._conn() as conn:
+            result = _native.update_work_item(
+                conn,
+                project_id,
+                identifier,
+                title,
+                body,
+                kind,
+                status,
+                severity,
+                external_refs,
+                diagnostic_keys,
+                embedding,
+                frontmatter_version,
+                actor_id,
+                model_lineage=model_lineage,
+                force=force,
+            )
+            conn.commit()
+        return result
 
     @classmethod
     def set_status(

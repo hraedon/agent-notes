@@ -67,4 +67,4 @@ def register_events_parsers(sub: argparse._SubParsersAction) -> None:
     _add_common(ev_tail)
     ev_tail.set_defaults(func=cmd_events_tail)
 
-    ev.set_defaults(func=lambda args: (_print_sub_help(ev), EXIT_SUCCESS)[1])
+    ev.set_defaults(func=lambda args: _print_sub_help(ev))

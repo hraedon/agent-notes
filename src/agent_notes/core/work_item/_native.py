@@ -127,6 +127,7 @@ def file_work_item(
 
 
 def update_work_item(
+    conn: psycopg.Connection,
     project_id: int,
     identifier: str,
     title: str | None = None,
@@ -142,162 +143,165 @@ def update_work_item(
     model_lineage: str | None = None,
     force: bool = False,
 ) -> dict:
-    with _conn() as conn:
-        workspace_id = _common.resolve_workspace_for_project(conn, project_id)
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
-            (project_id, identifier),
+    """Apply field / status changes to a work item on the caller's transaction.
+
+    Takes the connection so a caller can compose several updates atomically
+    (WI-020): it writes ops, folds the cache, and writes the change_log row but
+    never commits — the caller owns the transaction boundary.
+    """
+    workspace_id = _common.resolve_workspace_for_project(conn, project_id)
+    cur = conn.cursor(row_factory=dict_row)
+    cur.execute(
+        "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
+        (project_id, identifier),
+    )
+    old = cur.fetchone()
+    if old is None:
+        raise ValueError(f"Work item not found: {identifier!r} in project {project_id}")
+
+    entity_id = old["entity_id"]
+    old_body_hash = old["body_hash"]
+    old_body = kernel.get_blob(conn, old_body_hash) or ""
+
+    if kind is not None:
+        _common.validate_vocab(conn, workspace_id, "wi_kind", kind)
+    if status is not None:
+        _common.validate_vocab(conn, workspace_id, "wi_status", status)
+    if severity is not None:
+        _common.validate_vocab(conn, workspace_id, "wi_severity", severity)
+
+    # Build payload for the set_field op, diffing each field against
+    # the item's current values so an unchanged re-import writes no op
+    # (WI-008/WI-009 — op-log bloat on breadcrumb re-sync).
+    payload: dict = {}
+    if title is not None and title != old["title"]:
+        payload["title"] = title
+    if body is not None:
+        body_hash = kernel.store_blob(conn, body)
+        if body_hash != old["body_hash"]:
+            payload["body_hash"] = body_hash
+    if kind is not None and kind != old["kind"]:
+        payload["kind"] = kind
+    if severity is not None and severity != old["severity"]:
+        payload["severity"] = severity
+    if external_refs is not None and old.get("external_refs") != external_refs:
+        payload["external_refs"] = external_refs
+    if diagnostic_keys is not None and old.get("diagnostic_keys") != diagnostic_keys:
+        payload["diagnostic_keys"] = diagnostic_keys
+    if embedding is not None and not _common.embedding_equal(embedding, old.get("embedding")):
+        payload["embedding"] = embedding
+    if frontmatter_version is not None and frontmatter_version != old.get(
+        "frontmatter_version"
+    ):
+        payload["frontmatter_version"] = frontmatter_version
+    if model_lineage is not None:
+        payload["model_lineage"] = model_lineage
+
+    # If status changed, write a separate set_status op.
+    status_changed = False
+    if status is not None and status != old["status"]:
+        # Plan 013 WI-5: pre-flight transition check on the native path.
+        # Both paths (regista + native) now reject the same illegal
+        # transitions. ``force=True`` is the explicit admin escape hatch.
+        if not force:
+            transition = _lifecycle_transition_for(old["status"], status)
+            # Plan 014 WI-2: degrade mode cannot run the cross-lineage
+            # review gate, so it must not *complete* work unilaterally.
+            # The only gate transition into a terminal state is `accept`
+            # (in_human_review → done); block it off-regista. `close_from_open`
+            # (the review-exempt won't-fix/duplicate dismissal) stays allowed,
+            # matching the regista path.
+            if transition == "accept":
+                raise ValueError(
+                    f"Cannot accept {identifier!r} to 'done' in degrade mode: "
+                    "completion requires regista's cross-lineage review gate. "
+                    "Use force=True only for admin/repair."
+                )
+        status_op = kernel.commit_op(
+            conn,
+            entity_id=entity_id,
+            entity_type=ENTITY_TYPE,
+            op_type="set_status",
+            payload={"status": status},
+            parent_op_ids=[old["entity_id"]],  # simplistic parent chaining
+            actor_id=actor_id,
         )
-        old = cur.fetchone()
-        if old is None:
-            raise ValueError(f"Work item not found: {identifier!r} in project {project_id}")
+        kernel.emit_event(
+            conn,
+            op_id=status_op["op_id"],
+            event_type="item.status_changed",
+            payload={
+                "entity_id": entity_id,
+                "identifier": identifier,
+                "old_status": old["status"],
+                "new_status": status,
+            },
+        )
+        status_changed = True
 
-        entity_id = old["entity_id"]
-        old_body_hash = old["body_hash"]
-        old_body = kernel.get_blob(conn, old_body_hash) or ""
+    # Write the set_field op if any non-status fields changed.
+    if payload:
+        op = kernel.commit_op(
+            conn,
+            entity_id=entity_id,
+            entity_type=ENTITY_TYPE,
+            op_type="set_field",
+            payload=payload,
+            parent_op_ids=[entity_id],
+            actor_id=actor_id,
+        )
+        kernel.emit_event(
+            conn,
+            op_id=op["op_id"],
+            event_type="item.updated",
+            payload={
+                "entity_id": entity_id,
+                "identifier": identifier,
+                "fields": list(payload.keys()),
+            },
+        )
 
-        if kind is not None:
-            _common.validate_vocab(conn, workspace_id, "wi_kind", kind)
-        if status is not None:
-            _common.validate_vocab(conn, workspace_id, "wi_status", status)
-        if severity is not None:
-            _common.validate_vocab(conn, workspace_id, "wi_severity", severity)
+    # Nothing changed (no status op, no set_field op): skip the fold
+    # and change_log entirely, returning the current state as-is
+    # (WI-008/WI-009).
+    if not payload and not status_changed:
+        return dict(old)
 
-        # Build payload for the set_field op, diffing each field against
-        # the item's current values so an unchanged re-import writes no op
-        # (WI-008/WI-009 — op-log bloat on breadcrumb re-sync).
-        payload: dict = {}
-        if title is not None and title != old["title"]:
-            payload["title"] = title
-        if body is not None:
-            body_hash = kernel.store_blob(conn, body)
-            if body_hash != old["body_hash"]:
-                payload["body_hash"] = body_hash
-        if kind is not None and kind != old["kind"]:
-            payload["kind"] = kind
-        if severity is not None and severity != old["severity"]:
-            payload["severity"] = severity
-        if external_refs is not None and old.get("external_refs") != external_refs:
-            payload["external_refs"] = external_refs
-        if diagnostic_keys is not None and old.get("diagnostic_keys") != diagnostic_keys:
-            payload["diagnostic_keys"] = diagnostic_keys
-        if embedding is not None and not _common.embedding_equal(embedding, old.get("embedding")):
-            payload["embedding"] = embedding
-        if frontmatter_version is not None and frontmatter_version != old.get(
-            "frontmatter_version"
-        ):
-            payload["frontmatter_version"] = frontmatter_version
-        if model_lineage is not None:
-            payload["model_lineage"] = model_lineage
+    # Fold into cache.
+    folded = kernel.fold_work_item(conn, entity_id)
+    if folded is None:
+        raise RuntimeError("fold_work_item returned None after update op")
 
-        # If status changed, write a separate set_status op.
-        status_changed = False
-        if status is not None and status != old["status"]:
-            # Plan 013 WI-5: pre-flight transition check on the native path.
-            # Both paths (regista + native) now reject the same illegal
-            # transitions. ``force=True`` is the explicit admin escape hatch.
-            if not force:
-                transition = _lifecycle_transition_for(old["status"], status)
-                # Plan 014 WI-2: degrade mode cannot run the cross-lineage
-                # review gate, so it must not *complete* work unilaterally.
-                # The only gate transition into a terminal state is `accept`
-                # (in_human_review → done); block it off-regista. `close_from_open`
-                # (the review-exempt won't-fix/duplicate dismissal) stays allowed,
-                # matching the regista path.
-                if transition == "accept":
-                    raise ValueError(
-                        f"Cannot accept {identifier!r} to 'done' in degrade mode: "
-                        "completion requires regista's cross-lineage review gate. "
-                        "Use force=True only for admin/repair."
-                    )
-            status_op = kernel.commit_op(
-                conn,
-                entity_id=entity_id,
-                entity_type=ENTITY_TYPE,
-                op_type="set_status",
-                payload={"status": status},
-                parent_op_ids=[old["entity_id"]],  # simplistic parent chaining
-                actor_id=actor_id,
-            )
-            kernel.emit_event(
-                conn,
-                op_id=status_op["op_id"],
-                event_type="item.status_changed",
-                payload={
-                    "entity_id": entity_id,
-                    "identifier": identifier,
-                    "old_status": old["status"],
-                    "new_status": status,
-                },
-            )
-            status_changed = True
+    # Backward-compat change_log — only when something actually changed.
+    # ``folded`` is the work_items cache row (no ``body`` column — only
+    # ``body_hash``), so resolve the new body from the blob for the diff,
+    # mirroring the regista path (``_update_change_log_payload``).
+    new_body = kernel.get_blob(conn, folded["body_hash"]) or ""
+    cl_payload: dict = {}
+    for field in ("title", "kind", "status", "severity"):
+        old_val = old.get(field)
+        new_val = folded.get(field)
+        if old_val != new_val:
+            cl_payload[field] = {"from": old_val, "to": new_val}
+    if old_body != new_body:
+        cl_payload["body"] = {"from": old_body, "to": new_body}
+    if external_refs is not None and old.get("external_refs") != external_refs:
+        cl_payload["external_refs"] = external_refs
+    if diagnostic_keys is not None and old.get("diagnostic_keys") != diagnostic_keys:
+        cl_payload["diagnostic_keys"] = diagnostic_keys
 
-        # Write the set_field op if any non-status fields changed.
-        if payload:
-            op = kernel.commit_op(
-                conn,
-                entity_id=entity_id,
-                entity_type=ENTITY_TYPE,
-                op_type="set_field",
-                payload=payload,
-                parent_op_ids=[entity_id],
-                actor_id=actor_id,
-            )
-            kernel.emit_event(
-                conn,
-                op_id=op["op_id"],
-                event_type="item.updated",
-                payload={
-                    "entity_id": entity_id,
-                    "identifier": identifier,
-                    "fields": list(payload.keys()),
-                },
-            )
+    if cl_payload:
+        write_change(
+            conn,
+            kind=KIND,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            identifier=identifier,
+            event="updated",
+            payload=cl_payload,
+        )
 
-        # Nothing changed (no status op, no set_field op): skip the fold
-        # and change_log entirely, returning the current state as-is
-        # (WI-008/WI-009).
-        if not payload and not status_changed:
-            conn.commit()
-            return dict(old)
-
-        # Fold into cache.
-        folded = kernel.fold_work_item(conn, entity_id)
-        if folded is None:
-            raise RuntimeError("fold_work_item returned None after update op")
-
-        # Backward-compat change_log — only when something actually changed.
-        # ``folded`` is the work_items cache row (no ``body`` column — only
-        # ``body_hash``), so resolve the new body from the blob for the diff,
-        # mirroring the regista path (``_update_change_log_payload``).
-        new_body = kernel.get_blob(conn, folded["body_hash"]) or ""
-        cl_payload: dict = {}
-        for field in ("title", "kind", "status", "severity"):
-            old_val = old.get(field)
-            new_val = folded.get(field)
-            if old_val != new_val:
-                cl_payload[field] = {"from": old_val, "to": new_val}
-        if old_body != new_body:
-            cl_payload["body"] = {"from": old_body, "to": new_body}
-        if external_refs is not None and old.get("external_refs") != external_refs:
-            cl_payload["external_refs"] = external_refs
-        if diagnostic_keys is not None and old.get("diagnostic_keys") != diagnostic_keys:
-            cl_payload["diagnostic_keys"] = diagnostic_keys
-
-        if cl_payload:
-            write_change(
-                conn,
-                kind=KIND,
-                workspace_id=workspace_id,
-                project_id=project_id,
-                identifier=identifier,
-                event="updated",
-                payload=cl_payload,
-            )
-
-        conn.commit()
-        return dict(folded)
+    return dict(folded)
 
 
 def close_work_item_native_deferred(
@@ -329,22 +333,30 @@ def close_work_item_native_deferred(
             f"Work item {identifier!r} is in legacy 'claimed' state; "
             "migrate to the canonical workflow first"
         )
-    # open or in_progress → defer to in_review (never terminal).
-    if canonical == "open":
-        update_work_item(
+    # open or in_progress → defer to in_review (never terminal). Both steps run
+    # on a single connection and commit once, so the close is atomic (WI-020):
+    # the item can no longer be stranded in ``in_progress`` by a crash between
+    # the two transitions.
+    with _conn() as conn:
+        if canonical == "open":
+            update_work_item(
+                conn,
+                project_id=project_id,
+                identifier=identifier,
+                status="in_progress",
+                actor_id=actor_id,
+                model_lineage=model_lineage,
+            )
+        result = update_work_item(
+            conn,
             project_id=project_id,
             identifier=identifier,
-            status="in_progress",
+            status="in_review",
             actor_id=actor_id,
             model_lineage=model_lineage,
         )
-    return update_work_item(
-        project_id=project_id,
-        identifier=identifier,
-        status="in_review",
-        actor_id=actor_id,
-        model_lineage=model_lineage,
-    )
+        conn.commit()
+    return result
 
 
 def close_work_item_force(
@@ -613,7 +625,7 @@ def claim_work_item(
     project_id: int, identifier: str, actor_id: str | None, ttl_seconds: int
 ) -> dict:
     with _conn() as conn:
-        _common.resolve_workspace_for_project(conn, project_id)
+        workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
@@ -685,13 +697,25 @@ def claim_work_item(
         if folded is None:
             raise RuntimeError("fold_work_item returned None after claim op")
 
+        # Audit trail (BC-027): mirror the regista path's change_log row.
+        write_change(
+            conn,
+            kind=KIND,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            identifier=identifier,
+            event="claimed",
+            payload={"actor_id": actor_id, "ttl_seconds": ttl_seconds},
+            actor=actor_id,
+        )
+
         conn.commit()
         return dict(folded)
 
 
 def release_work_item(project_id: int, identifier: str, actor_id: str | None) -> dict:
     with _conn() as conn:
-        _common.resolve_workspace_for_project(conn, project_id)
+        workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
@@ -741,6 +765,18 @@ def release_work_item(project_id: int, identifier: str, actor_id: str | None) ->
         if folded is None:
             raise RuntimeError("fold_work_item returned None after release op")
 
+        # Audit trail (BC-027): mirror the regista path's change_log row.
+        write_change(
+            conn,
+            kind=KIND,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            identifier=identifier,
+            event="released",
+            payload={"actor_id": actor_id},
+            actor=actor_id,
+        )
+
         conn.commit()
         return dict(folded)
 
@@ -749,6 +785,7 @@ def heartbeat_work_item(
     project_id: int, identifier: str, actor_id: str | None, ttl_seconds: int
 ) -> dict:
     with _conn() as conn:
+        workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
@@ -789,6 +826,20 @@ def heartbeat_work_item(
             op_id=op["op_id"],
             event_type="item.heartbeat",
             payload={"entity_id": entity_id, "identifier": identifier, "actor_id": actor_id},
+        )
+
+        # Audit trail (BC-027): record the lease heartbeat in change_log so the
+        # degrade-mode lease lifecycle is visible in the sole audit source
+        # (decision 7), matching the claim/release rows above.
+        write_change(
+            conn,
+            kind=KIND,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            identifier=identifier,
+            event="heartbeat",
+            payload={"actor_id": actor_id, "ttl_seconds": ttl_seconds},
+            actor=actor_id,
         )
 
         conn.commit()

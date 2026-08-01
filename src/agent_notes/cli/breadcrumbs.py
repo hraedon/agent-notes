@@ -724,4 +724,4 @@ def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
     _add_common(bc_reconcile)
     bc_reconcile.set_defaults(func=cmd_bc_reconcile)
 
-    bc.set_defaults(func=lambda args: (_print_sub_help(bc), EXIT_SUCCESS)[1])
+    bc.set_defaults(func=lambda args: _print_sub_help(bc))

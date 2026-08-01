@@ -348,16 +348,27 @@ def fold_work_item_state(conn: psycopg.Connection, entity_id: str) -> dict | Non
         "frontmatter_version": 1,
     }
 
+    tombstoned = False
     for group in groups:
         status_ops: list[dict] = []
         for op in group:
             if op["op_type"] in ("set_status", "close"):
                 status_ops.append(op)
+            elif op["op_type"] == "snapshot" and (op.get("payload") or {}).get("tombstone"):
+                # Native soft-delete writes a snapshot op carrying a tombstone
+                # (work_item/_native.delete_work_item). It is terminal: the
+                # entity must fold to "absent", not to its last live state.
+                tombstoned = True
             else:
                 _apply_op_to_state(state, op)
 
         if status_ops:
             state["status"] = _resolve_status_lattice(status_ops, state.get("status"))
+
+    # A tombstoned entity is deleted — report no state so the cache fold neither
+    # resurrects it (WI-021) nor counts it.
+    if tombstoned:
+        return None
 
     # If we never got a create op, this is a dangling entity.
     if state["project_id"] is None or state["identifier"] is None:

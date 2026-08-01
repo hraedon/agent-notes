@@ -197,4 +197,4 @@ def register_link_parsers(sub: argparse._SubParsersAction) -> None:
     lnk_trace.add_argument("--json", action="store_true")
     lnk_trace.set_defaults(func=cmd_link_trace)
 
-    lnk.set_defaults(func=lambda args: (_print_sub_help(lnk), EXIT_SUCCESS)[1])
+    lnk.set_defaults(func=lambda args: _print_sub_help(lnk))

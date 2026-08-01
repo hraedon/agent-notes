@@ -446,6 +446,45 @@ class TestWorkItemClose:
         with pytest.raises(ValueError, match="not found"):
             WorkItemModel.close_work_item(default_project.id, "WI-NONEXISTENT")
 
+    def test_native_deferred_close_is_atomic(self, default_project, monkeypatch):
+        """WI-020: the open→in_progress→in_review close commits once.
+
+        The native deferred close moves an open item through ``in_progress`` on
+        its way to ``in_review``. Before the fix each step was its own committed
+        transaction, so a failure between them stranded the item in
+        ``in_progress``. Simulate a crash on the second transition and assert the
+        first one rolled back (item still ``open``) — only possible if both share
+        a single transaction.
+        """
+        from agent_notes.core.work_item import _native
+
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-ATOMIC",
+            title="Atomic close",
+            status="open",
+            embedding=_vec768(),
+        )
+
+        real_update = _native.update_work_item
+        calls = {"n": 0}
+
+        def crash_on_second(conn, *args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("simulated failure on second transition")
+            return real_update(conn, *args, **kwargs)
+
+        monkeypatch.setattr(_native, "update_work_item", crash_on_second)
+
+        with pytest.raises(RuntimeError, match="simulated failure"):
+            WorkItemModel.close_work_item(default_project.id, "WI-ATOMIC")
+
+        # Both transitions ran, but the shared transaction rolled back: the item
+        # is still open, not stranded in_progress by a half-committed close.
+        assert calls["n"] == 2
+        assert WorkItemModel.get_work_item(default_project.id, "WI-ATOMIC")["status"] == "open"
+
 
 # ---------------------------------------------------------------------------
 # Transition pre-flight (Plan 013 WI-5)
@@ -604,6 +643,35 @@ class TestWorkItemDelete:
         deleted = WorkItemModel.delete_work_item(default_project.id, "WI-008")
         assert deleted is True
         assert WorkItemModel.get_work_item(default_project.id, "WI-008") is None
+
+    def test_fold_honors_tombstone_and_does_not_resurrect(self, default_project):
+        """WI-021: a soft-deleted item must stay out of the cache after a fold.
+
+        ``delete_work_item`` appends a snapshot op carrying ``{"tombstone":
+        True}`` and removes the cache row. The fold used to read only
+        ``sealed_state`` from snapshot ops, ignoring the tombstone, so
+        ``fold_all_work_items`` rebuilt the deleted item's live state and
+        re-upserted it — resurrecting it. The fold must treat a tombstoned
+        entity as absent.
+        """
+        created = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-RESURRECT",
+            title="Will be deleted",
+            embedding=_vec768(),
+        )
+        entity_id = created["entity_id"]
+        assert WorkItemModel.delete_work_item(default_project.id, "WI-RESURRECT") is True
+        assert WorkItemModel.get_work_item(default_project.id, "WI-RESURRECT") is None
+
+        with kernel._conn() as conn:
+            # The pure fold reports no state for a tombstoned entity.
+            assert kernel.fold_work_item_state(conn, entity_id) is None
+            # A full cache rebuild must not bring the deleted item back.
+            kernel.fold_all_work_items(conn)
+            conn.commit()
+
+        assert WorkItemModel.get_work_item(default_project.id, "WI-RESURRECT") is None
 
 
 class TestWorkItemQuery:

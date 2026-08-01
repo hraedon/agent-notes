@@ -1224,7 +1224,7 @@ def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
     _add_common(wi_review_rc)
     wi_review_rc.set_defaults(func=cmd_wi_review_request_changes)
 
-    wi_review.set_defaults(func=lambda args: (_print_sub_help(wi_review), EXIT_SUCCESS)[1])
+    wi_review.set_defaults(func=lambda args: _print_sub_help(wi_review))
 
     # Cross-project commands (P3)
     wi_request = wi_sub.add_parser(
@@ -1274,4 +1274,4 @@ def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
     _add_common(wi_rebuild)
     wi_rebuild.set_defaults(func=cmd_wi_rebuild_cache)
 
-    wi.set_defaults(func=lambda args: (_print_sub_help(wi), EXIT_SUCCESS)[1])
+    wi.set_defaults(func=lambda args: _print_sub_help(wi))

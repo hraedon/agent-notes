@@ -436,4 +436,4 @@ def register_memory_parsers(sub: argparse._SubParsersAction) -> None:
     _add_common(mem_drift)
     mem_drift.set_defaults(func=cmd_mem_check_drift)
 
-    mem.set_defaults(func=lambda args: (_print_sub_help(mem), EXIT_SUCCESS)[1])
+    mem.set_defaults(func=lambda args: _print_sub_help(mem))

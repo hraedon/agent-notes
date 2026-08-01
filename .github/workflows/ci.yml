@@ -43,8 +43,9 @@ jobs:
       - name: Lint
         run: ruff check src/ tests/
 
-      # Typing gate (Sol P0-6): mypy runs in baseline mode while the 119-error
-      # backlog is burned down. Remove continue-on-error and the baseline
+      # Typing gate (Sol P0-6 / WI-045): mypy runs in baseline mode while the
+      # error backlog is burned down (137 -> 124 so far; the func-returns-value
+      # class is fully cleared). Remove continue-on-error and the baseline
       # exemption once the error count reaches zero. The config lives in
       # pyproject.toml [tool.mypy].
       - name: Typecheck (mypy baseline — burn-down in progress)
