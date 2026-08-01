@@ -45,11 +45,23 @@ def _build_pattern(identifier: str) -> re.Pattern[str]:
     """A commit references *identifier* with resolution intent when a resolution
     verb sits next to it (``resolve BC-094``, ``closes BC-094 and BC-095``) or
     the identifier is followed closely by a past-tense resolution word
-    (``BC-094: resolved``, ``BC-094 done``)."""
+    (``BC-094: resolved``, ``BC-094 done``).
+
+    In branch 1 the identifier is terminated by ``(?![.\\d-])`` so *plan-local*
+    numbering that merely extends it cannot collide: a commit about the plan
+    task ``WI-2.1`` must not satisfy the work item ``WI-021`` (the dotted
+    suffix), nor ``WI-1/2/5`` satisfy ``WI-1`` (WI-027). Real references are
+    followed by whitespace or punctuation such as ``,``/``:``/``/`` — never a
+    dot, digit, or hyphen — so genuine lists (``resolve BC-094, BC-124``) still
+    match. Branch 2 leaves the gap open: the identifier sits at the front and a
+    past-tense word follows, so a dotted suffix (``WI-2.1 finished``) cannot
+    masquerade as ``WI-021`` because the gap is dot-free.
+    """
     idre = re.escape(identifier)
+    guard = r"(?![.\d-])"
     return re.compile(
-        rf"\b{_VERB}\b[^.\n]{{0,40}}\b{idre}\b"
-        rf"|\b{idre}\b[^.\n]{{0,40}}\b"
+        rf"\b{_VERB}\b[^.\n]{{0,40}}\b{idre}\b{guard}"
+        rf"|\b{idre}\b[^.\n]{{0,40}}\b{guard}"
         rf"(?:resolved|fixed|closed|done|complete[d]?|implemented|addressed)\b",
         re.IGNORECASE,
     )

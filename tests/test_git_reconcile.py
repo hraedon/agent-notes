@@ -148,3 +148,34 @@ def test_no_project_slug_accepts_all_matches(repo):
     _commit(repo, "resolve other-project:WI-022: fix the thing")
     hits = scan_git_for_resolutions(repo, ["WI-022"])
     assert "WI-022" in hits
+
+
+# ---------------------------------------------------------------------------
+# plan-local numbering must not collide (WI-027)
+# ---------------------------------------------------------------------------
+
+
+def test_plan_local_dotted_numbering_is_not_a_resolution(repo):
+    """A plan task like ``WI-2.1`` must not satisfy the work item ``WI-2``.
+
+    Plans number their internal tasks ``WI-<n>.<m>``; a commit such as
+    ``complete WI-2.1`` is about the plan task, not a work-item resolution. The
+    dotted suffix used to be swallowed (``.`` is a word boundary), producing a
+    false "resolved" suggestion.
+    """
+    _commit(repo, "feat: complete WI-2.1 provider seam")
+    assert scan_git_for_resolutions(repo, ["WI-2"]) == {}
+
+
+def test_plan_local_dotted_suffix_on_padded_identifier(repo):
+    """The realistic padded form: ``WI-021.1`` must not satisfy ``WI-021``."""
+    _commit(repo, "feat: complete WI-021.1 provider seam")
+    assert scan_git_for_resolutions(repo, ["WI-021"]) == {}
+
+
+def test_exact_identifier_still_resolves(repo):
+    """Control for the two tests above: the exact identifier (no dotted suffix)
+    is still detected, so the tightening did not over-reach."""
+    _commit(repo, "feat: complete WI-2 provider seam")
+    assert "WI-2" in scan_git_for_resolutions(repo, ["WI-2"])
+
