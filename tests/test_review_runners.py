@@ -195,6 +195,51 @@ def test_claude_nonzero_exit_is_not_parsed_as_a_result(tmp_path: Path) -> None:
     assert process.structured_outputs == ()
 
 
+def test_claude_runner_does_not_inherit_operator_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reviewer subprocess must run with a minimal, explicit environment.
+
+    Delegated review is a trust boundary (WI-054): the harness must not inherit
+    the operator's environment, or host config, DSNs, and cloud credentials leak
+    into the review path. A fake harness records the environment it actually
+    receives; we assert the operator's variables are absent and only the
+    documented minimal set (PATH, isolated HOME) is present.
+    """
+    monkeypatch.setenv("AGENT_NOTES_LEAK_SENTINEL", "do-not-leak")
+    monkeypatch.setenv("REGISTA_DSN", "postgresql://operator@host/prod")
+    marker = tmp_path / "child-env.json"
+    script = tmp_path / "env-claude"
+    payload = json.dumps(_envelope(), separators=(",", ":"))
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "if '--version' in sys.argv:\n"
+        "    print('9.9.9 (Claude Code)')\n"
+        "    raise SystemExit(0)\n"
+        f"open({str(marker)!r}, 'w').write(json.dumps(dict(os.environ)))\n"
+        f"print({payload!r})\n"
+        "raise SystemExit(0)\n"
+    )
+    script.chmod(0o755)
+
+    runner = ClaudePrintRunner("opus", executable=str(script))
+    process = runner.run(
+        prompt="Perform an adversarial code review", cwd=tmp_path, timeout_seconds=10
+    )
+    assert process.exit_code == 0
+
+    child_env = json.loads(marker.read_text())
+    assert "AGENT_NOTES_LEAK_SENTINEL" not in child_env
+    assert "REGISTA_DSN" not in child_env
+    # Only the documented minimal set is passed explicitly. CPython's PEP 538
+    # locale coercion may inject LC_CTYPE into the child; that is not operator
+    # state, so tolerate it while proving nothing else survives.
+    assert set(child_env) - {"LC_CTYPE"} == {"PATH", "HOME"}
+    # HOME is isolated: not the operator's real home directory.
+    assert child_env["HOME"] != os.path.expanduser("~")
+
+
 def test_bounded_process_separates_streams_and_enforces_caps(tmp_path: Path) -> None:
     command = [
         sys.executable,
