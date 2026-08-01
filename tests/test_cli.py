@@ -9,32 +9,23 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
 from agent_notes.core import db as coredb
+from tests.cli_harness import run_cli
 
 # ephemeral_db is session-scoped from conftest
 from tests.conftest import ephemeral_db  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures("ephemeral_db")
 
-_CLI = [sys.executable, "-m", "agent_notes.cli"]
-
 
 def _run(*args: str, env: dict | None = None, check: bool = True) -> subprocess.CompletedProcess:
-    """Run the CLI and return CompletedProcess."""
-    merged_env = {**os.environ, **(env or {})}
-    return subprocess.run(
-        _CLI + list(args),
-        capture_output=True,
-        text=True,
-        env=merged_env,
-        check=check,
-    )
+    """Run the CLI in a hermetic environment (WI-030); see tests.cli_harness."""
+    return run_cli(*args, env=env, check=check)
 
 
 @pytest.fixture
