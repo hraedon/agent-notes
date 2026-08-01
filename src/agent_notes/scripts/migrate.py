@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -202,9 +201,17 @@ def main() -> None:
         list_schema(as_json=args.json)
         return
 
-    dsn = os.environ.get("AGENT_NOTES_DSN", "")
-    if not dsn:
-        sys.exit("Error: AGENT_NOTES_DSN environment variable is not set.")
+    # WI-051: resolve the DSN through the same layered chain as the rest of
+    # agent-notes (process env > suite.env per-user > suite.env system > tool
+    # config file), not a bare os.environ read. The bootstrap writes
+    # AGENT_NOTES_DSN into suite.env, and the config contract says every suite
+    # tool resolves it from there without the operator exporting anything.
+    from agent_notes.core.config import resolve_dsn
+
+    try:
+        dsn = resolve_dsn()
+    except RuntimeError as exc:
+        sys.exit(f"Error: {exc}")
 
     if args.all:
         # Resolved inside the branch that needs it (WI-047): resolving

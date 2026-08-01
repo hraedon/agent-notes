@@ -64,6 +64,63 @@ def test_raises_when_nothing_set(monkeypatch, tmp_path):
         config.resolve_dsn()
 
 
+# ---------------------------------------------------------------------------
+# Native DSN suite.env layer (WI-051): process env > per-user suite.env >
+# system suite.env > config file, per bootstrap-contract §2.
+# ---------------------------------------------------------------------------
+
+
+def _write_native_suite_env(monkeypatch, tmp_path, dsn, level="system"):
+    f = tmp_path / f"{level}-suite.env"
+    f.write_text(f"AGENT_NOTES_DSN={dsn}\n")
+    var = "AGENT_SUITE_CONFIG" if level == "user" else "AGENT_SUITE_SYSTEM_CONFIG"
+    monkeypatch.setenv(var, str(f))
+    return f
+
+
+def test_native_dsn_from_system_suite_env(monkeypatch, tmp_path):
+    """AGENT_NOTES_DSN in /etc-level suite.env satisfies resolve_dsn (WI-051).
+
+    This is the Lane C qualification scenario: the bootstrap writes the DSN
+    into the system suite.env and nothing exports it into the process env.
+    """
+    _write_native_suite_env(monkeypatch, tmp_path, "postgresql://system-suite/db")
+    assert config.resolve_dsn() == "postgresql://system-suite/db"
+
+
+def test_native_dsn_user_suite_env_beats_system(monkeypatch, tmp_path):
+    _write_native_suite_env(monkeypatch, tmp_path, "postgresql://system-suite/db")
+    _write_native_suite_env(monkeypatch, tmp_path, "postgresql://user-suite/db", level="user")
+    assert config.resolve_dsn() == "postgresql://user-suite/db"
+
+
+def test_native_dsn_process_env_beats_suite_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_NOTES_DSN", "postgresql://env/x")
+    _write_native_suite_env(monkeypatch, tmp_path, "postgresql://system-suite/db")
+    assert config.resolve_dsn() == "postgresql://env/x"
+
+
+def test_native_dsn_suite_env_beats_config_file(monkeypatch, tmp_path):
+    _write_native_suite_env(monkeypatch, tmp_path, "postgresql://system-suite/db")
+    _write_config(tmp_path, monkeypatch, "postgresql://file/x")
+    assert config.resolve_dsn() == "postgresql://system-suite/db"
+
+
+def test_missing_dsn_error_names_the_searched_files(monkeypatch, tmp_path):
+    """The failure message names every file that was searched (WI-051)."""
+    monkeypatch.setenv("AGENT_NOTES_CONFIG", str(tmp_path / "missing.json"))
+    user_env = tmp_path / "user-suite.env"
+    system_env = tmp_path / "system-suite.env"
+    monkeypatch.setenv("AGENT_SUITE_CONFIG", str(user_env))
+    monkeypatch.setenv("AGENT_SUITE_SYSTEM_CONFIG", str(system_env))
+    with pytest.raises(RuntimeError) as exc_info:
+        config.resolve_dsn()
+    message = exc_info.value.args[0]
+    assert str(user_env) in message
+    assert str(system_env) in message
+    assert str(tmp_path / "missing.json") in message
+
+
 def test_regista_dsn_does_not_fallback_to_native(monkeypatch, tmp_path):
     """F-5: REGISTA_DSN must NOT satisfy the native agent-notes DSN.
 

@@ -13,7 +13,8 @@ The config file *path* itself resolves via ``AGENT_NOTES_CONFIG`` (explicit
 override) or the platformdirs default (honoring ``XDG_CONFIG_HOME`` on Linux,
 ``%APPDATA%`` on Windows); no other suite env var affects the path.
 
-Precedence: explicit argument > AGENT_NOTES_DSN env > config file ``dsn`` key.
+Precedence: explicit argument > AGENT_NOTES_DSN env > suite.env
+(per-user > system; bootstrap-contract §2, WI-051) > config file ``dsn`` key.
 
 The regista face config (``RegistaConfig``) follows the same harness-independent
 principle: each field resolves env var > ``regista`` block in the config file.
@@ -184,13 +185,21 @@ def _resolve_secret_value(value: str) -> str:
 def resolve_dsn(explicit: str | None = None) -> str:
     """Return the Postgres DSN or raise RuntimeError with actionable guidance.
 
-    Precedence: ``explicit`` arg > ``AGENT_NOTES_DSN`` env > config file ``dsn`` key.
+    Precedence: ``explicit`` arg > ``AGENT_NOTES_DSN`` env > suite.env
+    (per-user > system, WI-051) > config file ``dsn`` key.
+
+    The suite.env layer is the bootstrap-contract §2 chain (process env >
+    ``~/.config/agent-suite/suite.env`` > ``/etc/agent-suite/suite.env``): the
+    bootstrap writes ``AGENT_NOTES_DSN`` into suite.env and every suite tool is
+    expected to resolve it from there without the operator exporting anything.
+    The tool-specific config file stays as the final fallback beneath the
+    suite-wide facts.
 
     A backend ref (``env:VAR`` / ``vault:...`` / ``file:/path``) is resolved
     through ``regista.secrets`` (Plan 017 WI-4.1) so the DSN password need not
     live in plaintext config; a literal DSN passes through unchanged. This
-    applies uniformly to the explicit arg, the env var, and the file value —
-    any of them may carry a backend ref.
+    applies uniformly to the explicit arg, the env var, the suite.env value,
+    and the file value — any of them may carry a backend ref.
     """
     if explicit:
         return _resolve_secret_value(explicit)
@@ -198,6 +207,11 @@ def resolve_dsn(explicit: str | None = None) -> str:
     env = os.environ.get(_DSN_ENV)
     if env:
         return _resolve_secret_value(env)
+
+    suite = load_suite_env()
+    suite_dsn = suite.get(_DSN_ENV)
+    if suite_dsn:
+        return _resolve_secret_value(suite_dsn)
 
     path = config_path()
     if path.is_file():
@@ -209,9 +223,13 @@ def resolve_dsn(explicit: str | None = None) -> str:
         if dsn:
             return _resolve_secret_value(dsn)
 
+    from agent_notes.core.suite_env import system_suite_env_path, user_suite_env_path
+
     raise RuntimeError(
-        "No Postgres DSN found. Set AGENT_NOTES_DSN or create "
-        f'{config_path()} containing {{"dsn": "postgresql://user:pass@host/agent_notes"}}.'
+        "No Postgres DSN found. Set AGENT_NOTES_DSN in the environment, or in "
+        f"a suite.env file (searched {user_suite_env_path()}, then "
+        f"{system_suite_env_path()}), or create {config_path()} containing "
+        '{"dsn": "postgresql://user:pass@host/agent_notes"}.'
     )
 
 
