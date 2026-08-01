@@ -65,9 +65,11 @@ class TestSchemaMissingCheck:
             raise _db_not_found("qual_workspace")
 
         monkeypatch.setattr(face_factory, "get_face", _raise)
+        before = face_factory.current_project()
         assert cli._regista_schema_missing("qual-workspace") == "qual_workspace"
         # The check must not leave the routing context pointed at the probe.
-        assert face_factory.current_project() is None
+        assert face_factory.current_project() == before
+        assert face_factory.current_project() != "qual_workspace" or before == "qual_workspace"
 
     def test_unreachable_regista_warns_but_does_not_refuse(self, monkeypatch, capsys):
         monkeypatch.setattr("agent_notes.core.config.regista_config", lambda: _FakeCfg(True))
