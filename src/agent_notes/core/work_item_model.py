@@ -398,8 +398,13 @@ class WorkItemModel:
         project_id: int | None = None,
         workspace_id: int | None = None,
         limit: int = 10,
+        query_text: str | None = None,
     ) -> list[dict]:
-        return _queries.find_work_items(query_vec, project_id, workspace_id, limit)
+        """Similarity search; pass ``query_text`` so exact title matches are
+        guaranteed a slot regardless of embedding rank (WI-052)."""
+        return _queries.find_work_items(
+            query_vec, project_id, workspace_id, limit, query_text=query_text
+        )
 
     @classmethod
     def suggest_duplicates(
