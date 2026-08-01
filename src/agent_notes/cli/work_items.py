@@ -15,6 +15,7 @@ from agent_notes.cli.common import (
     _print_sub_help,
     _resolve,
     emit_error,
+    exception_detail,
     report_resolution_failure,
 )
 
@@ -519,6 +520,7 @@ def cmd_wi_review_pass(args: argparse.Namespace) -> int:
             "VALIDATION_FAILED",
             str(exc),
             use_json=use_json,
+            detail=exception_detail(exc),
             exit_code=EXIT_CONFLICT,
         )
 
@@ -552,6 +554,7 @@ def cmd_wi_review_accept(args: argparse.Namespace) -> int:
             "VALIDATION_FAILED",
             str(exc),
             use_json=use_json,
+            detail=exception_detail(exc),
             exit_code=EXIT_CONFLICT,
         )
 
@@ -585,6 +588,7 @@ def cmd_wi_review_reject(args: argparse.Namespace) -> int:
             "VALIDATION_FAILED",
             str(exc),
             use_json=use_json,
+            detail=exception_detail(exc),
             exit_code=EXIT_CONFLICT,
         )
 
@@ -618,6 +622,7 @@ def cmd_wi_review_request_changes(args: argparse.Namespace) -> int:
             "VALIDATION_FAILED",
             str(exc),
             use_json=use_json,
+            detail=exception_detail(exc),
             exit_code=EXIT_CONFLICT,
         )
 
