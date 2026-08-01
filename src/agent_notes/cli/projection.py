@@ -62,8 +62,9 @@ def register_projection_parsers(sub: argparse._SubParsersAction) -> None:
     _add_common(rebuild)
     rebuild.set_defaults(func=cmd_projection_rebuild)
 
-    proj.set_defaults(func=lambda args: (_print_sub_help(proj), EXIT_SUCCESS)[1])
+    proj.set_defaults(func=lambda args: _print_sub_help(proj))
 
 
-def _print_sub_help(parser: argparse.ArgumentParser) -> None:
+def _print_sub_help(parser: argparse.ArgumentParser) -> int:
     parser.print_help()
+    return EXIT_SUCCESS

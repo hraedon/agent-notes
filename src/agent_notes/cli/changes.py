@@ -130,4 +130,4 @@ def register_changes_parsers(sub: argparse._SubParsersAction) -> None:
     changes_archive.add_argument("--json", action="store_true")
     changes_archive.set_defaults(func=cmd_changes_archive)
 
-    changes.set_defaults(func=lambda args: (_print_sub_help(changes), EXIT_SUCCESS)[1])
+    changes.set_defaults(func=lambda args: _print_sub_help(changes))

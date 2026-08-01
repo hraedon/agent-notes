@@ -165,4 +165,4 @@ def register_verify_parsers(sub: argparse._SubParsersAction) -> None:
     _add_common(v_run)
     v_run.set_defaults(func=cmd_verify)
 
-    verify.set_defaults(func=lambda args: (_print_sub_help(verify), EXIT_SUCCESS)[1])
+    verify.set_defaults(func=lambda args: _print_sub_help(verify))

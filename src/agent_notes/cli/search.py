@@ -205,4 +205,4 @@ def register_search_parsers(sub: argparse._SubParsersAction) -> None:
     _add_common(srch_mem)
     srch_mem.set_defaults(func=cmd_search_all, kinds=["memory"])
 
-    srch.set_defaults(func=lambda args: (_print_sub_help(srch), EXIT_SUCCESS)[1])
+    srch.set_defaults(func=lambda args: _print_sub_help(srch))

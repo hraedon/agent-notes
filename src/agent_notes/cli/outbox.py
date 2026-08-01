@@ -133,8 +133,9 @@ def register_outbox_parsers(sub: argparse._SubParsersAction) -> None:
     reconcile_p.add_argument("--json", action="store_true")
     reconcile_p.set_defaults(func=cmd_outbox_reconcile)
 
-    outbox_p.set_defaults(func=lambda args: (_print_sub_help(outbox_p), EXIT_SUCCESS)[1])
+    outbox_p.set_defaults(func=lambda args: _print_sub_help(outbox_p))
 
 
-def _print_sub_help(parser: argparse.ArgumentParser) -> None:
+def _print_sub_help(parser: argparse.ArgumentParser) -> int:
     parser.print_help()
+    return EXIT_SUCCESS

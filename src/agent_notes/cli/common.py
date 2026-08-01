@@ -256,8 +256,9 @@ def _bc_format(bc: dict) -> str:
     return "\n".join(lines)
 
 
-def _print_sub_help(parser: argparse.ArgumentParser) -> None:
+def _print_sub_help(parser: argparse.ArgumentParser) -> int:
     parser.print_help()
+    return EXIT_SUCCESS
 
 
 def _add_common(p: argparse.ArgumentParser) -> None:

@@ -250,4 +250,4 @@ def register_memory_provider_parsers(sub: argparse._SubParsersAction) -> None:
     _add_common(mp_doctor)
     mp_doctor.set_defaults(func=cmd_memory_provider_doctor)
 
-    mp.set_defaults(func=lambda args: (_print_sub_help(mp), EXIT_SUCCESS)[1])
+    mp.set_defaults(func=lambda args: _print_sub_help(mp))

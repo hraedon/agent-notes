@@ -137,4 +137,4 @@ def register_vocabulary_parsers(sub: argparse._SubParsersAction) -> None:
     vocab_archive.add_argument("name")
     vocab_archive.set_defaults(func=cmd_vocab_archive)
 
-    vocab.set_defaults(func=lambda args: (_print_sub_help(vocab), EXIT_SUCCESS)[1])
+    vocab.set_defaults(func=lambda args: _print_sub_help(vocab))
