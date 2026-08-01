@@ -21,6 +21,7 @@ gate. The wheel build is hatchling-only and takes about a second.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import zipfile
@@ -34,6 +35,37 @@ SOURCE_SCHEMA_DIR = REPO_ROOT / "schema"
 # Where force-include places the schema inside the wheel; the same anchor
 # ``agent_notes.scripts.migrate`` resolves through importlib.resources.
 WHEEL_SCHEMA_PREFIX = "agent_notes/schema/"
+
+# Console scripts land in ``bin/`` on POSIX and ``Scripts/`` on Windows.
+# Resolved from the interpreter's own install scheme rather than hardcoded, so
+# the tests follow whichever layout the venv actually uses (WI-055).
+_SCRIPT_DIR_NAME = "Scripts" if os.name == "nt" else "bin"
+
+
+def _venv_script_dir(venv: Path) -> Path:
+    """Return the directory holding the venv's console scripts.
+
+    A fresh venv inherits the running interpreter's install scheme, so query it
+    via ``sysconfig`` under that venv's own interpreter — the authoritative
+    source that agrees with where ``pip`` / ``venv`` actually place scripts on
+    every platform. Falls back to the conventional layout if the query fails.
+    """
+    probe = subprocess.run(
+        [str(_venv_python(venv)), "-c", "import sysconfig; print(sysconfig.get_path('scripts'))"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if probe.returncode == 0 and probe.stdout.strip():
+        return Path(probe.stdout.strip())
+    return venv / _SCRIPT_DIR_NAME
+
+
+def _venv_python(venv: Path) -> Path:
+    """Return the venv's interpreter path (``Scripts`` on Windows, ``bin`` else)."""
+    if os.name == "nt":
+        return venv / "Scripts" / "python.exe"
+    return venv / "bin" / "python"
 
 
 def _source_sql_names() -> list[str]:
@@ -67,17 +99,17 @@ def _build_wheel(tmp_path: Path) -> Path:
 
 
 def _install_wheel(wheel: Path, venv: Path) -> Path:
-    """Create a venv at *venv*, install *wheel* with no dependencies, return bin/."""
+    """Create a venv at *venv*, install *wheel* with no dependencies, return its script dir."""
     subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
     proc = subprocess.run(
-        [str(venv / "bin" / "python"), "-m", "pip", "install", "--no-deps", str(wheel)],
+        [str(_venv_python(venv)), "-m", "pip", "install", "--no-deps", str(wheel)],
         capture_output=True,
         text=True,
         check=False,
     )
     if proc.returncode != 0:
         pytest.fail(f"wheel install failed:\n{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}")
-    return venv / "bin"
+    return _venv_script_dir(venv)
 
 
 def test_wheel_ships_every_schema_sql_file(tmp_path: Path) -> None:
@@ -125,11 +157,12 @@ def test_wheel_install_migrate_resolves_schema_with_no_source_tree(tmp_path: Pat
     assert [f["name"] for f in payload["files"]] == _source_sql_names()
 
     # Resolved from inside the installed package, not from a source checkout.
+    # Anchor on the venv root (platform-independent) rather than a hardcoded
+    # ``lib/`` prefix, which does not exist on Windows (WI-055).
     origin = Path(payload["origin"])
-    site_packages = venv / "lib"
-    assert site_packages in origin.parents, (
+    assert venv in origin.parents, (
         f"schema resolved from {origin}, which is outside the installed venv "
-        f"{site_packages} — the resolver is still reaching for a source tree"
+        f"{venv} — the resolver is still reaching for a source tree"
     )
     assert REPO_ROOT not in origin.parents and origin != SOURCE_SCHEMA_DIR
 
