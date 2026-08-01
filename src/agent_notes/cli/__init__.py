@@ -12,6 +12,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
+from typing import Callable
+
+from regista._errors import ErrorCode, RegistaError
 
 from agent_notes.cli.admin import register_admin_parsers
 from agent_notes.cli.breadcrumbs import register_breadcrumb_parsers
@@ -115,10 +119,65 @@ def _install_claude_stop_hook(repo_root: str) -> tuple[str, bool]:
     return settings_path, changed
 
 
+def _regista_schema_missing(slug: str) -> str | None:
+    """Return the regista project (schema) name for *slug* if it is missing (WI-049).
+
+    ``init`` used to register a project unconditionally and report success —
+    leaving the workspace permanently broken when the regista schema for the
+    (basename-derived) slug did not exist: every subsequent command died with
+    a raw ``DB_NOT_FOUND`` traceback and there was no CLI way back. Verify the
+    schema *before* persisting anything, so a broken registration is refused
+    rather than created.
+
+    Only a definitive ``DB_NOT_FOUND`` (or a slug that cannot even name a
+    regista schema) counts as missing. When regista writes are disabled this
+    is a no-op, and any other failure (regista unreachable, ...) warns and
+    lets ``init`` proceed — the degrade path never required a live regista.
+    """
+    from agent_notes.core.config import regista_config
+
+    cfg = regista_config()
+    if not cfg.enabled:
+        return None
+
+    from agent_notes.core import face_factory
+
+    try:
+        regista_name = face_factory.regista_project_name(slug)
+    except ValueError as exc:
+        print(f"Error: slug {slug!r} cannot name a regista schema: {exc}", file=sys.stderr)
+        return slug
+
+    previous = face_factory.current_project()
+    face_factory.set_current_project(regista_name)
+    try:
+        # Building the face connects and runs regista's ensure_schema; a
+        # missing schema surfaces here instead of on the first write.
+        face_factory.get_face()
+    except RegistaError as exc:
+        if exc.code == ErrorCode.DB_NOT_FOUND:
+            return regista_name
+        print(
+            f"Warning: could not verify regista schema {regista_name!r} "
+            f"({exc}); proceeding without verification.",
+            file=sys.stderr,
+        )
+    except Exception as exc:
+        print(
+            f"Warning: could not verify regista schema {regista_name!r} "
+            f"({exc}); proceeding without verification.",
+            file=sys.stderr,
+        )
+    finally:
+        face_factory.set_current_project(previous)
+    return None
+
+
 def cmd_init(
     path: str | None,
     workspace_slug: str | None = None,
     install_hooks: bool = True,
+    slug: str | None = None,
 ) -> int:
     target = os.path.abspath(path or ".")
 
@@ -133,7 +192,27 @@ def cmd_init(
         git_root = target
 
     repo_root = os.path.abspath(git_root)
-    name = os.path.basename(repo_root)
+    name = slug or os.path.basename(repo_root)
+
+    missing = _regista_schema_missing(name)
+    if missing is not None:
+        print(
+            f"Error: refusing to register project '{name}': its regista project "
+            f"schema '{missing}' does not exist, so the registration could never "
+            "be used. Nothing was registered.",
+            file=sys.stderr,
+        )
+        print(
+            f"  Provision the schema first: regista provision --project {missing}",
+            file=sys.stderr,
+        )
+        if slug is None:
+            print(
+                "  (The slug was derived from the directory basename; pass "
+                "--slug to register under a different, provisioned slug.)",
+                file=sys.stderr,
+            )
+        return EXIT_NOT_CONFIGURED
 
     from agent_notes.core.db import get_or_create_project, get_or_create_workspace
 
@@ -211,6 +290,36 @@ def _configure_logging_stderr() -> None:
     )
 
 
+def _resolved_version() -> str:
+    """Return the installed distribution version for this package (WI-048).
+
+    The import package is ``agent_notes`` but the published distribution is
+    ``agent-notes-hraedon``, so ``version("agent-notes")`` raised an unhandled
+    ``PackageNotFoundError`` on every wheel/PyPI install — the first command the
+    deployment guide tells the operator to run ended in a traceback. Resolve the
+    distribution *from the import package* via ``packages_distributions()`` so a
+    future distribution rename cannot break this again, with the current
+    distribution name as an explicit fallback, and degrade to a legible string
+    (never a traceback) when no metadata is installed at all.
+    """
+    from importlib.metadata import (
+        PackageNotFoundError,
+        packages_distributions,
+        version,
+    )
+
+    top_level = __package__.split(".", 1)[0]  # "agent_notes"
+    candidates = list(packages_distributions().get(top_level) or [])
+    if "agent-notes-hraedon" not in candidates:
+        candidates.append("agent-notes-hraedon")
+    for dist_name in candidates:
+        try:
+            return version(dist_name)
+        except PackageNotFoundError:
+            continue
+    return f"unknown (no installed distribution metadata for {top_level})"
+
+
 def _cmd_contract() -> int:
     """Emit the committed CLI contract manifest (contract §6 discovery).
 
@@ -283,6 +392,14 @@ def main() -> int:
     init_p.add_argument("path", nargs="?", default=".")
     init_p.add_argument("--workspace", default=None, help="Workspace slug (default: default)")
     init_p.add_argument(
+        "--slug",
+        default=None,
+        help=(
+            "Project slug to register (default: the repo directory's basename). "
+            "With regista enabled the slug must map to a provisioned schema"
+        ),
+    )
+    init_p.add_argument(
         "--no-hooks", action="store_true", help="Register only; do not wire the SessionStart hook"
     )
 
@@ -335,13 +452,16 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.version:
-        from importlib.metadata import version
-
-        print(version("agent-notes"))
+        print(_resolved_version())
         return EXIT_SUCCESS
 
     if args.command == "init":
-        return cmd_init(args.path, workspace_slug=args.workspace, install_hooks=not args.no_hooks)
+        return cmd_init(
+            args.path,
+            workspace_slug=args.workspace,
+            install_hooks=not args.no_hooks,
+            slug=args.slug,
+        )
     if args.command == "resolve":
         return cmd_resolve(args.path, args.json)
     if args.command == "doctor":
@@ -355,10 +475,43 @@ def main() -> int:
 
     func = getattr(args, "func", None)
     if func is not None:
-        return func(args)
+        return _dispatch(func, args)
 
     parser.print_help()
     return EXIT_GENERIC
+
+
+def _dispatch(func: Callable[[argparse.Namespace], int], args: argparse.Namespace) -> int:
+    """Run a subcommand, keeping the most likely first-run failure legible (WI-049).
+
+    A ``DB_NOT_FOUND`` raised while constructing the regista face means the
+    resolved project's schema was never provisioned — a registration/bootstrap
+    gap, not a bug — and it used to escape as a raw traceback naming an
+    internal API (``Regista.create_project()``). Convert it to the common
+    error envelope with the actual remediation. Everything else re-raises
+    unchanged.
+    """
+    try:
+        return func(args)
+    except RegistaError as exc:
+        if exc.code != ErrorCode.DB_NOT_FOUND:
+            raise
+        from agent_notes.cli.common import emit_error
+        from agent_notes.core import face_factory
+        from agent_notes.core.config import regista_config
+
+        target = face_factory.current_project() or regista_config().project
+        return emit_error(
+            "DB_NOT_FOUND",
+            f"The regista project schema '{target}' does not exist: the project "
+            "is registered in agent-notes but was never provisioned in regista.",
+            use_json=bool(getattr(args, "json", False)),
+            detail=(
+                f"Provision it with `regista provision --project {target}`, then "
+                f"re-run this command. (regista said: {exc.message})"
+            ),
+            exit_code=EXIT_NOT_CONFIGURED,
+        )
 
 
 __all__ = ["main"]

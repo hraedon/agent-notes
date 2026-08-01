@@ -15,6 +15,7 @@ from agent_notes.cli.common import (
     _print_sub_help,
     _resolve,
     emit_error,
+    exception_detail,
     report_resolution_failure,
 )
 
@@ -243,6 +244,7 @@ def cmd_wi_find(args: argparse.Namespace) -> int:
             report_resolution_failure(args, code)
             return code
 
+    semantic_limit: int | None = None
     if args.text:
         text = args.text.strip()
         if text.isdigit() or (text.startswith("WI-") and text[3:].isdigit()):
@@ -261,11 +263,13 @@ def cmd_wi_find(args: argparse.Namespace) -> int:
                 rows = [r for r in rows if text.lower() in r["identifier"].lower()]
         else:
             vec = embed(args.text, task="query").tolist()
+            semantic_limit = min(args.limit or 10, 50)
             rows = WorkItemModel.find_work_items(
                 query_vec=vec,
                 project_id=proj_id,
                 workspace_id=ws_id,
-                limit=min(args.limit or 10, 50),
+                limit=semantic_limit,
+                query_text=text,
             )
     else:
         rows = WorkItemModel.query_work_items(
@@ -276,10 +280,29 @@ def cmd_wi_find(args: argparse.Namespace) -> int:
             limit=min(args.limit or 50, 200),
         )
 
+    # WI-052: a semantic result is a top-k similarity cut, not a complete
+    # filter. When the cut is full it may have dropped matches, and a caller
+    # doing dedup must be able to tell that from a complete answer.
+    semantic_cut_full = semantic_limit is not None and len(rows) >= semantic_limit
+
     if use_json:
         for r in rows:
             r.pop("embedding", None)
-        print(json.dumps({"work_items": rows}, indent=2, default=str))
+        payload: dict[str, Any] = {"work_items": rows}
+        if semantic_limit is not None:
+            payload["search"] = {
+                "mode": "hybrid",
+                "limit": semantic_limit,
+                "complete": not semantic_cut_full,
+                "note": (
+                    "semantic matches are a top-k similarity cut, not a filter; "
+                    "exact title matches are always included. A full result set "
+                    "may have dropped items — raise --limit to widen the cut."
+                    if semantic_cut_full
+                    else "result is smaller than the limit, so nothing was cut."
+                ),
+            }
+        print(json.dumps(payload, indent=2, default=str))
     else:
         if not rows:
             print("No work items found.")
@@ -287,6 +310,11 @@ def cmd_wi_find(args: argparse.Namespace) -> int:
             print(f"{len(rows)} work item(s) found:")
             for r in rows:
                 print(f"- **{r['identifier']}** ({r['kind']} / {r['status']}) — {r['title']}")
+        if semantic_cut_full:
+            print(
+                f"(top {semantic_limit} by similarity — exact title matches are always "
+                "included, but other matches may lie below the cut; raise --limit to widen it)"
+            )
     return EXIT_SUCCESS
 
 
@@ -519,6 +547,7 @@ def cmd_wi_review_pass(args: argparse.Namespace) -> int:
             "VALIDATION_FAILED",
             str(exc),
             use_json=use_json,
+            detail=exception_detail(exc),
             exit_code=EXIT_CONFLICT,
         )
 
@@ -552,6 +581,7 @@ def cmd_wi_review_accept(args: argparse.Namespace) -> int:
             "VALIDATION_FAILED",
             str(exc),
             use_json=use_json,
+            detail=exception_detail(exc),
             exit_code=EXIT_CONFLICT,
         )
 
@@ -585,6 +615,7 @@ def cmd_wi_review_reject(args: argparse.Namespace) -> int:
             "VALIDATION_FAILED",
             str(exc),
             use_json=use_json,
+            detail=exception_detail(exc),
             exit_code=EXIT_CONFLICT,
         )
 
@@ -618,6 +649,7 @@ def cmd_wi_review_request_changes(args: argparse.Namespace) -> int:
             "VALIDATION_FAILED",
             str(exc),
             use_json=use_json,
+            detail=exception_detail(exc),
             exit_code=EXIT_CONFLICT,
         )
 
@@ -1011,7 +1043,15 @@ def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
     wi_find = wi_sub.add_parser("find", help="Find work items by text or filters")
     wi_find.add_argument("--status", default=None)
     wi_find.add_argument("--type", default=None, dest="type")
-    wi_find.add_argument("--text", default=None)
+    wi_find.add_argument(
+        "--text",
+        default=None,
+        help=(
+            "Find by text: exact title matches (always included) plus top-k "
+            "semantic similarity. The semantic part is a cut, not a filter — "
+            "raise --limit to widen it"
+        ),
+    )
     wi_find.add_argument("--limit", type=int, default=None)
     wi_find.add_argument(
         "--scope",

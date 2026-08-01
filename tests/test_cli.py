@@ -60,6 +60,18 @@ def test_init_creates_project():
         assert "registered" in result.stdout.lower()
 
 
+def test_init_explicit_slug_overrides_basename(default_project):
+    """`init --slug` registers under the given slug, not the basename (WI-049)."""
+    with tempfile.TemporaryDirectory() as td:
+        repo = Path(td) / "some-directory-name"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        result = _run("init", str(repo), "--slug", "chosen-slug", check=False)
+        assert result.returncode == 0
+        assert "Project 'chosen-slug' registered" in result.stdout
+        assert "some-directory-name" not in result.stdout.split("registered")[0]
+
+
 def _session_orient_cmds(settings: dict) -> list[str]:
     return [
         h["command"]

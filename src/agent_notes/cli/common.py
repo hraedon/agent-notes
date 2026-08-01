@@ -12,12 +12,34 @@ EXIT_NOT_CONFIGURED = 3
 EXIT_CONFLICT = 4
 
 
+def exception_detail(exc: BaseException) -> dict | None:
+    """Extract the structured ``detail`` dict from an exception chain (WI-050).
+
+    regista's review validators raise ``ReviewRejected`` carrying a ``detail``
+    dict with exactly the facts an operator needs to act (``reviewer_lineage``,
+    ``author_lineages``, ``agent_author_undeclared``, ...). By the time the CLI
+    sees it, the hook runner has wrapped it in a ``RegistaError`` whose own
+    ``detail`` is ``None`` — but the original exception survives as the cause.
+    Walk the chain and return the first non-empty ``detail`` dict, so the CLI
+    can surface it instead of discarding it.
+    """
+    seen: set[int] = set()
+    node: BaseException | None = exc
+    while node is not None and id(node) not in seen:
+        seen.add(id(node))
+        detail = getattr(node, "detail", None)
+        if isinstance(detail, dict) and detail:
+            return dict(detail)
+        node = node.__cause__ or node.__context__
+    return None
+
+
 def emit_error(
     code: str,
     message: str,
     *,
     use_json: bool,
-    detail: str | None = None,
+    detail: str | dict | None = None,
     retryable: bool = False,
     exit_code: int = EXIT_GENERIC,
 ) -> int:
@@ -27,8 +49,18 @@ def emit_error(
     document; otherwise the human message goes to *stderr*. The numeric
     exit codes keep agent-notes' decision-52 taxonomy (2/3/4) for
     compatibility; the envelope's ``code`` carries the stable semantic.
+
+    ``detail`` may be a dict (WI-050: e.g. a review validator's rejection
+    facts). The envelope schema types ``error.detail`` as string-or-null
+    (``data/cli-error-envelope.schema.json``), so a dict is serialized to a
+    single JSON string in that slot; the human path prints it one
+    ``key: value`` line at a time.
     """
     if use_json:
+        if isinstance(detail, dict):
+            detail_out: str | None = json.dumps(detail, sort_keys=True, default=str)
+        else:
+            detail_out = detail
         print(
             json.dumps(
                 {
@@ -36,7 +68,7 @@ def emit_error(
                     "error": {
                         "code": code,
                         "message": message,
-                        "detail": detail,
+                        "detail": detail_out,
                         "retryable": retryable,
                         "partial": None,
                     },
@@ -46,7 +78,12 @@ def emit_error(
         )
     else:
         print(f"Error: {message}", file=sys.stderr)
-        if detail:
+        if isinstance(detail, dict):
+            for key in sorted(detail):
+                value = detail[key]
+                rendered = value if isinstance(value, str) else json.dumps(value, default=str)
+                print(f"  {key}: {rendered}", file=sys.stderr)
+        elif detail:
             print(f"  {detail}", file=sys.stderr)
     return exit_code
 
