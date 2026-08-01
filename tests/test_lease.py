@@ -318,3 +318,58 @@ class TestLeaseErrors:
                 identifier="WI-LEASE-07",
                 actor_id="agent-a",
             )
+
+
+# ---------------------------------------------------------------------------
+# change_log audit trail (BC-027)
+# ---------------------------------------------------------------------------
+
+
+def _change_log_for(identifier: str) -> list[dict]:
+    """Return change_log rows for an identifier, oldest first."""
+    with _conn() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            "SELECT * FROM change_log WHERE kind = 'work_item' AND identifier = %s "
+            "ORDER BY id",
+            (identifier,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+class TestLeaseChangeLog:
+    """BC-027: native (degrade) lease ops must write change_log like the regista path."""
+
+    def test_claim_heartbeat_release_write_change_log(self, default_project):
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-LEASE-CL",
+            title="Lease audit trail",
+            status="open",
+            embedding=_vec768(),
+        )
+        WorkItemModel.claim_work_item(
+            project_id=default_project.id,
+            identifier="WI-LEASE-CL",
+            actor_id="agent-a",
+            ttl_seconds=60,
+        )
+        WorkItemModel.heartbeat_work_item(
+            project_id=default_project.id,
+            identifier="WI-LEASE-CL",
+            actor_id="agent-a",
+            ttl_seconds=120,
+        )
+        WorkItemModel.release_work_item(
+            project_id=default_project.id,
+            identifier="WI-LEASE-CL",
+            actor_id="agent-a",
+        )
+
+        events = {row["event"]: row for row in _change_log_for("WI-LEASE-CL")}
+        assert {"claimed", "heartbeat", "released"} <= set(events)
+        for event in ("claimed", "heartbeat", "released"):
+            assert events[event]["actor"] == "agent-a"
+        assert events["claimed"]["payload"]["ttl_seconds"] == 60
+        assert events["heartbeat"]["payload"]["ttl_seconds"] == 120
+

@@ -625,7 +625,7 @@ def claim_work_item(
     project_id: int, identifier: str, actor_id: str | None, ttl_seconds: int
 ) -> dict:
     with _conn() as conn:
-        _common.resolve_workspace_for_project(conn, project_id)
+        workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
@@ -697,13 +697,25 @@ def claim_work_item(
         if folded is None:
             raise RuntimeError("fold_work_item returned None after claim op")
 
+        # Audit trail (BC-027): mirror the regista path's change_log row.
+        write_change(
+            conn,
+            kind=KIND,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            identifier=identifier,
+            event="claimed",
+            payload={"actor_id": actor_id, "ttl_seconds": ttl_seconds},
+            actor=actor_id,
+        )
+
         conn.commit()
         return dict(folded)
 
 
 def release_work_item(project_id: int, identifier: str, actor_id: str | None) -> dict:
     with _conn() as conn:
-        _common.resolve_workspace_for_project(conn, project_id)
+        workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
@@ -753,6 +765,18 @@ def release_work_item(project_id: int, identifier: str, actor_id: str | None) ->
         if folded is None:
             raise RuntimeError("fold_work_item returned None after release op")
 
+        # Audit trail (BC-027): mirror the regista path's change_log row.
+        write_change(
+            conn,
+            kind=KIND,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            identifier=identifier,
+            event="released",
+            payload={"actor_id": actor_id},
+            actor=actor_id,
+        )
+
         conn.commit()
         return dict(folded)
 
@@ -761,6 +785,7 @@ def heartbeat_work_item(
     project_id: int, identifier: str, actor_id: str | None, ttl_seconds: int
 ) -> dict:
     with _conn() as conn:
+        workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
@@ -801,6 +826,20 @@ def heartbeat_work_item(
             op_id=op["op_id"],
             event_type="item.heartbeat",
             payload={"entity_id": entity_id, "identifier": identifier, "actor_id": actor_id},
+        )
+
+        # Audit trail (BC-027): record the lease heartbeat in change_log so the
+        # degrade-mode lease lifecycle is visible in the sole audit source
+        # (decision 7), matching the claim/release rows above.
+        write_change(
+            conn,
+            kind=KIND,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            identifier=identifier,
+            event="heartbeat",
+            payload={"actor_id": actor_id, "ttl_seconds": ttl_seconds},
+            actor=actor_id,
         )
 
         conn.commit()
