@@ -254,16 +254,56 @@ def _minimal_reviewer_env(home: str) -> dict[str, str]:
     }
 
 
+_PROTECTED_ENV = frozenset({"PATH", "HOME"})
+
+
+def _validated_credentials(credentials: Mapping[str, str] | None) -> dict[str, str]:
+    """Validate an explicit reviewer credential channel (WI-056).
+
+    WI-054's minimal env leaves a real reviewer with no way to authenticate: it
+    has ``PATH`` and an isolated ``HOME`` and nothing else. The credential
+    channel is the inject-don't-surface answer — the operator declares the env
+    vars the harness needs (an API-key or OAuth-token variable) and only those
+    reach the child's environment. Secret values never touch stdout, stderr,
+    logs, exception messages, or the review artifact; only env-var *names*
+    surface in errors.
+
+    ``PATH`` and ``HOME`` are reserved for the reviewer sandbox: letting the
+    channel rewrite either would re-open the operator-state leak WI-054 closed.
+    """
+    if not credentials:
+        return {}
+    validated: dict[str, str] = {}
+    for name, value in credentials.items():
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("credential env-var name must be a non-empty string")
+        if name in _PROTECTED_ENV:
+            raise ValueError(
+                f"credential env-var {name!r} is reserved for the reviewer sandbox"
+            )
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"credential value for {name!r} must be a non-empty string")
+        validated[name] = value
+    return validated
+
+
 class ClaudePrintRunner:
     """Claude print-mode runner using its native structured-output sink."""
 
     harness = "claude"
 
-    def __init__(self, requested_model: str, *, executable: str = "claude") -> None:
+    def __init__(
+        self,
+        requested_model: str,
+        *,
+        executable: str = "claude",
+        credentials: Mapping[str, str] | None = None,
+    ) -> None:
         if not requested_model.strip():
             raise ValueError("requested_model is required")
         self.requested_model = requested_model
         self.executable = executable
+        self.credentials = _validated_credentials(credentials)
 
     def _version(self, cwd: Path, env: Mapping[str, str]) -> str:
         result = run_bounded_process(
@@ -284,6 +324,7 @@ class ClaudePrintRunner:
     def run(self, *, prompt: str, cwd: Path, timeout_seconds: float) -> ReviewProcessResult:
         with tempfile.TemporaryDirectory(prefix="agent-notes-reviewer-") as home:
             env = _minimal_reviewer_env(home)
+            env.update(self.credentials)
             harness_version = self._version(cwd, env)
             schema = json.dumps(review_result_json_schema(), separators=(",", ":"))
             argv = [
