@@ -15,6 +15,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from agent_notes.core.config import config_path
 
 _CLI = [sys.executable, "-m", "agent_notes.cli"]
@@ -27,18 +29,39 @@ _SUITE_ENV = {
     "AGENT_NOTES_REGISTA_WRITES": "1",
 }
 
+_DISCOVERY_PINS = (
+    "AGENT_NOTES_CONFIG",
+    "AGENT_SUITE_CONFIG",
+    "AGENT_SUITE_SYSTEM_CONFIG",
+)
 
-def _run(*args: str, env: dict | None = None, check: bool = True) -> subprocess.CompletedProcess:
+
+def _build_test_env(env: dict | None = None) -> dict[str, str]:
     # Strip inherited agent-notes/regista env so tests control their own inputs,
-    # then apply the test-provided env on top.
+    # but carry through the config-discovery pins conftest establishes (WI-059):
+    # without AGENT_NOTES_CONFIG the install-harness subprocess can read the
+    # operator's real config and lose hermetic isolation. Apply the pins last so
+    # they always win, mirroring tests/cli_harness.build_cli_env.
     clean = {
         k: v
         for k, v in os.environ.items()
         if not k.startswith("AGENT_NOTES_") and not k.startswith("REGISTA_")
     }
     merged = {**clean, **(env or {})}
+    for pin in _DISCOVERY_PINS:
+        value = os.environ.get(pin)
+        if value is not None:
+            merged[pin] = value
+    return merged
+
+
+def _run(*args: str, env: dict | None = None, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(
-        _CLI + list(args), capture_output=True, text=True, env=merged, check=check
+        _CLI + list(args),
+        capture_output=True,
+        text=True,
+        env=_build_test_env(env),
+        check=check,
     )
 
 
@@ -61,6 +84,41 @@ def _make_opencode_agents(td: Path, *extra: str) -> Path:
     for filename in ("glm.md", "kimi.md", *extra):
         (agents_dir / filename).write_text("---\ndescription: stub\nmode: subagent\n---\nstub\n")
     return agents_dir
+
+
+# ---------------------------------------------------------------------------
+# hermetic env construction (WI-059)
+# ---------------------------------------------------------------------------
+
+
+def test_build_test_env_preserves_discovery_pins(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_run must carry through conftest's config-discovery pins (WI-059).
+
+    The helper strips the AGENT_NOTES_* / REGISTA_* namespaces so tests control
+    their own inputs, but the config-discovery pins (AGENT_NOTES_CONFIG and the
+    suite-level override paths) must survive — otherwise the install-harness
+    subprocess reads the operator's real config and loses hermetic isolation.
+    Operator config values (DSN, key paths) stay stripped and test-controlled.
+    """
+    monkeypatch.setenv("AGENT_NOTES_CONFIG", "/hermetic/empty.json")
+    monkeypatch.setenv("AGENT_SUITE_CONFIG", "/hermetic/suite.env")
+    monkeypatch.setenv("AGENT_SUITE_SYSTEM_CONFIG", "/hermetic/sys.env")
+    monkeypatch.setenv("AGENT_NOTES_DSN", "postgresql://operator/prod")
+    monkeypatch.setenv("REGISTA_DSN", "postgresql://operator/regista")
+    monkeypatch.setenv("AGENT_NOTES_LEAK_SENTINEL", "do-not-leak")
+
+    env = _build_test_env({"AGENT_NOTES_DSN": "postgresql://native/x"})
+
+    assert env["AGENT_NOTES_CONFIG"] == "/hermetic/empty.json"
+    assert env["AGENT_SUITE_CONFIG"] == "/hermetic/suite.env"
+    assert env["AGENT_SUITE_SYSTEM_CONFIG"] == "/hermetic/sys.env"
+    assert env["AGENT_NOTES_DSN"] == "postgresql://native/x"
+    assert "REGISTA_DSN" not in env
+    assert "AGENT_NOTES_LEAK_SENTINEL" not in env
+    # Pins win over a caller-supplied conflicting value: a test cannot point
+    # install-harness at the operator's real config by passing it in env.
+    override = _build_test_env({"AGENT_NOTES_CONFIG": "/attacker/config.json"})
+    assert override["AGENT_NOTES_CONFIG"] == "/hermetic/empty.json"
 
 
 # ---------------------------------------------------------------------------

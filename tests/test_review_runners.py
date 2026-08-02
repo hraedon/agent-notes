@@ -240,6 +240,113 @@ def test_claude_runner_does_not_inherit_operator_env(
     assert child_env["HOME"] != os.path.expanduser("~")
 
 
+def _recording_claude(tmp_path: Path, marker: Path) -> Path:
+    """A fake claude that records the env it receives and echoes a valid result."""
+    payload = json.dumps(_envelope(), separators=(",", ":"))
+    script = tmp_path / "recording-claude"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "if '--version' in sys.argv:\n"
+        "    print('9.9.9 (Claude Code)')\n"
+        "    raise SystemExit(0)\n"
+        "sys.stdin.read()\n"
+        f"open({str(marker)!r}, 'w').write(json.dumps(dict(os.environ)))\n"
+        f"print({payload!r})\n"
+        "raise SystemExit(0)\n"
+    )
+    script.chmod(0o755)
+    return script
+
+
+def test_claude_runner_injects_credential_channel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reviewer subprocess receives the declared credential channel (WI-056).
+
+    WI-054's minimal env left a real reviewer unable to authenticate. The
+    credential channel injects only the operator-declared auth env vars into the
+    child's environment (inject-don't-surface). A fake harness records the env it
+    receives and echoes the structured envelope; we assert the credential reaches
+    the child while no operator state leaks and the secret never surfaces in the
+    result.
+    """
+    monkeypatch.setenv("AGENT_NOTES_LEAK_SENTINEL", "do-not-leak")
+    marker = tmp_path / "child-env.json"
+    runner = ClaudePrintRunner(
+        "opus",
+        executable=str(_recording_claude(tmp_path, marker)),
+        credentials={"ANTHROPIC_API_KEY": "sk-test-secret-do-not-log"},
+    )
+    process = runner.run(
+        prompt="Perform an adversarial code review", cwd=tmp_path, timeout_seconds=10
+    )
+
+    child_env = json.loads(marker.read_text())
+    assert child_env["ANTHROPIC_API_KEY"] == "sk-test-secret-do-not-log"
+    # Inject-don't-surface: the operator's env never leaks even with a channel.
+    assert "AGENT_NOTES_LEAK_SENTINEL" not in child_env
+    # The child sees only the sandbox base plus the declared credential.
+    assert set(child_env) - {"LC_CTYPE"} == {"PATH", "HOME", "ANTHROPIC_API_KEY"}
+    # The surfaced result carries the structured output, never the secret.
+    assert process.exit_code == 0
+    assert b"sk-test-secret-do-not-log" not in process.structured_outputs[0]
+
+
+def test_credential_channel_never_surfaces_secret_in_artifact(
+    review_repo: tuple[Path, str, str], tmp_path: Path
+) -> None:
+    """The credential reaches the child but never the persisted artifact (WI-056).
+
+    Inject-don't-surface end-to-end: a full evaluate_review with a credential
+    channel produces an artifact whose canonical serialization does not contain
+    the secret, even though the child subprocess received it.
+    """
+    repo, base, head = review_repo
+    marker = tmp_path / "child-env.json"
+    runner = ClaudePrintRunner(
+        "opus",
+        executable=str(_recording_claude(tmp_path, marker)),
+        credentials={"ANTHROPIC_API_KEY": "sk-artifact-secret"},
+    )
+    evaluation = evaluate_review(_request(repo, base, head), runner)
+
+    secret = "sk-artifact-secret".encode()
+    assert secret not in evaluation.artifact.canonical_bytes()
+    assert secret not in json.dumps(evaluation.artifact.to_dict()).encode()
+    # And the credential did reach the child.
+    assert json.loads(marker.read_text())["ANTHROPIC_API_KEY"] == "sk-artifact-secret"
+
+
+@pytest.mark.parametrize(
+    ("credentials", "match"),
+    [
+        ({"": "v"}, "name must be a non-empty"),
+        ({"   ": "v"}, "name must be a non-empty"),
+        ({"GOOD_NAME": ""}, "must be a non-empty string"),
+        ({"PATH": "/x"}, "reserved for the reviewer sandbox"),
+        ({"HOME": "/x"}, "reserved for the reviewer sandbox"),
+    ],
+)
+def test_runner_rejects_invalid_credentials(
+    credentials: dict[str, str], match: str
+) -> None:
+    """Misconfigured channels fail at construction, not silently in the child."""
+    with pytest.raises(ValueError, match=match):
+        ClaudePrintRunner("opus", credentials=credentials)
+
+
+def test_credential_error_never_surfaces_another_secret() -> None:
+    """A validation failure surfaces only the env-var name, never another entry's
+    secret value (inject-don't-surface)."""
+    secret = "sk-super-secret-never-log-me"
+    with pytest.raises(ValueError) as raised:
+        ClaudePrintRunner(
+            "opus", credentials={"ANTHROPIC_API_KEY": secret, "BAD_NAME": ""}
+        )
+    assert secret not in str(raised.value)
+
+
 def test_bounded_process_separates_streams_and_enforces_caps(tmp_path: Path) -> None:
     command = [
         sys.executable,
