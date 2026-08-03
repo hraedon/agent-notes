@@ -159,21 +159,44 @@ def get_or_create_project(
     repo_root: str | None = None,
     log_location: str | None = None,
     wake_channel: str | None = None,
+    relocate: bool = False,
 ) -> Project:
+    """Register a project, or return the existing one for (workspace, slug).
+
+    An already-registered ``repo_root`` is NOT overwritten unless *relocate*
+    is set. Slugs default to a directory basename, so two checkouts of the
+    same repo — a /tmp scratch clone, a git worktree, a CI checkout — collide
+    on slug. Repointing on collision silently moves every work item and memory
+    with it, because they are keyed on project_id, not on the path. That
+    happened live 2026-08-03: usage-dashboard's root was repointed to a
+    /tmp clone that was then cleaned up, leaving the real repo unresolvable
+    and 25 work items stranded behind a path that no longer existed.
+
+    Callers that mean to move a project pass ``relocate=True``; everyone else
+    gets first-registration-wins and can compare the returned ``repo_root``
+    against what they asked for to detect the collision.
+    """
+    # COALESCE order is the whole fix: without relocate, the stored value wins
+    # and only a NULL falls through to the incoming one.
+    repo_root_expr = (
+        "COALESCE(EXCLUDED.repo_root, projects.repo_root)"
+        if relocate
+        else "COALESCE(projects.repo_root, EXCLUDED.repo_root)"
+    )
     with _conn() as conn:
         cur = conn.cursor()
         cur.execute(
-            """
+            f"""
             INSERT INTO projects (workspace_id, slug, name, repo_root, log_location, wake_channel)
             VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (workspace_id, slug) DO UPDATE SET
                 name = EXCLUDED.name,
-                repo_root = COALESCE(EXCLUDED.repo_root, projects.repo_root),
+                repo_root = {repo_root_expr},
                 log_location = COALESCE(EXCLUDED.log_location, projects.log_location),
                 wake_channel = COALESCE(EXCLUDED.wake_channel, projects.wake_channel)
             RETURNING id, workspace_id, slug, name, repo_root,
                       log_location, wake_channel, created_at
-            """,
+            """,  # noqa: S608 - repo_root_expr is a fixed literal chosen above
             (workspace_id, slug, name, repo_root, log_location, wake_channel),
         )
         conn.commit()

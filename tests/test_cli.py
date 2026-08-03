@@ -164,7 +164,11 @@ def test_resolve_reports_resolved_via():
         repo = Path(td) / "myrepo"
         (repo / "sub" / "deep").mkdir(parents=True)
         (repo / ".git").mkdir()
-        assert _run("init", str(repo), check=False).returncode == 0
+        # --relocate because the slug is the basename ("myrepo") while the temp
+        # path differs every run: this genuinely re-points the same project.
+        # Without it, init now refuses (EXIT_CONFLICT) rather than silently
+        # stealing a registered root — see test_project_repo_root_collision.
+        assert _run("init", str(repo), "--relocate", check=False).returncode == 0
         exact = json.loads(_run("resolve", "--path", str(repo), "--json", check=False).stdout)
         assert exact["resolved_via"] == "exact"
         anc = json.loads(
