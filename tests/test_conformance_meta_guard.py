@@ -110,8 +110,15 @@ def _run_pytest(test_path: Path) -> subprocess.CompletedProcess[str]:
     env.pop("FORCE_COLOR", None)
     proc = subprocess.run(
         [
-            sys.executable, "-m", "pytest", str(test_path),
-            "-q", "-p", "no:cacheprovider", "--no-header", "--color=no",
+            sys.executable,
+            "-m",
+            "pytest",
+            str(test_path),
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "--no-header",
+            "--color=no",
         ],
         cwd=REPO_ROOT,
         env=env,

@@ -132,9 +132,7 @@ def _stub_registry(monkeypatch, *, workspaces, projects):
     import agent_notes.core.db as coredb
 
     monkeypatch.setattr(coredb, "list_workspaces", lambda: workspaces)
-    monkeypatch.setattr(
-        coredb, "list_projects", lambda workspace_id=None: projects
-    )
+    monkeypatch.setattr(coredb, "list_projects", lambda workspace_id=None: projects)
 
 
 class _Row:

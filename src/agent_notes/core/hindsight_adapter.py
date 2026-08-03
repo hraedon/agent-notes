@@ -34,12 +34,14 @@ from agent_notes.core.memory_engine import (
     RecallResult,
 )
 
-_CAPABILITIES = frozenset({
-    EngineCapability.INGEST,
-    EngineCapability.RECALL,
-    EngineCapability.FORGET,
-    EngineCapability.EXACT_SOURCE,
-})
+_CAPABILITIES = frozenset(
+    {
+        EngineCapability.INGEST,
+        EngineCapability.RECALL,
+        EngineCapability.FORGET,
+        EngineCapability.EXACT_SOURCE,
+    }
+)
 
 _PROTOCOL_VERSION = "1.0"
 _DEFAULT_TENANT = "default"
@@ -194,9 +196,7 @@ class HindsightEngine:
         if url:
             parsed = urllib.parse.urlparse(url)
             if parsed.scheme not in ("http", "https"):
-                raise ValueError(
-                    f"Invalid URL scheme '{parsed.scheme}'; must be http or https"
-                )
+                raise ValueError(f"Invalid URL scheme '{parsed.scheme}'; must be http or https")
             self._url = url.rstrip("/")
         else:
             self._url = None
@@ -227,16 +227,16 @@ class HindsightEngine:
         url = _env_or_suite("HINDSIGHT_URL") or (
             file_cfg.get("url") if isinstance(file_cfg.get("url"), str) else None
         )
-        tenant = _env_or_suite("HINDSIGHT_TENANT") or (
-            file_cfg.get("tenant") if isinstance(file_cfg.get("tenant"), str) else None
-        ) or _DEFAULT_TENANT
+        tenant = (
+            _env_or_suite("HINDSIGHT_TENANT")
+            or (file_cfg.get("tenant") if isinstance(file_cfg.get("tenant"), str) else None)
+            or _DEFAULT_TENANT
+        )
         api_key = _env_or_suite("HINDSIGHT_API_KEY") or (
             file_cfg.get("api_key") if isinstance(file_cfg.get("api_key"), str) else None
         )
         timeout_raw = _env_or_suite("HINDSIGHT_TIMEOUT") or (
-            file_cfg.get("timeout")
-            if isinstance(file_cfg.get("timeout"), (int, float))
-            else None
+            file_cfg.get("timeout") if isinstance(file_cfg.get("timeout"), (int, float)) else None
         )
         try:
             timeout = int(timeout_raw) if timeout_raw is not None else _DEFAULT_TIMEOUT

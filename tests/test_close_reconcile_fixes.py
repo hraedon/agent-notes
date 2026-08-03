@@ -95,9 +95,7 @@ def test_force_close_on_regista_path_terminalizes_instead_of_fold_crash(
         # Precondition: this is a regista-synced item (the bug class).
         assert row["regista_work_item_id"] is not None
 
-        closed = WorkItemModel.close_work_item(
-            default_project.id, "FC-REG-01", force=True
-        )
+        closed = WorkItemModel.close_work_item(default_project.id, "FC-REG-01", force=True)
         # Terminalized through the workflow (done), not a cryptic fold crash.
         assert closed["status"] in ("done", "closed")
         assert closed["closed_at"] is not None
@@ -126,8 +124,9 @@ def test_force_close_native_path_still_writes_legacy_terminal(default_project):
 
 
 def _ns(**kw):
-    base = dict(workspace=None, project=None, path="/projects/x", json=True,
-                apply=False, lookback=500)
+    base = dict(
+        workspace=None, project=None, path="/projects/x", json=True, apply=False, lookback=500
+    )
     base.update(kw)
     return argparse.Namespace(**base)
 
@@ -163,9 +162,7 @@ def test_reconcile_apply_continues_past_an_unclosable_item(monkeypatch, capsys):
     def _fake_update(proj_id, identifier, **kw):
         calls.append(identifier)
         if identifier == "X-2":
-            raise ValueError(
-                "Unsupported status transition: 'in_review' -> 'closed'"
-            )
+            raise ValueError("Unsupported status transition: 'in_review' -> 'closed'")
 
     monkeypatch.setattr(
         "agent_notes.core.work_item_model.WorkItemModel.update_work_item",
@@ -229,8 +226,12 @@ def test_mem_add_empty_body_returns_validation_error(capsys, monkeypatch):
         lambda *a, **k: (1, 1, "ws", "proj"),
     )
     ns = argparse.Namespace(
-        workspace=None, project=None, path="/projects/x",
-        json=True, name="test-mem", type="note",
+        workspace=None,
+        project=None,
+        path="/projects/x",
+        json=True,
+        name="test-mem",
+        type="note",
         body="   ",  # whitespace-only body
         attributes=None,
     )
@@ -281,8 +282,11 @@ def test_review_pass_cli_catches_regista_error(default_project, hmac_key_path, m
         # The adversarial_pass should raise RegistaError (undeclared lineage).
         # The CLI must catch it and return a VALIDATION_FAILED envelope.
         ns = argparse.Namespace(
-            workspace=None, project=None, path="/projects/sf2",
-            json=True, identifier="RV-CLI-ERR",
+            workspace=None,
+            project=None,
+            path="/projects/sf2",
+            json=True,
+            identifier="RV-CLI-ERR",
             note="This should fail cleanly",
             actor_id="reviewer-kimi",
             model_lineage="kimi",

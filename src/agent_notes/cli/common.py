@@ -174,11 +174,7 @@ def _resolve_impl(
         ws = next((w for w in list_workspaces() if w.slug == discovered.workspace), None)
         if ws is not None:
             proj = next(
-                (
-                    p
-                    for p in list_projects(workspace_id=ws.id)
-                    if p.slug == discovered.project
-                ),
+                (p for p in list_projects(workspace_id=ws.id) if p.slug == discovered.project),
                 None,
             )
             if proj is not None:

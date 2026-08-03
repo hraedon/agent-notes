@@ -151,9 +151,7 @@ def cmd_orient(args: argparse.Namespace) -> int:
                     response = engine.recall(rq)
 
                     if response.usage.get("error"):
-                        recall_notes.append(
-                            f"recall: degraded — {response.usage['error']}"
-                        )
+                        recall_notes.append(f"recall: degraded — {response.usage['error']}")
                     elif not response.results:
                         recall_notes.append("recall: no learned context found")
                     else:

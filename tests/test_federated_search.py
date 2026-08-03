@@ -158,8 +158,10 @@ class TestFederatedNativeEngine:
             ),
         )
         embed_patch, search_patch = _patch_exact_search()
-        with embed_patch, search_patch, patch(
-            "agent_notes.core.memory_engine.get_engine", return_value=engine
+        with (
+            embed_patch,
+            search_patch,
+            patch("agent_notes.core.memory_engine.get_engine", return_value=engine),
         ):
             code = cmd_search_all(_make_args(federated=True))
         captured = capsys.readouterr()
@@ -204,8 +206,10 @@ class TestFederatedHindsightEngine:
             ),
         )
         embed_patch, search_patch = _patch_exact_search()
-        with embed_patch, search_patch, patch(
-            "agent_notes.core.memory_engine.get_engine", return_value=engine
+        with (
+            embed_patch,
+            search_patch,
+            patch("agent_notes.core.memory_engine.get_engine", return_value=engine),
         ):
             code = cmd_search_all(_make_args(federated=True))
         captured = capsys.readouterr()
@@ -243,8 +247,10 @@ class TestFederatedHindsightEngine:
             ),
         )
         embed_patch, search_patch = _patch_exact_search()
-        with embed_patch, search_patch, patch(
-            "agent_notes.core.memory_engine.get_engine", return_value=engine
+        with (
+            embed_patch,
+            search_patch,
+            patch("agent_notes.core.memory_engine.get_engine", return_value=engine),
         ):
             code = cmd_search_all(_make_args(federated=True, json=False))
         captured = capsys.readouterr()
@@ -270,8 +276,10 @@ class TestFederatedHindsightEngine:
             ),
         )
         embed_patch, search_patch = _patch_exact_search()
-        with embed_patch, search_patch, patch(
-            "agent_notes.core.memory_engine.get_engine", return_value=engine
+        with (
+            embed_patch,
+            search_patch,
+            patch("agent_notes.core.memory_engine.get_engine", return_value=engine),
         ):
             code = cmd_search_all(_make_args(federated=True))
         captured = capsys.readouterr()
@@ -282,9 +290,7 @@ class TestFederatedHindsightEngine:
         exact_indices = [i for i, s in enumerate(sources) if s == "exact"]
         learned_indices = [i for i, s in enumerate(sources) if s == "learned"]
         assert exact_indices == list(range(len(exact_indices)))
-        assert learned_indices == [
-            len(exact_indices) + i for i in range(len(learned_indices))
-        ]
+        assert learned_indices == [len(exact_indices) + i for i in range(len(learned_indices))]
         assert max(exact_indices) < min(learned_indices)
 
 
@@ -297,8 +303,10 @@ class TestFederatedDegradation:
             recall_raises=ConnectionError("engine down"),
         )
         embed_patch, search_patch = _patch_exact_search()
-        with embed_patch, search_patch, patch(
-            "agent_notes.core.memory_engine.get_engine", return_value=engine
+        with (
+            embed_patch,
+            search_patch,
+            patch("agent_notes.core.memory_engine.get_engine", return_value=engine),
         ):
             code = cmd_search_all(_make_args(federated=True))
         captured = capsys.readouterr()
@@ -310,9 +318,13 @@ class TestFederatedDegradation:
 
     def test_get_engine_value_error_returns_exact_only(self, default_project, capsys):
         embed_patch, search_patch = _patch_exact_search()
-        with embed_patch, search_patch, patch(
-            "agent_notes.core.memory_engine.get_engine",
-            side_effect=ValueError("Unknown memory engine 'foo'"),
+        with (
+            embed_patch,
+            search_patch,
+            patch(
+                "agent_notes.core.memory_engine.get_engine",
+                side_effect=ValueError("Unknown memory engine 'foo'"),
+            ),
         ):
             code = cmd_search_all(_make_args(federated=True))
         captured = capsys.readouterr()
@@ -332,8 +344,10 @@ class TestFederatedDegradation:
             ),
         )
         embed_patch, search_patch = _patch_exact_search()
-        with embed_patch, search_patch, patch(
-            "agent_notes.core.memory_engine.get_engine", return_value=engine
+        with (
+            embed_patch,
+            search_patch,
+            patch("agent_notes.core.memory_engine.get_engine", return_value=engine),
         ):
             code = cmd_search_all(_make_args(federated=True))
         captured = capsys.readouterr()
@@ -353,8 +367,10 @@ class TestFederatedDegradation:
             ),
         )
         embed_patch, search_patch = _patch_exact_search()
-        with embed_patch, search_patch, patch(
-            "agent_notes.core.memory_engine.get_engine", return_value=engine
+        with (
+            embed_patch,
+            search_patch,
+            patch("agent_notes.core.memory_engine.get_engine", return_value=engine),
         ):
             code = cmd_search_all(_make_args(federated=True))
         captured = capsys.readouterr()
@@ -370,8 +386,10 @@ class TestFederatedDegradation:
             recall_raises=RuntimeError("connection reset"),
         )
         embed_patch, search_patch = _patch_exact_search()
-        with embed_patch, search_patch, patch(
-            "agent_notes.core.memory_engine.get_engine", return_value=engine
+        with (
+            embed_patch,
+            search_patch,
+            patch("agent_notes.core.memory_engine.get_engine", return_value=engine),
         ):
             code = cmd_search_all(_make_args(federated=True))
         captured = capsys.readouterr()

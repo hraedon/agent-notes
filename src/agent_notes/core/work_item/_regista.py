@@ -319,7 +319,9 @@ def review_transition(
         wid = old["regista_work_item_id"]
 
     actor = face_factory.actor_with_overrides(
-        actor_id, model_lineage, clear_principal=True,
+        actor_id,
+        model_lineage,
+        clear_principal=True,
     )
     payload: dict[str, Any] = {"review_note": review_note}
     if same_lineage_acknowledged:

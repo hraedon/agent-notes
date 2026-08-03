@@ -328,9 +328,7 @@ def test_credential_channel_never_surfaces_secret_in_artifact(
         ({"HOME": "/x"}, "reserved for the reviewer sandbox"),
     ],
 )
-def test_runner_rejects_invalid_credentials(
-    credentials: dict[str, str], match: str
-) -> None:
+def test_runner_rejects_invalid_credentials(credentials: dict[str, str], match: str) -> None:
     """Misconfigured channels fail at construction, not silently in the child."""
     with pytest.raises(ValueError, match=match):
         ClaudePrintRunner("opus", credentials=credentials)
@@ -341,9 +339,7 @@ def test_credential_error_never_surfaces_another_secret() -> None:
     secret value (inject-don't-surface)."""
     secret = "sk-super-secret-never-log-me"
     with pytest.raises(ValueError) as raised:
-        ClaudePrintRunner(
-            "opus", credentials={"ANTHROPIC_API_KEY": secret, "BAD_NAME": ""}
-        )
+        ClaudePrintRunner("opus", credentials={"ANTHROPIC_API_KEY": secret, "BAD_NAME": ""})
     assert secret not in str(raised.value)
 
 
@@ -368,18 +364,13 @@ def test_bounded_process_separates_streams_and_enforces_caps(tmp_path: Path) -> 
 
 def test_bounded_process_timeout_kills_descendant(tmp_path: Path) -> None:
     marker = tmp_path / "descendant-finished"
-    child = (
-        "import pathlib,time; time.sleep(1); "
-        f"pathlib.Path({str(marker)!r}).write_text('bad')"
-    )
+    child = f"import pathlib,time; time.sleep(1); pathlib.Path({str(marker)!r}).write_text('bad')"
     parent = (
         "import subprocess,sys,time; "
         f"subprocess.Popen([sys.executable,'-c',{child!r}]); time.sleep(30)"
     )
     with pytest.raises(TimeoutError):
-        run_bounded_process(
-            [sys.executable, "-c", parent], cwd=tmp_path, timeout_seconds=0.2
-        )
+        run_bounded_process([sys.executable, "-c", parent], cwd=tmp_path, timeout_seconds=0.2)
     time.sleep(1.1)
     assert not marker.exists()
 

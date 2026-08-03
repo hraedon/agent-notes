@@ -115,9 +115,7 @@ def test_foreign_project_match_excluded(repo):
     prefix (e.g. ``other-project:WI-022``) must NOT trigger a closure
     suggestion for this project."""
     _commit(repo, "resolve other-project:WI-022: fix the thing")
-    hits = scan_git_for_resolutions(
-        repo, ["WI-022"], project_slug="agent-suite"
-    )
+    hits = scan_git_for_resolutions(repo, ["WI-022"], project_slug="agent-suite")
     assert hits == {}
 
 
@@ -125,9 +123,7 @@ def test_same_project_qualified_match_accepted(repo):
     """A commit that references an identifier with the *same* project slug
     prefix (e.g. ``agent-suite:WI-022``) IS accepted."""
     _commit(repo, "resolve agent-suite:WI-022: fix the thing")
-    hits = scan_git_for_resolutions(
-        repo, ["WI-022"], project_slug="agent-suite"
-    )
+    hits = scan_git_for_resolutions(repo, ["WI-022"], project_slug="agent-suite")
     assert "WI-022" in hits
 
 
@@ -136,9 +132,7 @@ def test_unqualified_match_accepted_with_project_slug(repo):
     still accepted (the foreign-project guard only rejects *different*
     project prefixes, not unqualified references)."""
     _commit(repo, "resolve WI-022: fix the thing")
-    hits = scan_git_for_resolutions(
-        repo, ["WI-022"], project_slug="agent-suite"
-    )
+    hits = scan_git_for_resolutions(repo, ["WI-022"], project_slug="agent-suite")
     assert "WI-022" in hits
 
 
@@ -178,4 +172,3 @@ def test_exact_identifier_still_resolves(repo):
     is still detected, so the tightening did not over-reach."""
     _commit(repo, "feat: complete WI-2 provider seam")
     assert "WI-2" in scan_git_for_resolutions(repo, ["WI-2"])
-

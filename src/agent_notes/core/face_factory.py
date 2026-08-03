@@ -78,9 +78,7 @@ def current_project() -> str | None:
     return _CURRENT_PROJECT.get()
 
 
-def _build_face(
-    cfg: RegistaConfig, project: str
-) -> tuple[RegistaFace, Callable[[], None] | None]:
+def _build_face(cfg: RegistaConfig, project: str) -> tuple[RegistaFace, Callable[[], None] | None]:
     import os
 
     import regista

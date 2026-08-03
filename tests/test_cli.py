@@ -129,12 +129,16 @@ def test_init_upgrades_old_posix_hook_commands():
         (repo / ".git").mkdir()
         old_orient = f"agent-notes orient --path {repo} 2>/dev/null || true"
         old_reconcile = "agent-notes outbox reconcile >/dev/null || true"
-        (repo / ".claude" / "settings.json").write_text(json.dumps({
-            "hooks": {
-                "SessionStart": [{"hooks": [{"type": "command", "command": old_orient}]}],
-                "Stop": [{"hooks": [{"type": "command", "command": old_reconcile}]}],
-            }
-        }))
+        (repo / ".claude" / "settings.json").write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "SessionStart": [{"hooks": [{"type": "command", "command": old_orient}]}],
+                        "Stop": [{"hooks": [{"type": "command", "command": old_reconcile}]}],
+                    }
+                }
+            )
+        )
         assert _run("init", str(repo), check=False).returncode == 0
         settings = json.loads((repo / ".claude" / "settings.json").read_text())
         orient_cmds = _session_orient_cmds(settings)

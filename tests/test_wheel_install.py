@@ -84,8 +84,14 @@ def _build_wheel(tmp_path: Path) -> Path:
     wheel_dir.mkdir()
     proc = subprocess.run(
         [
-            sys.executable, "-m", "build", "--wheel", "--no-isolation",
-            "--outdir", str(wheel_dir), str(REPO_ROOT),
+            sys.executable,
+            "-m",
+            "build",
+            "--wheel",
+            "--no-isolation",
+            "--outdir",
+            str(wheel_dir),
+            str(REPO_ROOT),
         ],
         capture_output=True,
         text=True,
@@ -121,7 +127,7 @@ def test_wheel_ships_every_schema_sql_file(tmp_path: Path) -> None:
     wheel = _build_wheel(tmp_path)
     with zipfile.ZipFile(wheel) as zf:
         packaged = sorted(
-            name[len(WHEEL_SCHEMA_PREFIX):]
+            name[len(WHEEL_SCHEMA_PREFIX) :]
             for name in zf.namelist()
             if name.startswith(WHEEL_SCHEMA_PREFIX) and name.endswith(".sql")
         )

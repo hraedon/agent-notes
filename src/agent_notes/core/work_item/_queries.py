@@ -139,9 +139,7 @@ def find_work_items(
         cur = conn.cursor(row_factory=dict_row)
 
         if query_text and query_text.strip():
-            lex_where = " AND ".join(
-                ["wi.title ILIKE %s ESCAPE '\\'"] + scope_conditions
-            )
+            lex_where = " AND ".join(["wi.title ILIKE %s ESCAPE '\\'"] + scope_conditions)
             cur.execute(
                 f"""
                 SELECT wi.*,

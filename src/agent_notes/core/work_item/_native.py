@@ -190,9 +190,7 @@ def update_work_item(
         payload["diagnostic_keys"] = diagnostic_keys
     if embedding is not None and not _common.embedding_equal(embedding, old.get("embedding")):
         payload["embedding"] = embedding
-    if frontmatter_version is not None and frontmatter_version != old.get(
-        "frontmatter_version"
-    ):
+    if frontmatter_version is not None and frontmatter_version != old.get("frontmatter_version"):
         payload["frontmatter_version"] = frontmatter_version
     if model_lineage is not None:
         payload["model_lineage"] = model_lineage

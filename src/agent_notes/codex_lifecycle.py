@@ -146,9 +146,7 @@ def _format_orientation(payload: dict[str, Any]) -> str:
     resolved = payload.get("resolved_in_git")
     if isinstance(resolved, list) and resolved:
         identifiers = [
-            _redact(item.get("identifier", "?"))
-            for item in resolved[:10]
-            if isinstance(item, dict)
+            _redact(item.get("identifier", "?")) for item in resolved[:10] if isinstance(item, dict)
         ]
         lines.append("Resolved in git but still open: " + ", ".join(identifiers))
 

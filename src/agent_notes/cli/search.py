@@ -122,18 +122,15 @@ def cmd_search_all(args: argparse.Namespace) -> int:
             else:
                 print(f"{len(rows)} note(s) matched:")
                 for r in rows:
-                    score = r['score']
+                    score = r["score"]
                     print(
-                        f"- [{r['kind']}] **{r['identifier']}** — {r['title']}"
-                        f" (score={score:.3f})"
+                        f"- [{r['kind']}] **{r['identifier']}** — {r['title']} (score={score:.3f})"
                     )
         return EXIT_SUCCESS
 
     exact: list[dict[str, Any]] = [{**r, "source": "exact"} for r in rows]
 
-    learned, engine_name, warnings = _run_learned_recall(
-        args.query, proj_slug, ws_slug
-    )
+    learned, engine_name, warnings = _run_learned_recall(args.query, proj_slug, ws_slug)
 
     for w in warnings:
         print(w, file=sys.stderr)
@@ -159,9 +156,7 @@ def cmd_search_all(args: argparse.Namespace) -> int:
                     f" — {r['title']} (score={score:.3f})"
                 )
             for r in learned:
-                print(
-                    f"- [learned:{r['origin']}] {r['text']} (score={r['score']:.3f})"
-                )
+                print(f"- [learned:{r['origin']}] {r['text']} (score={r['score']:.3f})")
     return EXIT_SUCCESS
 
 

@@ -386,9 +386,7 @@ class TestForget:
         engine = _make_engine()
 
         with patch("urllib.request.OpenerDirector.open") as mock_open:
-            mock_open.side_effect = lambda req, timeout=None: _FakeResponse(
-                {"deleted_count": 42}
-            )
+            mock_open.side_effect = lambda req, timeout=None: _FakeResponse({"deleted_count": 42})
             result = engine.forget(ForgetSelector(scope=_SCOPE))
 
         assert result.deleted_count == 42

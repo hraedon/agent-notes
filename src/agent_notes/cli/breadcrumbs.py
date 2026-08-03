@@ -593,10 +593,7 @@ def cmd_bc_reconcile(args: argparse.Namespace) -> int:
         if r["applied"]:
             print(f"  Resolved {r['identifier']} — {r['commit']} {r['subject']!r}")
         elif args.apply and r["error"]:
-            print(
-                f"  Could not auto-close {r['identifier']} "
-                f"({r['current_status']}): {r['error']}"
-            )
+            print(f"  Could not auto-close {r['identifier']} ({r['current_status']}): {r['error']}")
         else:
             print(f"  Would resolve {r['identifier']} — {r['commit']} {r['subject']!r}")
     if not args.apply:

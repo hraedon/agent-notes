@@ -71,9 +71,7 @@ class TestNoteOutboxCapture:
     """Face-level (no Postgres): an unreachable append_note captures to the
     outbox and never surfaces failure to the caller."""
 
-    def test_offline_append_enqueues(
-        self, outbox_env, signer, actor, hmac_key_path
-    ) -> None:
+    def test_offline_append_enqueues(self, outbox_env, signer, actor, hmac_key_path) -> None:
         face = RegistaFace(InMemoryRegista(hmac_key_path=hmac_key_path))
         outface = OutboxAwareFace(
             face, project=_PROJECT, signer=signer, unreachable_probe=lambda: True
@@ -113,9 +111,7 @@ class TestNoteReconcileReplay:
     """An offline append captured to the outbox is replayed into regista on
     reconcile against a reachable face."""
 
-    def test_replay_creates_note_event(
-        self, outbox_env, signer, actor, hmac_key_path
-    ) -> None:
+    def test_replay_creates_note_event(self, outbox_env, signer, actor, hmac_key_path) -> None:
         face = RegistaFace(InMemoryRegista(hmac_key_path=hmac_key_path))
         outface = OutboxAwareFace(
             face, project=_PROJECT, signer=signer, unreachable_probe=lambda: True
@@ -139,9 +135,7 @@ class TestNoteReconcileReplay:
         assert events[0].transition == "note_filed"
         assert events[0].payload["name"] == "replay-me"
 
-    def test_replay_then_update_in_order(
-        self, outbox_env, signer, actor, hmac_key_path
-    ) -> None:
+    def test_replay_then_update_in_order(self, outbox_env, signer, actor, hmac_key_path) -> None:
         face = RegistaFace(InMemoryRegista(hmac_key_path=hmac_key_path))
         outface = OutboxAwareFace(
             face, project=_PROJECT, signer=signer, unreachable_probe=lambda: True

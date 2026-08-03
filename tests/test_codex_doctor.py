@@ -45,9 +45,7 @@ def test_codex_doctor_reports_current_direct_install(monkeypatch, tmp_path) -> N
 
 def test_codex_doctor_names_modified_skill(monkeypatch, tmp_path) -> None:
     _use_home(monkeypatch, tmp_path)
-    _install_harness_one(
-        "codex", dry_run=False, user=None, source=None, dest=None, home=tmp_path
-    )
+    _install_harness_one("codex", dry_run=False, user=None, source=None, dest=None, home=tmp_path)
     changed = tmp_path / ".agents" / "skills" / "start" / "SKILL.md"
     changed.write_text(changed.read_text(encoding="utf-8") + "\nlocal edit\n", encoding="utf-8")
 
@@ -60,9 +58,7 @@ def test_codex_doctor_names_modified_skill(monkeypatch, tmp_path) -> None:
 
 def test_codex_doctor_names_missing_skill(monkeypatch, tmp_path) -> None:
     _use_home(monkeypatch, tmp_path)
-    _install_harness_one(
-        "codex", dry_run=False, user=None, source=None, dest=None, home=tmp_path
-    )
+    _install_harness_one("codex", dry_run=False, user=None, source=None, dest=None, home=tmp_path)
     missing = tmp_path / ".agents" / "skills" / "reflect" / "SKILL.md"
     missing.unlink()
 
@@ -84,9 +80,7 @@ def test_codex_doctor_reports_plugin_and_trust_state(monkeypatch, tmp_path) -> N
 
 def test_codex_doctor_reports_plugin_direct_duplicate(monkeypatch, tmp_path) -> None:
     _use_home(monkeypatch, tmp_path, plugin_state="enabled")
-    _install_harness_one(
-        "codex", dry_run=False, user=None, source=None, dest=None, home=tmp_path
-    )
+    _install_harness_one("codex", dry_run=False, user=None, source=None, dest=None, home=tmp_path)
 
     ok, detail = _check_codex_harness()
 
@@ -96,9 +90,7 @@ def test_codex_doctor_reports_plugin_direct_duplicate(monkeypatch, tmp_path) -> 
 
 def test_codex_doctor_names_modified_hook(monkeypatch, tmp_path) -> None:
     _use_home(monkeypatch, tmp_path)
-    _install_harness_one(
-        "codex", dry_run=False, user=None, source=None, dest=None, home=tmp_path
-    )
+    _install_harness_one("codex", dry_run=False, user=None, source=None, dest=None, home=tmp_path)
     hook_path = tmp_path / ".codex" / "hooks.json"
     hooks = json.loads(hook_path.read_text())
     hooks["hooks"]["Stop"][0]["hooks"][0]["timeout"] = 99

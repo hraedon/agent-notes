@@ -249,19 +249,28 @@ class WorkItemModel:
                     force=True,
                 )
             return _regista.close_work_item(
-                face, project_id, identifier,
+                face,
+                project_id,
+                identifier,
                 actor_id=actor_id,
                 model_lineage=model_lineage,
             )
         if force:
             return _native.close_work_item_force(
-                project_id, identifier, actor_id, model_lineage=model_lineage,
+                project_id,
+                identifier,
+                actor_id,
+                model_lineage=model_lineage,
             )
         old = cls.get_work_item(project_id, identifier)
         if old is None:
             raise ValueError(f"Work item not found: {identifier!r} in project {project_id}")
         return _native.close_work_item_native_deferred(
-            project_id, identifier, old, actor_id, model_lineage=model_lineage,
+            project_id,
+            identifier,
+            old,
+            actor_id,
+            model_lineage=model_lineage,
         )
 
     @classmethod

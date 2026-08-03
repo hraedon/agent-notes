@@ -41,8 +41,7 @@ class _FakeCfg:
 def _db_not_found(schema: str) -> RegistaError:
     return RegistaError(
         ErrorCode.DB_NOT_FOUND,
-        f"Project schema {schema!r} does not exist. "
-        "Use Regista.create_project() to initialize it.",
+        f"Project schema {schema!r} does not exist. Use Regista.create_project() to initialize it.",
     )
 
 
@@ -96,6 +95,7 @@ class TestInitRefusal:
             raise _db_not_found("qual_workspace")
 
         monkeypatch.setattr(face_factory, "get_face", _raise)
+
         # init must not persist anything when it refuses.
         def _forbidden(*args, **kwargs):
             raise AssertionError("init persisted state despite refusing registration")

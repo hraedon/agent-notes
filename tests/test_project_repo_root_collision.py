@@ -44,9 +44,7 @@ def test_second_checkout_does_not_steal_repo_root():
 
 def test_relocate_opts_in_to_repointing():
     ws = _ws()
-    coredb.get_or_create_project(
-        ws.id, slug="gadget", name="gadget", repo_root="/projects/gadget"
-    )
+    coredb.get_or_create_project(ws.id, slug="gadget", name="gadget", repo_root="/projects/gadget")
 
     moved = coredb.get_or_create_project(
         ws.id, slug="gadget", name="gadget", repo_root="/srv/gadget", relocate=True
@@ -70,9 +68,7 @@ def test_first_registration_still_sets_the_root():
 
 def test_reinit_at_the_same_path_is_idempotent():
     ws = _ws()
-    coredb.get_or_create_project(
-        ws.id, slug="thing", name="thing", repo_root="/projects/thing"
-    )
+    coredb.get_or_create_project(ws.id, slug="thing", name="thing", repo_root="/projects/thing")
     again = coredb.get_or_create_project(
         ws.id, slug="thing", name="thing", repo_root="/projects/thing"
     )

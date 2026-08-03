@@ -485,7 +485,9 @@ def main() -> int:
         help="Emit the CLI contract manifest (contract §6 discovery)",
     )
     contract_p.add_argument(
-        "--json", action="store_true", default=True,
+        "--json",
+        action="store_true",
+        default=True,
         help="Emit as JSON (default; the manifest is always JSON)",
     )
 

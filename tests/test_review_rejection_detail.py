@@ -77,19 +77,13 @@ def _review_cmd(monkeypatch):
     """Stub resolution and make the model raise the wrapped rejection."""
 
     def _configure(use_json: bool) -> argparse.Namespace:
-        monkeypatch.setattr(
-            work_items, "_review_resolve", lambda args: (1, "proj", use_json)
-        )
+        monkeypatch.setattr(work_items, "_review_resolve", lambda args: (1, "proj", use_json))
 
         def _raise(cls, *args, **kwargs):
             raise _wrapped_rejection()
 
-        monkeypatch.setattr(
-            WorkItemModel, "review_transition", classmethod(_raise)
-        )
-        return argparse.Namespace(
-            identifier="QL-E2E-1", note="looks wrong", json=use_json
-        )
+        monkeypatch.setattr(WorkItemModel, "review_transition", classmethod(_raise))
+        return argparse.Namespace(identifier="QL-E2E-1", note="looks wrong", json=use_json)
 
     return _configure
 

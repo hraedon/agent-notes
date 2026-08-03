@@ -80,9 +80,7 @@ def _has_unnegated_match(pattern: re.Pattern[str], message: str) -> bool:
     return False
 
 
-def _is_foreign_project_match(
-    identifier: str, message: str, project_slug: str
-) -> bool:
+def _is_foreign_project_match(identifier: str, message: str, project_slug: str) -> bool:
     """True if the identifier appears in *message* prefixed by a *different*
     project slug (e.g. ``other-project:WI-022`` when *project_slug* is
     ``agent-suite``). Such matches indicate the commit is about a work item in

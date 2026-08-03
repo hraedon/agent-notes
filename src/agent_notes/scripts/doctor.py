@@ -561,8 +561,7 @@ def _check_codex_harness() -> tuple[bool | None, str]:
             return False, f"codex: plugin stale ({plugin_detail}; trust-unverified via /hooks)"
         if plugin_state == "unknown":
             return None, (
-                "codex: absent (no direct manifest; plugin state unavailable: "
-                f"{plugin_detail})"
+                f"codex: absent (no direct manifest; plugin state unavailable: {plugin_detail})"
             )
         return None, "codex: absent (no plugin and no direct-install ownership manifest)"
 
@@ -575,9 +574,7 @@ def _check_codex_harness() -> tuple[bool | None, str]:
         return False, "codex: stale (ownership manifest names a different harness)"
 
     try:
-        sources = {
-            path.parent.name: path for path in _discover_skills(_repo_skills_root())
-        }
+        sources = {path.parent.name: path for path in _discover_skills(_repo_skills_root())}
     except Exception as exc:
         return False, f"codex: stale (canonical skills unreadable: {type(exc).__name__})"
     if not sources:

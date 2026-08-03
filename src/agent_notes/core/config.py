@@ -112,9 +112,7 @@ def _aliased_env(canonical_env: str, legacy_env: str) -> str | None:
     return None
 
 
-def _aliased_suite(
-    suite: dict[str, str], canonical_env: str, legacy_env: str
-) -> str | None:
+def _aliased_suite(suite: dict[str, str], canonical_env: str, legacy_env: str) -> str | None:
     """Resolve a var from the suite.env dict (per-user > system merge).
 
     Prefers the canonical suite name, falling back to the legacy alias with a
@@ -132,9 +130,7 @@ def _aliased_suite(
     return None
 
 
-def _env_or_suite(
-    canonical_env: str, legacy_env: str, suite: dict[str, str]
-) -> str | None:
+def _env_or_suite(canonical_env: str, legacy_env: str, suite: dict[str, str]) -> str | None:
     """Resolve a shared suite fact through the full precedence chain.
 
     Precedence: process env (canonical > legacy) > suite.env (canonical > legacy).

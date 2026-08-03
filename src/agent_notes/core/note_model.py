@@ -64,6 +64,7 @@ class NoteProjectionError(Exception):
         self.regista_note_id = regista_note_id
         self.operation = operation
 
+
 KIND = "memory"
 
 _NOTE_FILED = "note_filed"
@@ -81,9 +82,7 @@ def _resolve_workspace(conn: psycopg.Connection, project_id: int) -> int:
     return row["workspace_id"]
 
 
-def _find_existing_note(
-    conn: psycopg.Connection, project_id: int, name: str
-) -> dict | None:
+def _find_existing_note(conn: psycopg.Connection, project_id: int, name: str) -> dict | None:
     cur = conn.cursor(row_factory=dict_row)
     cur.execute(
         "SELECT id, regista_note_id, memory_type, body, attributes, active "
@@ -221,9 +220,7 @@ def add_memory(
                     if getattr(face, "last_op_outboxed", False):
                         _mark_note_pending(conn, existing["regista_note_id"], True)
                     else:
-                        supersede_committed_id = uuid.UUID(
-                            str(existing["regista_note_id"])
-                        )
+                        supersede_committed_id = uuid.UUID(str(existing["regista_note_id"]))
 
             row = _mirror_note_to_projection(
                 conn,
@@ -268,9 +265,7 @@ def add_memory(
     return row
 
 
-def _mark_note_pending(
-    conn: psycopg.Connection, regista_note_id: Any, pending: bool
-) -> None:
+def _mark_note_pending(conn: psycopg.Connection, regista_note_id: Any, pending: bool) -> None:
     conn.execute(
         "UPDATE memories SET pending_sync = %s WHERE regista_note_id = %s",
         (pending, regista_note_id),
@@ -357,9 +352,7 @@ def update_memory(
                 identifier=name,
                 event="updated",
                 payload={
-                    "fields": [
-                        k for k in ("body", "attributes") if locals().get(k) is not None
-                    ]
+                    "fields": [k for k in ("body", "attributes") if locals().get(k) is not None]
                 },
             )
             conn.commit()
@@ -423,8 +416,7 @@ def delete_memory(
             ws_id = _resolve_workspace(conn, project_id)
             cur = conn.cursor(row_factory=dict_row)
             cur.execute(
-                "UPDATE memories SET active = false "
-                "WHERE id = %s RETURNING id",
+                "UPDATE memories SET active = false WHERE id = %s RETURNING id",
                 (existing["id"],),
             )
             row = cur.fetchone()
@@ -536,9 +528,14 @@ def rebuild_from_regista(
                             active = %s, updated_at = now()
                         WHERE id = %s
                         """,
-                        (memory_type, body,
-                         psycopg.types.json.Jsonb(folded["attributes"]),
-                         embedding, folded["active"], local["id"]),
+                        (
+                            memory_type,
+                            body,
+                            psycopg.types.json.Jsonb(folded["attributes"]),
+                            embedding,
+                            folded["active"],
+                            local["id"],
+                        ),
                     )
                     mirrored += 1
                 else:
@@ -549,17 +546,23 @@ def rebuild_from_regista(
                              embedding, active, attributes, regista_note_id)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
-                        (ws_id, project_id, folded["name"], memory_type,
-                         body, embedding, folded["active"],
-                         psycopg.types.json.Jsonb(folded["attributes"]), entity_id),
+                        (
+                            ws_id,
+                            project_id,
+                            folded["name"],
+                            memory_type,
+                            body,
+                            embedding,
+                            folded["active"],
+                            psycopg.types.json.Jsonb(folded["attributes"]),
+                            entity_id,
+                        ),
                     )
                     created += 1
                 conn.commit()
         except Exception:
             failed += 1
-            _log.warning(
-                "note rebuild failed for entity %s", entity_id, exc_info=True
-            )
+            _log.warning("note rebuild failed for entity %s", entity_id, exc_info=True)
 
     _restore_supersedes_chain(project_id, supersede_of)
 
@@ -681,9 +684,7 @@ def check_projection_drift(face: Any, *, project_id: int) -> dict:
             "WHERE project_id = %s AND regista_note_id IS NOT NULL",
             (project_id,),
         )
-        local_rows: dict[str, dict] = {
-            str(row["regista_note_id"]): row for row in cur.fetchall()
-        }
+        local_rows: dict[str, dict] = {str(row["regista_note_id"]): row for row in cur.fetchall()}
 
     local_ids = set(local_rows.keys())
     missing_locally = sorted(regista_ids - local_ids)
@@ -705,17 +706,13 @@ def check_projection_drift(face: Any, *, project_id: int) -> dict:
 
             # Compare active flag (catches crashed delete/supersede).
             if local["active"] != folded["active"]:
-                reasons.append(
-                    f"active: local={local['active']} authoritative={folded['active']}"
-                )
+                reasons.append(f"active: local={local['active']} authoritative={folded['active']}")
             # Compare body (catches crashed update).
             if folded["body"] and local["body"] != folded["body"]:
                 reasons.append("body mismatch")
             # Compare name (catches crashed rename via update).
             if folded["name"] and local["name"] != folded["name"]:
-                reasons.append(
-                    f"name: local={local['name']!r} authoritative={folded['name']!r}"
-                )
+                reasons.append(f"name: local={local['name']!r} authoritative={folded['name']!r}")
             # Compare memory_type (catches crashed type change).
             authoritative_type = _resolve_memory_type(folded)
             if local["memory_type"] != authoritative_type:
@@ -725,15 +722,15 @@ def check_projection_drift(face: Any, *, project_id: int) -> dict:
                 )
 
             if reasons:
-                stale.append({
-                    "entity_id": entity_id,
-                    "name": local["name"],
-                    "reasons": reasons,
-                })
+                stale.append(
+                    {
+                        "entity_id": entity_id,
+                        "name": local["name"],
+                        "reasons": reasons,
+                    }
+                )
         except Exception:
-            _log.warning(
-                "drift check failed for entity %s", entity_id, exc_info=True
-            )
+            _log.warning("drift check failed for entity %s", entity_id, exc_info=True)
 
     return {
         "drifted": len(missing_locally) + len(stale),
