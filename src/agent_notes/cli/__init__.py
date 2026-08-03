@@ -20,7 +20,12 @@ from regista._errors import ErrorCode, RegistaError
 from agent_notes.cli.admin import register_admin_parsers
 from agent_notes.cli.breadcrumbs import register_breadcrumb_parsers
 from agent_notes.cli.changes import register_changes_parsers
-from agent_notes.cli.common import EXIT_GENERIC, EXIT_NOT_CONFIGURED, EXIT_SUCCESS
+from agent_notes.cli.common import (
+    EXIT_CONFLICT,
+    EXIT_GENERIC,
+    EXIT_NOT_CONFIGURED,
+    EXIT_SUCCESS,
+)
 from agent_notes.cli.events import register_events_parsers
 from agent_notes.cli.export import register_export_parsers
 from agent_notes.cli.harness import register_harness_parser
@@ -178,6 +183,7 @@ def cmd_init(
     workspace_slug: str | None = None,
     install_hooks: bool = True,
     slug: str | None = None,
+    relocate: bool = False,
 ) -> int:
     target = os.path.abspath(path or ".")
 
@@ -219,7 +225,32 @@ def cmd_init(
     ws_slug = workspace_slug or "default"
     ws_name = ws_slug.replace("-", " ").title()
     ws = get_or_create_workspace(ws_slug, ws_name)
-    get_or_create_project(ws.id, slug=name, name=name, repo_root=repo_root)
+    proj = get_or_create_project(
+        ws.id, slug=name, name=name, repo_root=repo_root, relocate=relocate
+    )
+    if proj.repo_root != repo_root:
+        # Slug collision: another checkout of the same-named repo already owns
+        # this slug. Repointing would drag every work item and memory to the
+        # new path, so refuse and say so — silently succeeding here is what
+        # stranded usage-dashboard behind a deleted /tmp clone.
+        print(
+            f"Error: project '{name}' is already registered at {proj.repo_root!r}, "
+            f"not {repo_root!r}. Nothing was changed.",
+            file=sys.stderr,
+        )
+        print(
+            "  Two checkouts of the same repo share a slug (it defaults to the "
+            "directory basename). If this checkout is scratch (a /tmp clone, a "
+            "worktree, a CI checkout), register it under a different --slug or "
+            "leave it unregistered.",
+            file=sys.stderr,
+        )
+        print(
+            f"  If the project genuinely moved, re-run with: "
+            f"agent-notes init {repo_root} --relocate",
+            file=sys.stderr,
+        )
+        return EXIT_CONFLICT
     print(f"Project '{name}' registered (workspace={ws_slug}, repo_root={repo_root}).")
 
     if install_hooks:
@@ -392,6 +423,15 @@ def main() -> int:
     init_p.add_argument("path", nargs="?", default=".")
     init_p.add_argument("--workspace", default=None, help="Workspace slug (default: default)")
     init_p.add_argument(
+        "--relocate",
+        action="store_true",
+        help=(
+            "Repoint an already-registered project at this path. Required when "
+            "the slug is taken, because moving the root moves every work item "
+            "and memory with it"
+        ),
+    )
+    init_p.add_argument(
         "--slug",
         default=None,
         help=(
@@ -461,6 +501,7 @@ def main() -> int:
             workspace_slug=args.workspace,
             install_hooks=not args.no_hooks,
             slug=args.slug,
+            relocate=args.relocate,
         )
     if args.command == "resolve":
         return cmd_resolve(args.path, args.json)
