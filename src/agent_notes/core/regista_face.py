@@ -355,6 +355,7 @@ class RegistaFace:
             ac["actor_id"],
             ttl_seconds,
             actor_kind=ac["actor_kind"],
+            actor_metadata=ac["actor_metadata"],
         )
 
     def heartbeat_claim(self, actor: Actor, work_item_id: Any, *, ttl_seconds: int = 300) -> Any:
@@ -364,6 +365,7 @@ class RegistaFace:
             ac["actor_id"],
             ttl_seconds,
             actor_kind=ac["actor_kind"],
+            actor_metadata=ac["actor_metadata"],
         )
 
     def release_claim(self, actor: Actor, work_item_id: Any) -> None:
@@ -372,6 +374,7 @@ class RegistaFace:
             work_item_id,
             ac["actor_id"],
             actor_kind=ac["actor_kind"],
+            actor_metadata=ac["actor_metadata"],
         )
 
 

@@ -400,6 +400,64 @@ class TestRegistaWriteThrough:
             reg.close()
 
 
+class TestClaimLineage:
+    """WI-253: the three claim face methods must propagate actor_metadata
+    (which carries model_lineage) onto their claim events, mirroring every
+    other face method. Pre-fix the claim_acquired / claim_heartbeat /
+    claim_released events drop actor_metadata — so model_lineage is None and
+    the WI-248 live benefit is not realized in the CLI path.
+    """
+
+    def test_claim_heartbeat_release_propagate_model_lineage(
+        self, default_project, hmac_key_path, monkeypatch
+    ):
+        monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "longcat")
+
+        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        face = RegistaFace(reg)
+        reset_face()
+        set_face_for_test(face)
+
+        try:
+            wi = WorkItemModel.file_work_item(
+                project_id=default_project.id,
+                identifier="WI-REG-LINEAGE",
+                title="Lineage test",
+                status="open",
+                embedding=_vec768(),
+            )
+            regista_id = wi["regista_work_item_id"]
+
+            # claim → claim_acquired event must carry model_lineage
+            WorkItemModel.claim_work_item(default_project.id, "WI-REG-LINEAGE")
+            events = face.history(regista_id)
+            acquired = [e for e in events if e.transition == "claim_acquired"]
+            assert len(acquired) == 1
+            assert acquired[0].actor_metadata is not None
+            assert acquired[0].actor_metadata.get("model_lineage") == "longcat"
+
+            # heartbeat → claim_heartbeat event must carry model_lineage
+            WorkItemModel.heartbeat_work_item(default_project.id, "WI-REG-LINEAGE")
+            events = face.history(regista_id)
+            heartbeat = [e for e in events if e.transition == "claim_heartbeat"]
+            assert len(heartbeat) == 1
+            assert heartbeat[0].actor_metadata is not None
+            assert heartbeat[0].actor_metadata.get("model_lineage") == "longcat"
+
+            # release → claim_released event must carry model_lineage
+            WorkItemModel.release_work_item(default_project.id, "WI-REG-LINEAGE")
+            events = face.history(regista_id)
+            released = [e for e in events if e.transition == "claim_released"]
+            assert len(released) == 1
+            assert released[0].actor_metadata is not None
+            assert released[0].actor_metadata.get("model_lineage") == "longcat"
+        finally:
+            reset_face()
+            reg.close()
+
+
 class TestMigrateToRegista:
     def test_migration_creates_regista_items_and_records_id(
         self, default_project, hmac_key_path, monkeypatch
