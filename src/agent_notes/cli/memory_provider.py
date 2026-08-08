@@ -211,22 +211,22 @@ def cmd_memory_provider_doctor(args: argparse.Namespace) -> int:
         ]
         if degraded:
             lines.append("Degraded: true")
-        lines.extend([
-            f"Version: {health.version or '(unknown)'}",
-            f"Detail: {health.detail}",
-            f"Capabilities: {caps}",
-            f"Indexing Backlog: {health.indexing_backlog}",
-            f"Indexing Freshness: {health.indexing_freshness or '(none)'}",
-        ])
+        lines.extend(
+            [
+                f"Version: {health.version or '(unknown)'}",
+                f"Detail: {health.detail}",
+                f"Capabilities: {caps}",
+                f"Indexing Backlog: {health.indexing_backlog}",
+                f"Indexing Freshness: {health.indexing_freshness or '(none)'}",
+            ]
+        )
         print("\n".join(lines))
 
     return EXIT_SUCCESS if ok else EXIT_GENERIC
 
 
 def register_memory_provider_parsers(sub: argparse._SubParsersAction) -> None:
-    mp = sub.add_parser(
-        "memory-provider", help="Memory provider engine operations"
-    )
+    mp = sub.add_parser("memory-provider", help="Memory provider engine operations")
     mp_sub = mp.add_subparsers(dest="mem_prov_cmd")
 
     mp_describe = mp_sub.add_parser(

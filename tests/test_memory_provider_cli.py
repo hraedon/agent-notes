@@ -41,7 +41,9 @@ def default_project():
 
 def test_describe_native_returns_engine_and_health():
     result = _run(
-        "memory-provider", "describe", "--json",
+        "memory-provider",
+        "describe",
+        "--json",
         env={"AGENT_NOTES_MEMORY_ENGINE": "native"},
         check=False,
     )
@@ -54,7 +56,9 @@ def test_describe_native_returns_engine_and_health():
 
 def test_describe_native_capabilities():
     result = _run(
-        "memory-provider", "describe", "--json",
+        "memory-provider",
+        "describe",
+        "--json",
         env={"AGENT_NOTES_MEMORY_ENGINE": "native"},
         check=False,
     )
@@ -69,7 +73,9 @@ def test_describe_native_capabilities():
 
 def test_describe_native_version():
     result = _run(
-        "memory-provider", "describe", "--json",
+        "memory-provider",
+        "describe",
+        "--json",
         env={"AGENT_NOTES_MEMORY_ENGINE": "native"},
         check=False,
     )
@@ -85,7 +91,9 @@ def test_describe_native_version():
 
 def test_doctor_native_ok():
     result = _run(
-        "memory-provider", "doctor", "--json",
+        "memory-provider",
+        "doctor",
+        "--json",
         env={"AGENT_NOTES_MEMORY_ENGINE": "native"},
         check=False,
     )
@@ -99,7 +107,9 @@ def test_doctor_native_ok():
 
 def test_doctor_native_capabilities():
     result = _run(
-        "memory-provider", "doctor", "--json",
+        "memory-provider",
+        "doctor",
+        "--json",
         env={"AGENT_NOTES_MEMORY_ENGINE": "native"},
         check=False,
     )
@@ -112,7 +122,9 @@ def test_doctor_native_capabilities():
 
 def test_doctor_hindsight_unreachable():
     result = _run(
-        "memory-provider", "doctor", "--json",
+        "memory-provider",
+        "doctor",
+        "--json",
         env={
             "AGENT_NOTES_MEMORY_ENGINE": "hindsight",
             "HINDSIGHT_URL": "http://127.0.0.1:1",
@@ -129,7 +141,9 @@ def test_doctor_hindsight_unreachable():
 
 def test_doctor_hindsight_not_configured():
     result = _run(
-        "memory-provider", "doctor", "--json",
+        "memory-provider",
+        "doctor",
+        "--json",
         env={"AGENT_NOTES_MEMORY_ENGINE": "hindsight"},
         check=False,
     )
@@ -146,7 +160,9 @@ def test_doctor_hindsight_not_configured():
 
 def test_configure_native_via_env():
     result = _run(
-        "memory-provider", "configure", "--json",
+        "memory-provider",
+        "configure",
+        "--json",
         env={"AGENT_NOTES_MEMORY_ENGINE": "native"},
         check=False,
     )
@@ -167,7 +183,9 @@ def test_configure_default():
     hermeticity to whatever the process env happened to carry (WI-029).
     """
     result = _run(
-        "memory-provider", "configure", "--json",
+        "memory-provider",
+        "configure",
+        "--json",
         check=False,
     )
     assert result.returncode == 0, result.stderr
@@ -178,7 +196,9 @@ def test_configure_default():
 
 def test_configure_hindsight_redacts_api_key():
     result = _run(
-        "memory-provider", "configure", "--json",
+        "memory-provider",
+        "configure",
+        "--json",
         env={
             "AGENT_NOTES_MEMORY_ENGINE": "hindsight",
             "HINDSIGHT_URL": "http://example.com:8080",
@@ -210,7 +230,8 @@ def test_suite_doctor_includes_memory_provider_native():
     """The suite doctor JSON includes a memory_provider check that is skip
     for the default native engine (native health is covered by dsn_reachable)."""
     result = _run(
-        "doctor", "--json",
+        "doctor",
+        "--json",
         env={"AGENT_NOTES_MEMORY_ENGINE": "native"},
         check=False,
     )
@@ -225,7 +246,8 @@ def test_suite_doctor_memory_provider_fails_on_unreachable_hindsight():
     """When an external engine is configured but unreachable, the suite
     doctor reports it as a failure (not skip)."""
     result = _run(
-        "doctor", "--json",
+        "doctor",
+        "--json",
         env={
             "AGENT_NOTES_MEMORY_ENGINE": "hindsight",
             "HINDSIGHT_URL": "http://127.0.0.1:1",

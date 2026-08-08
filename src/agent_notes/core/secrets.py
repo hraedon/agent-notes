@@ -170,9 +170,7 @@ def resolve_dsn(value: Optional[str]) -> Optional[str]:
     try:
         result = _resolver().resolve_str(normalized)
     except Exception as exc:
-        raise RuntimeError(
-            f"Failed to resolve DSN secret: {type(exc).__name__}"
-        ) from None
+        raise RuntimeError(f"Failed to resolve DSN secret: {type(exc).__name__}") from None
     if prefix in _REMOTE_PROVIDERS and result == normalized:
         raise RuntimeError(
             f"DSN ref did not resolve — provider '{prefix}' may be missing its "
@@ -232,9 +230,7 @@ def materialize_key_manifest(
         # Validation raises a clear, ref-safe message; let it through unchanged.
         raise
     except Exception as exc:
-        raise RuntimeError(
-            f"Failed to resolve key-set manifest: {type(exc).__name__}"
-        ) from None
+        raise RuntimeError(f"Failed to resolve key-set manifest: {type(exc).__name__}") from None
     path = _write_temp_manifest(data)
     return str(path), _make_cleanup(path)
 
@@ -267,9 +263,7 @@ def _validate_manifest_bytes(data: bytes) -> None:
             "installed, the prefix is lowercase, and the backend is reachable"
         ) from None
     if not isinstance(parsed, dict) or not isinstance(parsed.get("keys"), list):
-        raise RuntimeError(
-            "key-set manifest must be a JSON object with a 'keys' array"
-        )
+        raise RuntimeError("key-set manifest must be a JSON object with a 'keys' array")
 
 
 # ---------------------------------------------------------------------------

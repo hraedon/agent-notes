@@ -27,12 +27,14 @@ from agent_notes.core.memory_engine import (
     RecallResult,
 )
 
-_CAPABILITIES = frozenset({
-    EngineCapability.INGEST,
-    EngineCapability.RECALL,
-    EngineCapability.FORGET,
-    EngineCapability.EXACT_SOURCE,
-})
+_CAPABILITIES = frozenset(
+    {
+        EngineCapability.INGEST,
+        EngineCapability.RECALL,
+        EngineCapability.FORGET,
+        EngineCapability.EXACT_SOURCE,
+    }
+)
 
 _PROTOCOL_VERSION = "1.0"
 
@@ -72,8 +74,7 @@ def _resolve_scope(scope: MemoryScope) -> tuple[int, int]:
     )
     if proj is None:
         raise ValueError(
-            f"Project '{scope.project_slug}' not found in workspace "
-            f"'{scope.workspace_slug}'"
+            f"Project '{scope.project_slug}' not found in workspace '{scope.workspace_slug}'"
         )
     return ws.id, proj.id
 

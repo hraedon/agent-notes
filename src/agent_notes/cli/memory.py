@@ -65,8 +65,7 @@ def cmd_mem_add(args: argparse.Namespace) -> int:
             use_json=use_json,
             detail=(
                 f"The note event is committed in regista "
-                f"(entity_id={exc.regista_note_id}). "
-                + _RECOVERY_HINT.format(proj_slug=proj_slug)
+                f"(entity_id={exc.regista_note_id}). " + _RECOVERY_HINT.format(proj_slug=proj_slug)
             ),
             exit_code=EXIT_GENERIC,
         )
@@ -207,8 +206,7 @@ def cmd_mem_delete(args: argparse.Namespace) -> int:
             use_json=use_json,
             detail=(
                 f"The note event is committed in regista "
-                f"(entity_id={exc.regista_note_id}). "
-                + _RECOVERY_HINT.format(proj_slug=proj_slug)
+                f"(entity_id={exc.regista_note_id}). " + _RECOVERY_HINT.format(proj_slug=proj_slug)
             ),
             exit_code=EXIT_GENERIC,
         )
@@ -262,8 +260,7 @@ def cmd_mem_update(args: argparse.Namespace) -> int:
             use_json=use_json,
             detail=(
                 f"The note event is committed in regista "
-                f"(entity_id={exc.regista_note_id}). "
-                + _RECOVERY_HINT.format(proj_slug=proj_slug)
+                f"(entity_id={exc.regista_note_id}). " + _RECOVERY_HINT.format(proj_slug=proj_slug)
             ),
             exit_code=EXIT_GENERIC,
         )
@@ -373,8 +370,10 @@ def cmd_mem_check_drift(args: argparse.Namespace) -> int:
             for entity_id in drift["missing_entity_ids"]:
                 print(f"  missing locally: {entity_id}")
             for entry in drift["stale"]:
-                print(f"  stale: {entry['entity_id']} ({entry['name']}): "
-                      f"{'; '.join(entry['reasons'])}")
+                print(
+                    f"  stale: {entry['entity_id']} ({entry['name']}): "
+                    f"{'; '.join(entry['reasons'])}"
+                )
             print(f"Run 'agent-notes memory rebuild-from-regista --project {proj_slug}' to repair.")
     # Exit nonzero when drift exists so monitoring can gate on the result.
     # The structured JSON is still emitted (above) for programmatic consumption.

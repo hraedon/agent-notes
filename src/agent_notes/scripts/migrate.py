@@ -169,9 +169,7 @@ def list_schema(*, as_json: bool) -> None:
                 json.dumps(
                     {
                         "origin": str(directory),
-                        "files": [
-                            {"name": f.name, "bytes": f.stat().st_size} for f in sql_files
-                        ],
+                        "files": [{"name": f.name, "bytes": f.stat().st_size} for f in sql_files],
                     },
                     indent=2,
                 )

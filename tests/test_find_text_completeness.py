@@ -53,9 +53,7 @@ def find_project():
     """A fresh project per test (the session DB accumulates rows)."""
     ws = coredb.get_or_create_workspace("default", "Default Workspace")
     slug = f"findproj-{uuid.uuid4().hex[:8]}"
-    return coredb.get_or_create_project(
-        ws.id, slug=slug, name=slug, repo_root=f"/projects/{slug}"
-    )
+    return coredb.get_or_create_project(ws.id, slug=slug, name=slug, repo_root=f"/projects/{slug}")
 
 
 def _file(project_id: int, identifier: str, title: str, embedding) -> None:

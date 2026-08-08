@@ -120,9 +120,7 @@ class TestAddMemorySplitBrain:
             reset_face()
             face.close()
 
-    def test_recovery_via_rebuild_from_regista(
-        self, default_project, hmac_key_path, monkeypatch
-    ):
+    def test_recovery_via_rebuild_from_regista(self, default_project, hmac_key_path, monkeypatch):
         """After a split-brain add, rebuild_from_regista recovers the local
         projection — the note reappears with the correct body."""
         face = _setup_face(hmac_key_path, monkeypatch)
@@ -275,9 +273,7 @@ class TestUpdateMemorySplitBrain:
             reset_face()
             face.close()
 
-    def test_update_recovery_via_rebuild(
-        self, default_project, hmac_key_path, monkeypatch
-    ):
+    def test_update_recovery_via_rebuild(self, default_project, hmac_key_path, monkeypatch):
         """After a split-brain update, rebuild_from_regista applies the
         note_updated event and the local projection reflects the new body."""
         face = _setup_face(hmac_key_path, monkeypatch)
@@ -382,9 +378,7 @@ class TestDeleteMemorySplitBrain:
             reset_face()
             face.close()
 
-    def test_delete_recovery_via_rebuild(
-        self, default_project, hmac_key_path, monkeypatch
-    ):
+    def test_delete_recovery_via_rebuild(self, default_project, hmac_key_path, monkeypatch):
         """After a split-brain delete, rebuild_from_regista applies the
         note_deleted event and the local row is marked inactive."""
         face = _setup_face(hmac_key_path, monkeypatch)
@@ -531,8 +525,12 @@ class TestCliEndToEndRecovery:
                 ),
             ):
                 ns_add = argparse.Namespace(
-                    workspace=None, project=None, path="/projects/sf2",
-                    json=True, name="e2e-recovery", type="note",
+                    workspace=None,
+                    project=None,
+                    path="/projects/sf2",
+                    json=True,
+                    name="e2e-recovery",
+                    type="note",
                     body="This note must survive the split-brain.",
                     attributes=None,
                 )
@@ -557,7 +555,9 @@ class TestCliEndToEndRecovery:
                 return_value=np.zeros(768),
             ):
                 ns_rebuild = argparse.Namespace(
-                    workspace=None, project=None, path="/projects/sf2",
+                    workspace=None,
+                    project=None,
+                    path="/projects/sf2",
                     json=True,
                 )
                 rc_rebuild = cmd_mem_rebuild(ns_rebuild)
@@ -776,9 +776,7 @@ class TestProjectionDriftCheck:
             reset_face()
             face.close()
 
-    def test_drift_detects_stale_update(
-        self, default_project, hmac_key_path, monkeypatch
-    ):
+    def test_drift_detects_stale_update(self, default_project, hmac_key_path, monkeypatch):
         """Simulates a hard crash on update: the regista note_updated event
         commits but the local row still has the old body. The drift check
         reports a stale entity with a body mismatch reason."""
@@ -809,8 +807,7 @@ class TestProjectionDriftCheck:
 
             with _conn() as conn:
                 conn.execute(
-                    "UPDATE memories SET body = 'Original body' "
-                    "WHERE regista_note_id = %s",
+                    "UPDATE memories SET body = 'Original body' WHERE regista_note_id = %s",
                     (note_id,),
                 )
                 conn.commit()
@@ -825,9 +822,7 @@ class TestProjectionDriftCheck:
             reset_face()
             face.close()
 
-    def test_drift_detects_stale_delete(
-        self, default_project, hmac_key_path, monkeypatch
-    ):
+    def test_drift_detects_stale_delete(self, default_project, hmac_key_path, monkeypatch):
         """Simulates a hard crash on delete: the regista note_deleted event
         commits but the local row is still active. The drift check reports a
         stale entity with an active mismatch reason."""
@@ -903,7 +898,10 @@ class TestProjectionDriftCheck:
                 conn.commit()
 
             ns = argparse.Namespace(
-                workspace=None, project=None, path="/projects/sf2", json=True,
+                workspace=None,
+                project=None,
+                path="/projects/sf2",
+                json=True,
             )
             rc = cmd_mem_check_drift(ns)
             assert rc != 0, "check-drift must exit nonzero when drift exists"
@@ -936,7 +934,10 @@ class TestProjectionDriftCheck:
                 embedding=[0.0] * 768,
             )
             ns = argparse.Namespace(
-                workspace=None, project=None, path="/projects/sf2", json=True,
+                workspace=None,
+                project=None,
+                path="/projects/sf2",
+                json=True,
             )
             rc = cmd_mem_check_drift(ns)
             assert rc == 0, "check-drift must exit 0 when no drift"

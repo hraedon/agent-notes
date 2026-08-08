@@ -278,9 +278,7 @@ def _validated_credentials(credentials: Mapping[str, str] | None) -> dict[str, s
         if not isinstance(name, str) or not name.strip():
             raise ValueError("credential env-var name must be a non-empty string")
         if name in _PROTECTED_ENV:
-            raise ValueError(
-                f"credential env-var {name!r} is reserved for the reviewer sandbox"
-            )
+            raise ValueError(f"credential env-var {name!r} is reserved for the reviewer sandbox")
         if not isinstance(value, str) or not value:
             raise ValueError(f"credential value for {name!r} must be a non-empty string")
         validated[name] = value

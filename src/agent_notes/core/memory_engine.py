@@ -471,8 +471,7 @@ def get_engine() -> MemoryEngine:
             return HindsightEngine.from_config()
         case other:
             raise ValueError(
-                f"Unknown memory engine '{other}'. "
-                f"Set {_PROVIDER_ENV} to 'native' or 'hindsight'."
+                f"Unknown memory engine '{other}'. Set {_PROVIDER_ENV} to 'native' or 'hindsight'."
             )
 
 

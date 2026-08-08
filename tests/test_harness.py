@@ -430,9 +430,7 @@ def test_codex_install_writes_skills_and_owned_hooks_but_no_toml_config():
         assert hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"] == (
             "agent-notes codex-hook session-start"
         )
-        assert hooks["hooks"]["Stop"][0]["hooks"][0]["command"] == (
-            "agent-notes codex-hook stop"
-        )
+        assert hooks["hooks"]["Stop"][0]["hooks"][0]["command"] == ("agent-notes codex-hook stop")
         # No env leaked into the agent-notes config file either.
         assert not config_path(home=td).exists()
         # Manifest stays under $CODEX_HOME as a stable ownership sidecar and
@@ -587,9 +585,7 @@ def test_codex_modified_owned_hook_is_preserved_and_reported():
         assert reinstall.returncode == 1
         assert json.loads(reinstall.stdout)["status"] == "failed"
         assert "locally modified" in reinstall.stderr
-        assert json.loads(hooks_path.read_text())["hooks"]["Stop"][0]["hooks"][0][
-            "timeout"
-        ] == 99
+        assert json.loads(hooks_path.read_text())["hooks"]["Stop"][0]["hooks"][0]["timeout"] == 99
 
         uninstall = _run(
             "install-harness", "codex", "--uninstall", "--home", str(td), "--json", check=False
@@ -1529,8 +1525,15 @@ def test_agent_backward_compat_old_manifest_uninstall():
         src = _make_skill_tree(td)
         _make_opencode_agents(td)
         _run(
-            "install-harness", "opencode", "--source", str(src), "--home", str(td), "--json",
-            env=_SUITE_ENV, check=False,
+            "install-harness",
+            "opencode",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            env=_SUITE_ENV,
+            check=False,
         )
         # Overwrite manifest agents with old list format.
         man_path = td / ".config" / "opencode" / ".agent-notes-harness.json"
@@ -1539,7 +1542,12 @@ def test_agent_backward_compat_old_manifest_uninstall():
         man_path.write_text(json.dumps(man))
 
         result = _run(
-            "install-harness", "opencode", "--uninstall", "--home", str(td), "--json",
+            "install-harness",
+            "opencode",
+            "--uninstall",
+            "--home",
+            str(td),
+            "--json",
             check=False,
         )
         assert result.returncode == 0
@@ -1557,9 +1565,16 @@ def test_corrupted_manifest_dry_run_does_not_crash():
         man_path.parent.mkdir(parents=True, exist_ok=True)
         man_path.write_text("{invalid json")
         result = _run(
-            "install-harness", "claude", "--dry-run",
-            "--source", str(src), "--home", str(td), "--json",
-            env=_SUITE_ENV, check=False,
+            "install-harness",
+            "claude",
+            "--dry-run",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            env=_SUITE_ENV,
+            check=False,
         )
         assert result.returncode == 2
         assert "could not read manifest" in result.stderr
@@ -1575,9 +1590,15 @@ def test_corrupted_manifest_non_dry_run_exits_1():
         man_path.parent.mkdir(parents=True, exist_ok=True)
         man_path.write_text("{invalid json")
         result = _run(
-            "install-harness", "claude",
-            "--source", str(src), "--home", str(td), "--json",
-            env=_SUITE_ENV, check=False,
+            "install-harness",
+            "claude",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            env=_SUITE_ENV,
+            check=False,
         )
         assert result.returncode == 1
 
@@ -1602,7 +1623,13 @@ def test_agent_uninstall_then_reinstall_preserves_modified():
         src = _make_skill_tree(td)
         _make_opencode_agents(td)
         common = [
-            "install-harness", "opencode", "--source", str(src), "--home", str(td), "--json",
+            "install-harness",
+            "opencode",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
         ]
         _run(*common, env=_SUITE_ENV, check=False)
 
@@ -1611,7 +1638,12 @@ def test_agent_uninstall_then_reinstall_preserves_modified():
 
         # Uninstall: agent preserved, reduced manifest retained.
         _run(
-            "install-harness", "opencode", "--uninstall", "--home", str(td), "--json",
+            "install-harness",
+            "opencode",
+            "--uninstall",
+            "--home",
+            str(td),
+            "--json",
             check=False,
         )
         assert agent_file.is_file()
@@ -1651,15 +1683,27 @@ def test_uninstall_preserved_returns_exit_1():
         td = Path(td)
         src = _make_skill_tree(td)
         _run(
-            "install-harness", "claude", "--source", str(src), "--home", str(td), "--json",
-            env=_SUITE_ENV, check=False,
+            "install-harness",
+            "claude",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            env=_SUITE_ENV,
+            check=False,
         )
 
         skill_file = td / ".claude" / "skills" / "demo" / "SKILL.md"
         skill_file.write_text("---\nname: demo\n---\nuser edit\n")
 
         result = _run(
-            "install-harness", "claude", "--uninstall", "--home", str(td), "--json",
+            "install-harness",
+            "claude",
+            "--uninstall",
+            "--home",
+            str(td),
+            "--json",
             check=False,
         )
         assert result.returncode == 1
@@ -1695,15 +1739,27 @@ def test_non_utf8_uninstall_does_not_crash():
         td = Path(td)
         src = _make_skill_tree(td)
         _run(
-            "install-harness", "claude", "--source", str(src), "--home", str(td), "--json",
-            env=_SUITE_ENV, check=False,
+            "install-harness",
+            "claude",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            env=_SUITE_ENV,
+            check=False,
         )
 
         skill_file = td / ".claude" / "skills" / "demo" / "SKILL.md"
         skill_file.write_bytes(b"\x80\x81\x82binary")
 
         result = _run(
-            "install-harness", "claude", "--uninstall", "--home", str(td), "--json",
+            "install-harness",
+            "claude",
+            "--uninstall",
+            "--home",
+            str(td),
+            "--json",
             check=False,
         )
         assert result.returncode == 1

@@ -31,9 +31,7 @@ def _isolated_config(monkeypatch, tmp_path):
 def _run_main(monkeypatch, *argv: str) -> list[tuple[str, object]]:
     """Run migrate.main() with *argv*, capturing run_all calls."""
     calls: list[tuple[str, object]] = []
-    monkeypatch.setattr(
-        migrate, "run_all", lambda dsn, schema_dir: calls.append((dsn, schema_dir))
-    )
+    monkeypatch.setattr(migrate, "run_all", lambda dsn, schema_dir: calls.append((dsn, schema_dir)))
     monkeypatch.setattr("sys.argv", ["agent-notes-migrate", *argv])
     migrate.main()
     return calls

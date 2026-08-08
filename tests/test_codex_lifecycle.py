@@ -107,9 +107,7 @@ def test_stop_reconciles_once_and_never_requests_continuation(monkeypatch, tmp_p
     assert lifecycle.run_stop(_stop_payload(tmp_path)) == {"continue": True}
     assert calls == [tmp_path]
 
-    assert lifecycle.run_stop(_stop_payload(tmp_path, stop_hook_active=True)) == {
-        "continue": True
-    }
+    assert lifecycle.run_stop(_stop_payload(tmp_path, stop_hook_active=True)) == {"continue": True}
     assert calls == [tmp_path]
 
 

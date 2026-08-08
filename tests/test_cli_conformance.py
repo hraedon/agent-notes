@@ -51,15 +51,11 @@ def _assert_cases_declared(
     if not named_groups:
         raise AssertionError("the conformance guard protects no case dimensions")
     short = sorted(
-        (name, len(group))
-        for name, group in named_groups.items()
-        if len(group) < minimum
+        (name, len(group)) for name, group in named_groups.items() if len(group) < minimum
     )
     if short:
         which = ", ".join(f"{name} ({count})" for name, count in short)
-        raise AssertionError(
-            f"conformance dimensions below minimum {minimum}: {which}"
-        )
+        raise AssertionError(f"conformance dimensions below minimum {minimum}: {which}")
 
 
 SUCCESS_CASES = [

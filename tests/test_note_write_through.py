@@ -100,9 +100,7 @@ class TestNoteWriteThrough:
             reset_face()
             reg.close()
 
-    def test_local_projection_mirrors_entity(
-        self, default_project, hmac_key_path, monkeypatch
-    ):
+    def test_local_projection_mirrors_entity(self, default_project, hmac_key_path, monkeypatch):
         """The local memories table is a projection of the signed entity."""
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
         monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
@@ -274,9 +272,7 @@ class TestNoteWriteThrough:
             reset_face()
             reg.close()
 
-    def test_reflection_writes_as_note_entity(
-        self, default_project, hmac_key_path, monkeypatch
-    ):
+    def test_reflection_writes_as_note_entity(self, default_project, hmac_key_path, monkeypatch):
         """A reflection (memory_type='reflection') writes as a note entity."""
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
         monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
@@ -305,9 +301,7 @@ class TestNoteWriteThrough:
             reset_face()
             reg.close()
 
-    def test_pgvector_rebuilds_from_entities(
-        self, default_project, hmac_key_path, monkeypatch
-    ):
+    def test_pgvector_rebuilds_from_entities(self, default_project, hmac_key_path, monkeypatch):
         """AC: the pgvector index rebuilds from the entities."""
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
         monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
@@ -432,8 +426,7 @@ class TestMemoryTypeRoundTrip:
             with _conn() as conn:
                 cur = conn.cursor(row_factory=dict_row)
                 cur.execute(
-                    "SELECT memory_type FROM memories "
-                    "WHERE regista_note_id = %s AND active = true",
+                    "SELECT memory_type FROM memories WHERE regista_note_id = %s AND active = true",
                     (note_id,),
                 )
                 row = cur.fetchone()
@@ -443,9 +436,7 @@ class TestMemoryTypeRoundTrip:
             reset_face()
             reg.close()
 
-    def test_reflection_subtype_round_trips(
-        self, default_project, hmac_key_path, monkeypatch
-    ):
+    def test_reflection_subtype_round_trips(self, default_project, hmac_key_path, monkeypatch):
         """A reflection stays 'reflection' across the round-trip."""
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
         monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
@@ -482,8 +473,7 @@ class TestMemoryTypeRoundTrip:
             with _conn() as conn:
                 cur = conn.cursor(row_factory=dict_row)
                 cur.execute(
-                    "SELECT memory_type FROM memories "
-                    "WHERE regista_note_id = %s AND active = true",
+                    "SELECT memory_type FROM memories WHERE regista_note_id = %s AND active = true",
                     (note_id,),
                 )
                 row = cur.fetchone()
@@ -498,9 +488,7 @@ class TestWikilinksOnRegistaPath:
     """The regista write path auto-creates [[wikilink]] relates_to links,
     matching the legacy local-only path (review fix #3)."""
 
-    def test_wikilinks_created_on_regista_path(
-        self, default_project, hmac_key_path, monkeypatch
-    ):
+    def test_wikilinks_created_on_regista_path(self, default_project, hmac_key_path, monkeypatch):
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
         monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
 

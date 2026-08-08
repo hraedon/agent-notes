@@ -72,9 +72,7 @@ def _manifest_covers_path(path: str, manifest_names: set[str]) -> bool:
     still covered when the manifest declares descendants such as
     ``work-item review pass``; it must not be misclassified as a missing leaf.
     """
-    return path in manifest_names or any(
-        name.startswith(f"{path} ") for name in manifest_names
-    )
+    return path in manifest_names or any(name.startswith(f"{path} ") for name in manifest_names)
 
 
 def test_manifest_schema_is_valid(manifest: dict) -> None:
@@ -96,12 +94,8 @@ def test_manifest_schema_is_valid(manifest: dict) -> None:
             f"invalid framing for {cmd['name']!r}: {cmd['framing']!r}"
         )
         # Contract §6 requires 'aliases' on every command entry.
-        assert "aliases" in cmd, (
-            f"command {cmd['name']!r} missing required 'aliases' field"
-        )
-        assert isinstance(cmd["aliases"], list), (
-            f"'aliases' must be a list for {cmd['name']!r}"
-        )
+        assert "aliases" in cmd, f"command {cmd['name']!r} missing required 'aliases' field"
+        assert isinstance(cmd["aliases"], list), f"'aliases' must be a list for {cmd['name']!r}"
 
 
 def test_every_manifest_command_accepts_help_with_exit_zero(manifest: dict) -> None:
@@ -228,9 +222,7 @@ def test_manifest_includes_contract_command(manifest: dict) -> None:
     """The manifest must declare the 'contract' command itself — it is part
     of the public CLI surface and must be discoverable."""
     names = {cmd["name"] for cmd in manifest["commands"]}
-    assert "contract" in names, (
-        "manifest must declare 'contract' (the §6 discovery command itself)"
-    )
+    assert "contract" in names, "manifest must declare 'contract' (the §6 discovery command itself)"
 
 
 @pytest.mark.slow
@@ -277,8 +269,7 @@ def test_wheel_install_contract_json_equals_committed_manifest(
     # 3. Verify the wheel manifest equals the committed manifest.
     wheel_manifest = json.loads(wheel_manifest_text)
     assert wheel_manifest == manifest, (
-        "Wheel-packaged cli-manifest.json diverges from the committed "
-        "data/cli-manifest.json."
+        "Wheel-packaged cli-manifest.json diverges from the committed data/cli-manifest.json."
     )
 
     # 4. Verify importlib.resources can load it from the wheel (simulating

@@ -394,7 +394,8 @@ def cmd_wi_close(args: argparse.Namespace) -> int:
 
     try:
         wi = WorkItemModel.close_work_item(
-            proj_id, args.identifier,
+            proj_id,
+            args.identifier,
             force=getattr(args, "force", False),
             actor_id=getattr(args, "actor_id", None),
             model_lineage=getattr(args, "model_lineage", None),

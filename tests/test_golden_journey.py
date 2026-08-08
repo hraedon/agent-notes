@@ -308,9 +308,7 @@ class TestGoldenJourneyFullLifecycle:
         _ingest(engine, scope)
 
         # Step 3: recall learned context with a source reference.
-        recall_resp = engine.recall(
-            RecallQuery(query="deployment pipeline rollback", scope=scope)
-        )
+        recall_resp = engine.recall(RecallQuery(query="deployment pipeline rollback", scope=scope))
         assert recall_resp.results
         assert recall_resp.engine == engine.engine_name
 
@@ -334,9 +332,7 @@ class TestGoldenJourneyFullLifecycle:
         assert NOTE_NAME not in decoy_refs
 
         # Step 6: delete/supersede and verify provider cascade.
-        forget_result = engine.forget(
-            ForgetSelector(source_id=NOTE_NAME, scope=scope)
-        )
+        forget_result = engine.forget(ForgetSelector(source_id=NOTE_NAME, scope=scope))
         assert forget_result.deleted_count >= 1
         assert forget_result.error is None
 
@@ -349,9 +345,7 @@ class TestGoldenJourneyFullLifecycle:
             assert exact_after is not None
             assert exact_after["body"] == SIGNED_BODY
 
-        recall_after = engine.recall(
-            RecallQuery(query="deployment pipeline rollback", scope=scope)
-        )
+        recall_after = engine.recall(RecallQuery(query="deployment pipeline rollback", scope=scope))
         refs_after = {r.source_ref for r in recall_after.results}
         assert NOTE_NAME not in refs_after
 
@@ -372,9 +366,7 @@ class TestProviderOutageProvesExactReadability:
         if engine.engine_name == "hindsight":
             _simulate_outage(engine)
             try:
-                recall_resp = engine.recall(
-                    RecallQuery(query="deployment pipeline", scope=scope)
-                )
+                recall_resp = engine.recall(RecallQuery(query="deployment pipeline", scope=scope))
             finally:
                 _end_outage(engine)
             assert len(recall_resp.results) == 0
@@ -384,9 +376,7 @@ class TestProviderOutageProvesExactReadability:
                 "agent_notes.core.embed.embed",
                 side_effect=RuntimeError("model unavailable"),
             ):
-                recall_resp = engine.recall(
-                    RecallQuery(query="deployment pipeline", scope=scope)
-                )
+                recall_resp = engine.recall(RecallQuery(query="deployment pipeline", scope=scope))
             assert len(recall_resp.results) == 0
             assert "error" in recall_resp.usage
 
@@ -412,9 +402,7 @@ class TestSynthesizedOutputIsLabelledDerived:
         _file_exact_note(setup)
         _ingest(engine, scope)
 
-        recall_resp = engine.recall(
-            RecallQuery(query="deployment pipeline rollback", scope=scope)
-        )
+        recall_resp = engine.recall(RecallQuery(query="deployment pipeline rollback", scope=scope))
         assert recall_resp.results
 
         for result in recall_resp.results:

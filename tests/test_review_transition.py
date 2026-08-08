@@ -401,9 +401,7 @@ class TestRegistaReviewTransition:
             reset_face()
             reg.close()
 
-    def test_author_lineage_via_flag_not_env(
-        self, default_project, hmac_key_path, monkeypatch
-    ):
+    def test_author_lineage_via_flag_not_env(self, default_project, hmac_key_path, monkeypatch):
         """Author declares model_lineage via the parameter, not the env var.
 
         AGENT_NOTES_MODEL_LINEAGE is NOT set. The author passes
@@ -445,7 +443,8 @@ class TestRegistaReviewTransition:
                 model_lineage="glm",
             )
             WorkItemModel.close_work_item(
-                default_project.id, "RV-LIN-01",
+                default_project.id,
+                "RV-LIN-01",
                 model_lineage="glm",
             )
 
@@ -463,7 +462,8 @@ class TestRegistaReviewTransition:
             regista_id = wi["regista_work_item_id"]
             events = face.history(regista_id)
             author_events = [
-                e for e in events
+                e
+                for e in events
                 if (getattr(e, "actor_metadata", None) or {}).get("model_lineage") == "glm"
             ]
             assert len(author_events) >= 1
@@ -574,9 +574,8 @@ class TestActorWithOverrides:
         assert a1.model_lineage == a2.model_lineage
         assert (a1.on_behalf_of or {}) == (a2.on_behalf_of or {})
 
-
-# ---------------------------------------------------------------------------
-# CLI — review list / pass / accept / reject / request-changes
+    # ---------------------------------------------------------------------------
+    # CLI — review list / pass / accept / reject / request-changes
     def test_cli_review_list(self, default_project, capsys, monkeypatch):
         _native(monkeypatch)
         _to_in_review(default_project.id, "RV-CLI-01", monkeypatch)

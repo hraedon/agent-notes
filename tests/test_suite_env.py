@@ -63,9 +63,7 @@ def test_load_suite_env_system_only(tmp_path):
 
 
 def test_load_suite_env_neither_file(tmp_path):
-    assert load_suite_env(
-        user_path=tmp_path / "nope1", system_path=tmp_path / "nope2"
-    ) == {}
+    assert load_suite_env(user_path=tmp_path / "nope1", system_path=tmp_path / "nope2") == {}
 
 
 # ---------------------------------------------------------------------------
@@ -114,9 +112,7 @@ def _write_config(tmp_path, monkeypatch, dsn):
 
 def test_suite_env_dsn_between_env_and_file(monkeypatch, tmp_path):
     """suite.env DSN is used when env is unset, beats the config file."""
-    _write_suite_env(
-        monkeypatch, tmp_path, "REGISTA_DSN=postgresql://suite/db\n", level="system"
-    )
+    _write_suite_env(monkeypatch, tmp_path, "REGISTA_DSN=postgresql://suite/db\n", level="system")
     _write_config(tmp_path, monkeypatch, "postgresql://file/db")
     monkeypatch.setenv(config._REGISTA_WRITES_ENV, "1")
     cfg = config.RegistaConfig()
@@ -126,9 +122,7 @@ def test_suite_env_dsn_between_env_and_file(monkeypatch, tmp_path):
 
 def test_env_dsn_beats_suite_env(monkeypatch, tmp_path):
     """Process env DSN takes precedence over suite.env."""
-    _write_suite_env(
-        monkeypatch, tmp_path, "REGISTA_DSN=postgresql://suite/db\n", level="system"
-    )
+    _write_suite_env(monkeypatch, tmp_path, "REGISTA_DSN=postgresql://suite/db\n", level="system")
     monkeypatch.setenv(config._SUITE_REGISTA_DSN_ENV, "postgresql://env/db")
     monkeypatch.setenv(config._REGISTA_WRITES_ENV, "1")
     cfg = config.RegistaConfig()
@@ -137,21 +131,15 @@ def test_env_dsn_beats_suite_env(monkeypatch, tmp_path):
 
 def test_per_user_suite_env_beats_system(monkeypatch, tmp_path):
     """Per-user suite.env overrides system suite.env for DSN."""
-    _write_suite_env(
-        monkeypatch, tmp_path, "REGISTA_DSN=postgresql://system/db\n", level="system"
-    )
-    _write_suite_env(
-        monkeypatch, tmp_path, "REGISTA_DSN=postgresql://user/db\n", level="user"
-    )
+    _write_suite_env(monkeypatch, tmp_path, "REGISTA_DSN=postgresql://system/db\n", level="system")
+    _write_suite_env(monkeypatch, tmp_path, "REGISTA_DSN=postgresql://user/db\n", level="user")
     monkeypatch.setenv(config._REGISTA_WRITES_ENV, "1")
     cfg = config.RegistaConfig()
     assert cfg.dsn == "postgresql://user/db"
 
 
 def test_suite_env_key_path(monkeypatch, tmp_path):
-    _write_suite_env(
-        monkeypatch, tmp_path, "REGISTA_KEY_PATH=/suite/key\n", level="system"
-    )
+    _write_suite_env(monkeypatch, tmp_path, "REGISTA_KEY_PATH=/suite/key\n", level="system")
     monkeypatch.setenv(config._SUITE_REGISTA_DSN_ENV, "postgresql://x")
     monkeypatch.setenv(config._REGISTA_WRITES_ENV, "1")
     cfg = config.RegistaConfig()
@@ -159,9 +147,7 @@ def test_suite_env_key_path(monkeypatch, tmp_path):
 
 
 def test_suite_env_require_ssl(monkeypatch, tmp_path):
-    _write_suite_env(
-        monkeypatch, tmp_path, "REGISTA_REQUIRE_SSL=true\n", level="system"
-    )
+    _write_suite_env(monkeypatch, tmp_path, "REGISTA_REQUIRE_SSL=true\n", level="system")
     monkeypatch.setenv(config._SUITE_REGISTA_DSN_ENV, "postgresql://x")
     cfg = config.RegistaConfig()
     assert cfg.require_ssl is True
@@ -243,9 +229,7 @@ def _clean_actor_env(monkeypatch, tmp_path):
 
 def test_principal_id_from_tool_env(monkeypatch, tmp_path):
     """AGENT_NOTES_PRINCIPAL_ID env var takes highest precedence."""
-    _write_suite_env(
-        monkeypatch, tmp_path, "REGISTA_PRINCIPAL_ID=suite@id\n", level="user"
-    )
+    _write_suite_env(monkeypatch, tmp_path, "REGISTA_PRINCIPAL_ID=suite@id\n", level="user")
     monkeypatch.setenv("AGENT_NOTES_PRINCIPAL_ID", "tool@id")
     assert resolve_principal_id() == "tool@id"
 
@@ -260,20 +244,14 @@ def test_principal_id_from_suite_env_canonical(monkeypatch, tmp_path):
 
 def test_principal_id_per_user_beats_system(monkeypatch, tmp_path):
     """Per-user suite.env principal_id overrides system."""
-    _write_suite_env(
-        monkeypatch, tmp_path, "REGISTA_PRINCIPAL_ID=system@id\n", level="system"
-    )
-    _write_suite_env(
-        monkeypatch, tmp_path, "REGISTA_PRINCIPAL_ID=user@id\n", level="user"
-    )
+    _write_suite_env(monkeypatch, tmp_path, "REGISTA_PRINCIPAL_ID=system@id\n", level="system")
+    _write_suite_env(monkeypatch, tmp_path, "REGISTA_PRINCIPAL_ID=user@id\n", level="user")
     assert resolve_principal_id() == "user@id"
 
 
 def test_principal_id_suite_env_canonical_env_beats_file(monkeypatch, tmp_path):
     """REGISTA_PRINCIPAL_ID process env beats suite.env file."""
-    _write_suite_env(
-        monkeypatch, tmp_path, "REGISTA_PRINCIPAL_ID=file@id\n", level="user"
-    )
+    _write_suite_env(monkeypatch, tmp_path, "REGISTA_PRINCIPAL_ID=file@id\n", level="user")
     monkeypatch.setenv("REGISTA_PRINCIPAL_ID", "env@id")
     assert resolve_principal_id() == "env@id"
 

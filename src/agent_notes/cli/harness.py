@@ -151,9 +151,7 @@ def _normalize_hash_map(raw: object) -> dict[str, str | None]:
     values from a crafted or corrupted manifest are coerced to ``None``.
     """
     if isinstance(raw, dict):
-        return {
-            str(k): v if isinstance(v, str) else None for k, v in raw.items()
-        }
+        return {str(k): v if isinstance(v, str) else None for k, v in raw.items()}
     if isinstance(raw, list):
         return {str(name): None for name in raw}
     return {}
@@ -391,8 +389,7 @@ def _hook_group_has_command(group: object, command: str) -> bool:
     if not isinstance(handlers, list):
         return False
     return any(
-        isinstance(handler, dict) and handler.get("command") == command
-        for handler in handlers
+        isinstance(handler, dict) and handler.get("command") == command for handler in handlers
     )
 
 
@@ -497,11 +494,11 @@ def _unwire_codex_hooks(
     document = _load_json(hooks_path)
     raw_hooks = document.get("hooks", {})
     if not isinstance(raw_hooks, dict):
-        return [], {
-            event: value
-            for event, value in recorded_hashes.items()
-            if value is not None
-        }, ["Codex hooks: malformed shared hooks object, preserved"]
+        return (
+            [],
+            {event: value for event, value in recorded_hashes.items() if value is not None},
+            ["Codex hooks: malformed shared hooks object, preserved"],
+        )
 
     actions: list[dict] = []
     preserved: dict[str, str] = {}
@@ -525,8 +522,7 @@ def _unwire_codex_hooks(
         matching = [
             index
             for index in candidates
-            if recorded_hashes[event] is None
-            or _json_hash(groups[index]) == recorded_hashes[event]
+            if recorded_hashes[event] is None or _json_hash(groups[index]) == recorded_hashes[event]
         ]
         if len(matching) == 1:
             groups.pop(matching[0])
@@ -1186,8 +1182,8 @@ def _install_harness_one(
         # Codex: no env/plugin/TOML wiring (Decision 4).  Merge only the two
         # canonical lifecycle matcher groups into the shared hooks.json. Cairn
         # and user groups remain untouched and are never adopted by ownership.
-        hook_actions, installed_hook_hashes, hook_conflicts, created_now = (
-            _wire_codex_hooks(paths["hooks"], dry_run, prev_hook_hashes)
+        hook_actions, installed_hook_hashes, hook_conflicts, created_now = _wire_codex_hooks(
+            paths["hooks"], dry_run, prev_hook_hashes
         )
         config_actions += hook_actions
         warns += hook_conflicts

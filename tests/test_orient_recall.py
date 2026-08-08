@@ -120,9 +120,7 @@ class TestOrientRecallNative:
                 usage={"count": 1},
             ),
         )
-        with patch(
-            "agent_notes.core.memory_engine.get_engine", return_value=engine
-        ):
+        with patch("agent_notes.core.memory_engine.get_engine", return_value=engine):
             code = cmd_orient(_make_args(recall=True))
         captured = capsys.readouterr()
         assert code == 0
@@ -134,9 +132,7 @@ class TestOrientRecallNative:
             engine_name="native",
             health_state=EngineHealthState.HEALTHY,
         )
-        with patch(
-            "agent_notes.core.memory_engine.get_engine", return_value=engine
-        ):
+        with patch("agent_notes.core.memory_engine.get_engine", return_value=engine):
             code = cmd_orient(_make_args(recall=True, json=False))
         captured = capsys.readouterr()
         assert code == 0
@@ -172,9 +168,7 @@ class TestOrientRecallHindsight:
                 usage={"count": 2},
             ),
         )
-        with patch(
-            "agent_notes.core.memory_engine.get_engine", return_value=engine
-        ):
+        with patch("agent_notes.core.memory_engine.get_engine", return_value=engine):
             code = cmd_orient(_make_args(recall=True))
         captured = capsys.readouterr()
         assert code == 0
@@ -193,9 +187,7 @@ class TestOrientRecallHindsight:
             _recall_result("verbatim source text", origin=OriginClass.RAW),
             _recall_result("extracted fact text", origin=OriginClass.EXTRACTED),
             _recall_result("derived observation text", origin=OriginClass.DERIVED),
-            _recall_result(
-                "synthesized text", origin=OriginClass.SYNTHESIZED
-            ),
+            _recall_result("synthesized text", origin=OriginClass.SYNTHESIZED),
         ]
         engine = _MockEngine(
             engine_name="hindsight",
@@ -206,9 +198,7 @@ class TestOrientRecallHindsight:
                 usage={"count": 4},
             ),
         )
-        with patch(
-            "agent_notes.core.memory_engine.get_engine", return_value=engine
-        ):
+        with patch("agent_notes.core.memory_engine.get_engine", return_value=engine):
             code = cmd_orient(_make_args(recall=True, json=False))
         captured = capsys.readouterr()
         assert code == 0
@@ -227,9 +217,7 @@ class TestOrientRecallDegradation:
             engine_name="hindsight",
             health_state=EngineHealthState.UNREACHABLE,
         )
-        with patch(
-            "agent_notes.core.memory_engine.get_engine", return_value=engine
-        ):
+        with patch("agent_notes.core.memory_engine.get_engine", return_value=engine):
             code = cmd_orient(_make_args(recall=True))
         captured = capsys.readouterr()
         assert code == 0
@@ -241,9 +229,7 @@ class TestOrientRecallDegradation:
             engine_name="hindsight",
             health_state=EngineHealthState.UNREACHABLE,
         )
-        with patch(
-            "agent_notes.core.memory_engine.get_engine", return_value=engine
-        ):
+        with patch("agent_notes.core.memory_engine.get_engine", return_value=engine):
             code = cmd_orient(_make_args(recall=True, json=False))
         captured = capsys.readouterr()
         assert code == 0
@@ -254,9 +240,7 @@ class TestOrientRecallDegradation:
             engine_name="hindsight",
             health_state=EngineHealthState.NOT_CONFIGURED,
         )
-        with patch(
-            "agent_notes.core.memory_engine.get_engine", return_value=engine
-        ):
+        with patch("agent_notes.core.memory_engine.get_engine", return_value=engine):
             code = cmd_orient(_make_args(recall=True, json=False))
         captured = capsys.readouterr()
         assert code == 0
@@ -272,9 +256,7 @@ class TestOrientRecallDegradation:
                 usage={"count": 0},
             ),
         )
-        with patch(
-            "agent_notes.core.memory_engine.get_engine", return_value=engine
-        ):
+        with patch("agent_notes.core.memory_engine.get_engine", return_value=engine):
             code = cmd_orient(_make_args(recall=True, json=False))
         captured = capsys.readouterr()
         assert code == 0
@@ -290,9 +272,7 @@ class TestOrientRecallDegradation:
                 usage={"error": "index timeout"},
             ),
         )
-        with patch(
-            "agent_notes.core.memory_engine.get_engine", return_value=engine
-        ):
+        with patch("agent_notes.core.memory_engine.get_engine", return_value=engine):
             code = cmd_orient(_make_args(recall=True, json=False))
         captured = capsys.readouterr()
         assert code == 0
@@ -304,9 +284,7 @@ class TestOrientRecallDegradation:
             health_state=EngineHealthState.HEALTHY,
             recall_raises=RuntimeError("connection reset"),
         )
-        with patch(
-            "agent_notes.core.memory_engine.get_engine", return_value=engine
-        ):
+        with patch("agent_notes.core.memory_engine.get_engine", return_value=engine):
             code = cmd_orient(_make_args(recall=True, json=False))
         captured = capsys.readouterr()
         assert code == 0

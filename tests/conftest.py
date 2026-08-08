@@ -123,9 +123,7 @@ def ephemeral_db():
         # erroring the whole suite (matches the documented Plan 003 intent).
         pytest.skip(f"Postgres test container could not start: {exc}")
     try:
-        dsn = container.get_connection_url().replace(
-            "postgresql+psycopg2://", "postgresql://"
-        )
+        dsn = container.get_connection_url().replace("postgresql+psycopg2://", "postgresql://")
         _apply_schema(dsn)
         old = os.environ.get("AGENT_NOTES_DSN")
         os.environ["AGENT_NOTES_DSN"] = dsn
