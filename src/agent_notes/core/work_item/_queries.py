@@ -314,7 +314,7 @@ def delete_work_item_regista(project_id: int, identifier: str) -> bool:
             identifier=identifier,
             event="deleted",
             payload={"title": old["title"], "regista_retained": True},
-            actor=face_factory.default_actor().actor_id,
+            actor=face_factory.actor_with_overrides(operation="work-item delete").actor_id,
         )
         conn.commit()
     return True

@@ -41,7 +41,7 @@ glance at it. If the matches are genuine resolutions, apply them so the open
 list below reflects reality:
 
 ```
-agent-notes breadcrumb reconcile --path <repo-path> --apply
+agent-notes breadcrumb reconcile --path <repo-path> --apply --model-lineage <your-model-family>
 ```
 
 This is the session-start counterpart to the same step in `/end`; running it

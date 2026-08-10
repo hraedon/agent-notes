@@ -275,6 +275,59 @@ def test_breadcrumb_file(default_project):
     assert data["breadcrumb"]["title"] == "CLI test BC"
 
 
+def test_file_without_lineage_emits_the_undeclared_lineage_envelope(default_project):
+    """WI-062: the refusal is a first-class CLI error, not a buried traceback.
+
+    The failure that motivated WI-062 was invisible because the real error was
+    swallowed / relabeled on its way out. This pins the whole surface: a named
+    ``UNDECLARED_LINEAGE`` code, the remedy inside the message, a non-zero exit,
+    and no traceback on stderr.
+    """
+    result = run_cli(
+        "work-item",
+        "file",
+        "--workspace",
+        "default",
+        "--project",
+        "sf2",
+        "--identifier",
+        "WI-NOLIN-01",
+        "--title",
+        "should not be filed",
+        "--json",
+        strip_keys=("AGENT_NOTES_MODEL_LINEAGE",),
+        check=False,
+    )
+    assert result.returncode != 0
+    data = json.loads(result.stdout)
+    assert data["ok"] is False
+    assert data["error"]["code"] == "UNDECLARED_LINEAGE"
+    assert "AGENT_NOTES_MODEL_LINEAGE" in data["error"]["message"]
+    assert "--model-lineage" in data["error"]["message"]
+    assert "Traceback" not in result.stderr
+
+    # ...and the write really did not happen.
+    got = _run(
+        "work-item", "get", "WI-NOLIN-01",
+        "--workspace", "default", "--project", "sf2", "--json",
+        check=False,
+    )
+    assert got.returncode != 0
+
+    # With the lineage declared, the same command succeeds.
+    ok = run_cli(
+        "work-item", "file",
+        "--workspace", "default", "--project", "sf2",
+        "--identifier", "WI-NOLIN-02",
+        "--title", "filed with a declared lineage",
+        "--model-lineage", "glm",
+        "--json",
+        strip_keys=("AGENT_NOTES_MODEL_LINEAGE",),
+        check=False,
+    )
+    assert ok.returncode == 0, ok.stderr
+
+
 def test_breadcrumb_get(default_project):
     from agent_notes.core.work_item_model import WorkItemModel
 

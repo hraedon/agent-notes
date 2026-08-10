@@ -23,12 +23,18 @@ The outbox import is lazy so P1 does not depend on P2 modules at import time.
 
 from __future__ import annotations
 
+import atexit
 import contextvars
 import dataclasses
 import threading
 from typing import Callable
 
-from agent_notes.core.actor import Actor, load_actor_config, resolve_actor
+from agent_notes.core.actor import (
+    Actor,
+    load_actor_config,
+    require_declared_lineage,
+    resolve_actor,
+)
 from agent_notes.core.config import RegistaConfig, regista_config
 from agent_notes.core.regista_face import RegistaFace
 
@@ -131,7 +137,18 @@ def get_face() -> RegistaFace | None:
 
 
 def default_actor():
-    """The actor used by the regista write path (env-resolved; Plan 009 D3)."""
+    """The env-resolved actor, WITHOUT the declared-lineage requirement.
+
+    Note-shaped entities (memories, reflections — ``core/note_model.py``) still
+    use this. They are signed regista note events, but they are not work items:
+    ``derive_authors`` never reads them, so an undeclared lineage there does not
+    poison a review gate the way a work-item event does (WI-062). Every
+    work-item write goes through :func:`actor_with_overrides` instead, which
+    does enforce it. If the note path is ever brought under the same rule, move
+    the ``require_declared_lineage`` call in here and delete this note — but do
+    it deliberately, because it fails `memory add` for every unconfigured
+    caller in the estate.
+    """
     return resolve_actor()
 
 
@@ -140,8 +157,9 @@ def actor_with_overrides(
     model_lineage: str | None = None,
     *,
     clear_principal: bool = False,
+    operation: str | None = None,
 ) -> Actor:
-    """Resolve an actor with optional identity overrides.
+    """Resolve a **work-item write-path** actor with optional identity overrides.
 
     Used by both authoring operations (file, update, close) and review-gate
     transitions (adversarial_pass, accept, reject, request_changes). This
@@ -161,6 +179,12 @@ def actor_with_overrides(
     When only ``model_lineage`` is overridden (no ``actor_id``), the
     principal is always preserved — the actor is still the same agent,
     just declaring its lineage explicitly.
+
+    **Fails closed on an undeclared lineage (WI-062).** An agent-kind actor
+    with no resolvable ``model_lineage`` raises
+    :class:`~agent_notes.core.actor.UndeclaredLineageError` here rather than
+    stamping an event that regista's cross-lineage gate can never clear. Pass
+    ``operation`` to name the caller in that error.
     """
     config = load_actor_config()
     if actor_id is not None and clear_principal:
@@ -177,7 +201,26 @@ def actor_with_overrides(
         )
     if model_lineage is not None:
         config = dataclasses.replace(config, model_lineage=model_lineage)
-    return resolve_actor(config)
+    return require_declared_lineage(resolve_actor(config), operation)
+
+
+def assert_declared_lineage(
+    actor_id: str | None = None,
+    model_lineage: str | None = None,
+    *,
+    operation: str | None = None,
+) -> None:
+    """Guard-only form of :func:`actor_with_overrides` (WI-062).
+
+    The native (degrade) write path records ``actor_id`` / ``model_lineage`` as
+    plain columns on an op rather than building an ``Actor``, so it has nothing
+    to guard *through*. It calls this instead, so the same refusal applies on
+    both paths: the op-log is replayed into regista by
+    ``migrate-to-regista`` / outbox reconcile, and an undeclared-lineage op
+    written today becomes an undeclared-lineage regista event tomorrow. Gating
+    only the regista path would just defer the poisoning.
+    """
+    actor_with_overrides(actor_id, model_lineage, operation=operation)
 
 
 def reviewer_actor(
@@ -190,6 +233,38 @@ def reviewer_actor(
     principal, so ``clear_principal=True`` is passed.
     """
     return actor_with_overrides(actor_id, model_lineage, clear_principal=True)
+
+
+def _close_faces_quietly() -> None:
+    """Close every cached face from the interpreter-exit path, swallowing errors.
+
+    WI-062 discoverability: the failure that motivated that ticket was invisible
+    because the real error was buried under
+    ``PythonFinalizationError: cannot join thread at interpreter shutdown``.
+    That noise is psycopg_pool's ``ConnectionPool.__del__`` joining its daemon
+    workers *after* finalization has begun — regista fixed it on its side with a
+    ``weakref.finalize`` (regista WI-218), but only in 0.5.5; the deployed uv
+    tool is pinned to an older regista, and any consumer pinned below 0.5.5 gets
+    the traceback. Closing the pools from an ``atexit`` hook here runs before
+    finalization regardless of which regista is installed, so the last thing on
+    stderr is the error the operator needs to read.
+
+    Deliberately silent: nothing downstream of process exit can act on a failure
+    to close, and logging at exit would reintroduce the noise this removes.
+    """
+    for face in list(_FACES.values()):
+        try:
+            face.close()
+        except BaseException:
+            pass
+    for cleanup in list(_FACE_CLEANUPS.values()):
+        try:
+            cleanup()
+        except BaseException:
+            pass
+
+
+atexit.register(_close_faces_quietly)
 
 
 def reset_face() -> None:

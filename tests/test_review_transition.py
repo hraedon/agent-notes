@@ -21,6 +21,7 @@ import pytest
 from regista.testing import InMemoryRegista
 
 from agent_notes.core import db as coredb
+from agent_notes.core.actor import UndeclaredLineageError
 from agent_notes.core.face_factory import reset_face, set_face_for_test
 from agent_notes.core.regista_face import RegistaFace
 from agent_notes.core.work_item_model import WorkItemModel
@@ -65,6 +66,10 @@ def _vec768():
 
 def _native(monkeypatch):
     monkeypatch.delenv("AGENT_NOTES_REGISTA_WRITES", raising=False)
+    # WI-062: the write path (native included) refuses agent-kind events with no
+    # declared lineage, so every test that files/updates/closes must declare one
+    # — exactly as a real caller now must.
+    monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")
     reset_face()
 
 
@@ -474,12 +479,20 @@ class TestRegistaReviewTransition:
     def test_author_lineage_undeclared_still_requires_ack(
         self, default_project, hmac_key_path, monkeypatch
     ):
-        """When the author's lineage is undeclared (no env, no flag), the gate
-        still requires same_lineage_acknowledged — the fail-closed behavior."""
+        """Legacy undeclared-author history still fails closed at the gate.
+
+        WI-062 stops NEW undeclared-agent events from being written at all (see
+        ``test_undeclared_author_is_refused_at_file_time``), but history cannot
+        be cured: events written before that rule existed still carry
+        ``actor_kind="agent"`` with no ``model_lineage``, and the gate must go
+        on refusing them. Since the public write path can no longer produce such
+        an event, this test forges one directly through the face — which is
+        exactly the shape of the events already sitting in the production store.
+        """
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
         monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "author-agent")
         monkeypatch.setenv("AGENT_NOTES_PRINCIPAL_ID", "author@example.com")
-        monkeypatch.delenv("AGENT_NOTES_MODEL_LINEAGE", raising=False)
+        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")
 
         reg = InMemoryRegista(hmac_key_path=hmac_key_path)
         face = RegistaFace(reg)
@@ -497,6 +510,23 @@ class TestRegistaReviewTransition:
                 severity="medium",
                 embedding=_vec768(),
             )
+
+            # Forge the legacy event: an agent actor with no declared lineage,
+            # appended straight to the chain the way pre-WI-062 code did.
+            from agent_notes.core.actor import Actor
+
+            wi = WorkItemModel.get_work_item(default_project.id, "RV-LIN-02")
+            face.amend_breadcrumb(
+                Actor(
+                    actor_id="legacy-undeclared-agent",
+                    actor_kind="agent",
+                    display_name="legacy",
+                ),
+                wi["regista_work_item_id"],
+                current_state="open",
+                description="body (amended by an undeclared agent)",
+            )
+
             WorkItemModel.update_work_item(
                 project_id=default_project.id,
                 identifier="RV-LIN-02",
@@ -515,6 +545,41 @@ class TestRegistaReviewTransition:
                     actor_id="reviewer-kimi",
                     model_lineage="kimi",
                 )
+        finally:
+            reset_face()
+            reg.close()
+
+    def test_undeclared_author_is_refused_at_file_time(
+        self, default_project, hmac_key_path, monkeypatch
+    ):
+        """WI-062: filing with no resolvable lineage refuses instead of writing.
+
+        This is the whole point of the fix — the poisoned event never reaches
+        the chain, so the item stays reviewable.
+        """
+        monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "author-agent")
+        monkeypatch.setenv("AGENT_NOTES_PRINCIPAL_ID", "author@example.com")
+        monkeypatch.delenv("AGENT_NOTES_MODEL_LINEAGE", raising=False)
+
+        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        face = RegistaFace(reg)
+        reset_face()
+        set_face_for_test(face)
+
+        try:
+            with pytest.raises(UndeclaredLineageError):
+                WorkItemModel.file_work_item(
+                    project_id=default_project.id,
+                    identifier="RV-LIN-03",
+                    title="no lineage declared",
+                    body="body",
+                    kind="bug",
+                    status="open",
+                    severity="medium",
+                    embedding=_vec768(),
+                )
+            assert WorkItemModel.get_work_item(default_project.id, "RV-LIN-03") is None
         finally:
             reset_face()
             reg.close()

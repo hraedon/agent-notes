@@ -72,11 +72,20 @@ def _hermetic_config(tmp_path_factory):
         "AGENT_NOTES_PROJECT",
     )
     saved = {k: os.environ.get(k) for k in keys}
+    saved["AGENT_NOTES_MODEL_LINEAGE"] = os.environ.get("AGENT_NOTES_MODEL_LINEAGE")
     os.environ["AGENT_NOTES_CONFIG"] = str(cfg)
     os.environ["AGENT_SUITE_CONFIG"] = str(suite_cfg)
     os.environ["AGENT_SUITE_SYSTEM_CONFIG"] = str(suite_cfg)
     for k in keys[3:]:
         os.environ.pop(k, None)
+    # WI-062: agent-kind work-item writes now refuse without a declared model
+    # lineage, so the test session stands in for a correctly-wired host (which
+    # sets this in suite.env). Tests that exercise the *refusal* delete it
+    # explicitly — see tests/test_actor_lineage.py and
+    # test_review_transition.py::test_undeclared_author_is_refused_at_file_time.
+    # A session default rather than a per-test one keeps the ~60 write-path
+    # tests about what they are actually testing.
+    os.environ["AGENT_NOTES_MODEL_LINEAGE"] = "test-lineage"
     try:
         yield
     finally:

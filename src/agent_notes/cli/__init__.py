@@ -533,9 +533,28 @@ def _dispatch(func: Callable[[argparse.Namespace], int], args: argparse.Namespac
     internal API (``Regista.create_project()``). Convert it to the common
     error envelope with the actual remediation. Everything else re-raises
     unchanged.
+
+    ``UndeclaredLineageError`` (WI-062) gets the same treatment and for the same
+    reason: it is a configuration gap with a one-line remedy, and it must be the
+    *last* thing on the operator's terminal. It is caught here rather than in
+    each subcommand because the subcommands' ``except ValueError`` handlers
+    would relabel it ``NOT_FOUND`` / ``VALIDATION_FAILED`` — which is how the
+    original failure stayed invisible.
     """
+    from agent_notes.core.actor import UndeclaredLineageError
+
     try:
         return func(args)
+    except UndeclaredLineageError as exc:
+        from agent_notes.cli.common import emit_error
+
+        return emit_error(
+            exc.code,
+            str(exc),
+            use_json=bool(getattr(args, "json", False)),
+            detail={"actor_id": exc.actor_id, "operation": exc.operation or ""},
+            exit_code=EXIT_NOT_CONFIGURED,
+        )
     except RegistaError as exc:
         if exc.code != ErrorCode.DB_NOT_FOUND:
             raise
