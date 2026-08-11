@@ -168,7 +168,7 @@ class TestRegistaWriteThrough:
                 actor_id="accepter-opus",
                 actor_kind="agent",
                 role="agent",
-                model_lineage="opus",
+                model_lineage="claude-opus",
             )
             face.transition_breadcrumb(
                 accepter,

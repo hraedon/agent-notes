@@ -87,7 +87,7 @@ Do **not** file one when:
    clear an event whose author declared no model family — history cannot be
    cured after the fact, so the CLI refuses the write with
    `UNDECLARED_LINEAGE` rather than filing something un-reviewable. Declare
-   the family, not the exact build: `claude-opus`, `gpt-5.6-sol`, `glm`,
+   the family, not the exact build: `claude-opus`, `gpt-sol`, `glm`,
    `kimi`. If your host sets `AGENT_NOTES_MODEL_LINEAGE` (process env or
    `~/.config/agent-suite/suite.env`) you can omit the flag. Add
    `--actor-id <your-session-id>` too when several agents work one repo, so

@@ -85,7 +85,12 @@ def _hermetic_config(tmp_path_factory):
     # test_review_transition.py::test_undeclared_author_is_refused_at_file_time.
     # A session default rather than a per-test one keeps the ~60 write-path
     # tests about what they are actually testing.
-    os.environ["AGENT_NOTES_MODEL_LINEAGE"] = "test-lineage"
+    # This must be a family from regista's canonical registry, not a made-up
+    # token: regista WI-285 closed the lineage vocabulary and refuses anything
+    # else at ingress with INVALID_MODEL_LINEAGE, so a stand-in like
+    # "test-lineage" now fails every write-path test rather than standing in
+    # for a wired host. See agent-suite WI-072 for the lock-advance ordering.
+    os.environ["AGENT_NOTES_MODEL_LINEAGE"] = "claude-opus"
     try:
         yield
     finally:

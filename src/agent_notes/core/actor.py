@@ -85,7 +85,7 @@ class UndeclaredLineageError(RuntimeError):
             "(agent-notes WI-062).\n"
             "\n"
             "Declare the lineage first — the model family, not the exact "
-            "build (e.g. claude-opus, gpt-5.6-sol, glm, kimi):\n"
+            "build (e.g. claude-opus, gpt-sol, glm, kimi):\n"
             f"    export {_MODEL_LINEAGE_ENV}=<model-family>\n"
             "or, on the commands that accept it (work-item "
             "file/update/close/review, breadcrumb file/update), pass it "

@@ -64,7 +64,7 @@ agent-notes work-item update <identifier> \
 agent-authored event like any other, and an event with no declared model
 family permanently blocks the cross-lineage review gate, so the CLI refuses
 it with `UNDECLARED_LINEAGE`. Declare the family (`claude-opus`,
-`gpt-5.6-sol`, `glm`, `kimi`), or set `AGENT_NOTES_MODEL_LINEAGE` in the
+`gpt-sol`, `glm`, `kimi`), or set `AGENT_NOTES_MODEL_LINEAGE` in the
 environment / `~/.config/agent-suite/suite.env` and omit the flag.
 
 Two things to know about the CLI:

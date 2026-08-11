@@ -39,7 +39,7 @@ agent-notes breadcrumb update --path . <WI-id> [--status <state>] [--title ...] 
   never clear regista's cross-lineage review gate, and history cannot be cured
   afterwards — so the CLI refuses the write with `UNDECLARED_LINEAGE` instead
   of filing something un-reviewable. Declare the *family*, not the build:
-  `claude-opus`, `gpt-5.6-sol`, `glm`, `kimi`. Hosts can set it once as
+  `claude-opus`, `gpt-sol`, `glm`, `kimi`. Hosts can set it once as
   `AGENT_NOTES_MODEL_LINEAGE` in the environment or in
   `~/.config/agent-suite/suite.env` and omit the flag. Add `--actor-id
   <session-id>` as well when several agents share a repo.

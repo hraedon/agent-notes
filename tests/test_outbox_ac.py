@@ -514,7 +514,7 @@ class TestPositiveReconcile:
         reviewer = Actor(
             actor_id="reviewer",
             display_name="Reviewer",
-            model_lineage="opus",
+            model_lineage="claude-opus",
         )
         wid, _ = face.create_breadcrumb(reviewer, title="Transition target")
         event_id = uuid.uuid4()
@@ -534,7 +534,7 @@ class TestPositiveReconcile:
 
         queued = verify_envelope(read_all(_PROJECT)[0].envelope, signer.public_key())
         assert queued["args"]["event_id"] == str(event_id)
-        assert queued["args"]["actor"]["model_lineage"] == "opus"
+        assert queued["args"]["actor"]["model_lineage"] == "claude-opus"
 
         report = reconcile(_PROJECT, face=face, signer=signer)
         assert report.replayed == 1
@@ -542,7 +542,7 @@ class TestPositiveReconcile:
         assert len(events) == 1
         assert events[0].event_id == event_id
         assert events[0].payload["review_artifact_digest"] == "sha256:test"
-        assert events[0].actor_metadata["model_lineage"] == "opus"
+        assert events[0].actor_metadata["model_lineage"] == "claude-opus"
 
 
 class TestRegistaReconciliationSurface:

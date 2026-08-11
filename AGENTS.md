@@ -72,7 +72,7 @@ Identity resolves through the standard suite layering —
 `AGENT_NOTES_PRINCIPAL_KIND`, and `AGENT_NOTES_PRINCIPAL_DISPLAY_NAME`. Set the
 lineage once per host in `~/.config/agent-suite/suite.env`, or pass
 `--model-lineage` per command. Declare the model *family* (`claude-opus`,
-`gpt-5.6-sol`, `glm`, `kimi`), not the exact build — the gate compares
+`gpt-sol`, `glm`, `kimi`), not the exact build — the gate compares
 families.
 
 Two deliberate exemptions: `actor_kind="system"` actors (the migration actor)
