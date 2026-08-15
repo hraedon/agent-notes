@@ -49,6 +49,50 @@ here catches drift left by a prior session that ended without it. Note what you
 reconciled in the briefing (e.g. "reconciled 2 already resolved in git"). If the
 repo isn't git or isn't registered, reconcile prints nothing — move on.
 
+## Zero — declare the session identity
+
+Before anything else, declare which model this session is. Work-item
+attribution and the cross-lineage review gate key off the session's declared
+`model_lineage` (WI-067); an undeclared session reads as UNKNOWN and fails
+closed at every write. You know which model you are — write it down once:
+
+```
+agent-notes session declare --model-lineage <family>
+```
+
+`<family>` is the canonical family (e.g. `claude-opus`, `glm`, `qwen`,
+`deepseek`, `kimi`, `longcat` — `agent-notes session status` and regista's
+canonical registry list them). This writes a private, per-session record keyed
+by the harness session id; it does not touch host-wide config.
+
+Once declared, the record is the **stable source** for this session: declaring
+a *different* family later is refused (a session cannot relabel itself
+mid-session to manufacture cross-lineage independence). Re-declaring the same
+value is idempotent. Verify with:
+
+```
+agent-notes session status
+```
+
+Skip this only if you already declared it earlier this session (the record
+persists across tool calls on the same session id).
+
+**If `session declare` fails with `NO_SESSION_ID`** — your harness does not
+export a session id to tool subprocesses. This happens under **opencode**:
+the opencode plugin threads the session id only into the processes *it*
+spawns (orientation, outbox), not into tool calls the agent itself runs.
+Declare explicitly by naming the session id (you can see it in the plugin's
+session log line, e.g. `[agent-notes] session <id> → dir …`):
+
+```
+agent-notes session declare --session-id <session-id> --model-lineage <family>
+agent-notes session status --session-id <session-id>
+```
+
+The explicit `--session-id` is per-invocation (no process-global state) and
+keeps the same stable-source rule: once declared, that session's lineage
+cannot change mid-session.
+
 ## Then — three quick lookups
 
 Run all three (parallel-safe), then synthesize a compact briefing.

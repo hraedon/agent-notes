@@ -21,9 +21,20 @@ def _clean_actor_env(monkeypatch, tmp_path):
         "AGENT_NOTES_MODEL_LINEAGE",
         "AGENT_NOTES_PRINCIPAL_ID",
         "AGENT_NOTES_PRINCIPAL_DISPLAY_NAME",
+        "AGENT_NOTES_ACTOR_ID",
+        "AGENT_NOTES_PRINCIPAL_KIND",
         "REGISTA_PRINCIPAL_ID",
+        # Session identity (WI-067): scrub the harness id and records dir so a
+        # session record from the operator's real harness cannot leak lineage
+        # into the actor-resolution assertions below.
+        "CLAUDE_CODE_SESSION_ID",
+        "OPENCODE_SESSION_ID",
+        "CODEX_SESSION_ID",
+        "AGENT_NOTES_SESSION",
+        "AGENT_NOTES_SESSION_DIR",
     ):
         monkeypatch.delenv(v, raising=False)
+    monkeypatch.setenv("AGENT_NOTES_SESSION_DIR", str(tmp_path / "sessions"))
     suite_env = tmp_path / "suite.env"
     monkeypatch.setenv("AGENT_SUITE_CONFIG", str(suite_env))
     monkeypatch.setenv("AGENT_SUITE_SYSTEM_CONFIG", str(suite_env))

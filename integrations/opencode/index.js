@@ -25,11 +25,17 @@ const RECONCILE_TIMEOUT_MS = parseInt(
   10
 );
 
-function invokeAgentNotes(args, client, timeoutMs = ORIENT_TIMEOUT_MS) {
+function invokeAgentNotes(args, client, timeoutMs = ORIENT_TIMEOUT_MS, sessionID = undefined) {
   return new Promise((resolve) => {
+    const env = { ...process.env };
+    // WI-067: thread the harness session id into every spawned agent-notes
+    // process so session-scoped identity records key correctly under opencode.
+    if (sessionID) {
+      env.OPENCODE_SESSION_ID = String(sessionID);
+    }
     const proc = spawn("agent-notes", args, {
       stdio: ["pipe", "pipe", "pipe"],
-      env: process.env,
+      env,
       timeout: ORIENT_TIMEOUT_MS,
     });
 
@@ -112,7 +118,7 @@ function formatOrientPayload(payload) {
   return lines.join("\n");
 }
 
-async function buildRegistaSyncBlock(client) {
+async function buildRegistaSyncBlock(client, sessionID = undefined) {
   // dossier-006 §6: Stop/PreCompact must reconcile and loudly report pending
   // ops. Reconcile is best-effort — if regista is unreachable it replays nothing
   // and the ops stay in the outbox; we then surface the stale count loudly.
@@ -123,7 +129,8 @@ async function buildRegistaSyncBlock(client) {
     const rec = await invokeAgentNotes(
       ["outbox", "reconcile", "--json"],
       client,
-      RECONCILE_TIMEOUT_MS
+      RECONCILE_TIMEOUT_MS,
+      sessionID
     );
     // Reconcile exits non-zero on conflicts/rejected but still prints a JSON
     // report, so parse the data regardless of status.
@@ -149,7 +156,12 @@ async function buildRegistaSyncBlock(client) {
   let totalPending = 0;
   let detail = "";
   try {
-    const status = await invokeAgentNotes(["outbox", "status", "--json"], client);
+    const status = await invokeAgentNotes(
+      ["outbox", "status", "--json"],
+      client,
+      undefined,
+      sessionID
+    );
     if (status.data && Array.isArray(status.data.projects)) {
       for (const p of status.data.projects) {
         totalPending += p.pending ?? 0;
@@ -188,6 +200,13 @@ export default async function agentNotesPlugin(ctx) {
         const sessionID = event.properties.sessionID;
         const dir = event.properties.info.directory;
         sessionDirs.set(sessionID, dir);
+        // WI-067: the session id is threaded per-spawn (invokeAgentNotes), NOT
+        // stashed on process.env. A server process hosts concurrent sessions;
+        // mutating process.env would leak one session's id into every other
+        // session's tool subprocesses. Tool calls spawned by opencode itself
+        // (not by this plugin) therefore have no OPENCODE_SESSION_ID and fail
+        // closed in `agent-notes session declare` — the honest behavior when
+        // the harness cannot expose a session safely to its own subprocesses.
         ctx.client?.app?.log?.(
           `[agent-notes] session ${sessionID} → dir ${dir}`
         );
@@ -206,7 +225,9 @@ export default async function agentNotesPlugin(ctx) {
 
       const reply = await invokeAgentNotes(
         ["orient", "--path", dir, "--json"],
-        ctx.client
+        ctx.client,
+        undefined,
+        sessionID
       );
 
       if (reply.status === "ok" && reply.data && typeof reply.data === "object") {
@@ -230,7 +251,7 @@ export default async function agentNotesPlugin(ctx) {
       const sessionID = input.sessionID;
       const dir = sessionDirs.get(sessionID);
 
-      const syncBlock = await buildRegistaSyncBlock(ctx.client);
+      const syncBlock = await buildRegistaSyncBlock(ctx.client, sessionID);
 
       const reconcilePrompt = [
         "",

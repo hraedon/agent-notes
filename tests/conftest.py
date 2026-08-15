@@ -70,11 +70,23 @@ def _hermetic_config(tmp_path_factory):
         # process it overrides every RegistaConfig().project and breaks
         # projection-sync assertions that pin their own project.
         "AGENT_NOTES_PROJECT",
+        # Session identity (WI-067): clear the harness session id and pin the
+        # records dir under the hermetic suite dir so a session record from the
+        # operator's real harness cannot leak a lineage into in-process actor
+        # resolution.
+        "CLAUDE_CODE_SESSION_ID",
+        "OPENCODE_SESSION_ID",
+        "CODEX_SESSION_ID",
+        "AGENT_NOTES_SESSION",
+        "AGENT_NOTES_MODEL_LINEAGE",
     )
+    session_dir = tmp_path_factory.mktemp("sessions")
     saved = {k: os.environ.get(k) for k in keys}
+    saved["AGENT_NOTES_SESSION_DIR"] = os.environ.get("AGENT_NOTES_SESSION_DIR")
     os.environ["AGENT_NOTES_CONFIG"] = str(cfg)
     os.environ["AGENT_SUITE_CONFIG"] = str(suite_cfg)
     os.environ["AGENT_SUITE_SYSTEM_CONFIG"] = str(suite_cfg)
+    os.environ["AGENT_NOTES_SESSION_DIR"] = str(session_dir)
     for k in keys[3:]:
         os.environ.pop(k, None)
     try:

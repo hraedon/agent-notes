@@ -29,6 +29,7 @@ from agent_notes.cli.common import (
 from agent_notes.cli.events import register_events_parsers
 from agent_notes.cli.export import register_export_parsers
 from agent_notes.cli.harness import register_harness_parser
+from agent_notes.cli.invariants import register_invariants_parsers
 from agent_notes.cli.links import register_link_parsers
 from agent_notes.cli.memory import register_memory_parsers
 from agent_notes.cli.memory_provider import register_memory_provider_parsers
@@ -36,6 +37,7 @@ from agent_notes.cli.orient import register_orient_parser
 from agent_notes.cli.outbox import register_outbox_parsers
 from agent_notes.cli.projection import register_projection_parsers
 from agent_notes.cli.search import register_search_parsers
+from agent_notes.cli.session import register_session_parsers
 from agent_notes.cli.skills import register_skills_parser
 from agent_notes.cli.verify import register_verify_parsers
 from agent_notes.cli.vocabulary import register_vocabulary_parsers
@@ -471,6 +473,8 @@ def main() -> int:
     register_changes_parsers(sub)
     register_codex_hook_parser(sub)
     register_events_parsers(sub)
+    register_invariants_parsers(sub)
+    register_session_parsers(sub)
     register_skills_parser(sub)
     register_harness_parser(sub)
     register_export_parsers(sub)

@@ -404,6 +404,27 @@
       "aliases": []
     },
     {
+      "name": "invariants probe",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "session declare",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "session status",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
       "name": "install-skills",
       "mutability": "mutating",
       "json": true,
