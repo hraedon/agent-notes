@@ -21,6 +21,16 @@ The live IdP binding (LDAP/Entra) is a seam: when a live identity source is
 configured, ``resolve_principal_id`` would resolve from the authenticated
 session. That binding is environment-gated (requires a live LDAP/Entra
 connection); the local source (suite.env + git config) is the dev/default path.
+
+``model_lineage`` is resolved separately through the session-scoped chain
+(WI-067, revised per cross-lineage review): session record (once declared) >
+explicit ``--model-lineage`` > process env > per-user suite.env > system
+suite.env. A host-wide value is legitimate only where the host runs exactly one
+model; the session record is the correct shape on multi-agent hosts and is the
+stable source once declared (a conflicting explicit flag is refused). The
+remaining identity fields (``actor_id``, ``principal_kind``,
+``principal_display_name``) follow the env > suite.env layering; ``actor_id``
+is stable per host and belongs in suite.env (WI-067).
 """
 
 from __future__ import annotations
@@ -38,7 +48,8 @@ _PRINCIPAL_ID_ENV = "AGENT_NOTES_PRINCIPAL_ID"
 _SUITE_PRINCIPAL_ID_ENV = "REGISTA_PRINCIPAL_ID"
 _PRINCIPAL_KIND_ENV = "AGENT_NOTES_PRINCIPAL_KIND"
 _PRINCIPAL_DISPLAY_ENV = "AGENT_NOTES_PRINCIPAL_DISPLAY_NAME"
-_MODEL_LINEAGE_ENV = "AGENT_NOTES_MODEL_LINEAGE"
+# Lineage env var lives in session_identity (MODEL_LINEAGE_ENV) so actor
+# resolution can consult the session record chain without a circular import.
 _DEFAULT_ACTOR_ID = "agent-notes"
 
 
@@ -115,13 +126,19 @@ def resolve_principal_id(suite: dict[str, str] | None = None) -> str | None:
 
 
 def load_actor_config() -> ActorConfig:
+    from agent_notes.core.session_identity import resolve_model_lineage
+
     suite = load_suite_env()
+    model_lineage, _source = resolve_model_lineage(suite=suite)
     cfg = ActorConfig(
-        actor_id=os.environ.get(_ACTOR_ID_ENV) or _DEFAULT_ACTOR_ID,
+        actor_id=os.environ.get(_ACTOR_ID_ENV) or suite.get(_ACTOR_ID_ENV) or _DEFAULT_ACTOR_ID,
         principal_id=resolve_principal_id(suite),
-        principal_kind=os.environ.get(_PRINCIPAL_KIND_ENV) or "human",
-        principal_display_name=os.environ.get(_PRINCIPAL_DISPLAY_ENV),
-        model_lineage=os.environ.get(_MODEL_LINEAGE_ENV) or None,
+        principal_kind=os.environ.get(_PRINCIPAL_KIND_ENV)
+        or suite.get(_PRINCIPAL_KIND_ENV)
+        or "human",
+        principal_display_name=os.environ.get(_PRINCIPAL_DISPLAY_ENV)
+        or suite.get(_PRINCIPAL_DISPLAY_ENV),
+        model_lineage=model_lineage,
     )
     if cfg.principal_display_name is None:
         name = _git_config("user.name")

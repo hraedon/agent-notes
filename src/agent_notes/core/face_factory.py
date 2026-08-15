@@ -149,6 +149,14 @@ def actor_with_overrides(
     overrides so a subagent can declare its own lineage without env-var
     mutation.
 
+    **WI-067 (cross-lineage review):** the session record is the stable source
+    once declared. A ``model_lineage`` override that contradicts the current
+    session's declared record is refused (:class:`SessionIdentityConflictError`),
+    because honoring it would let one session author as one lineage and then
+    "review" as another — manufacturing false cross-lineage independence. A
+    genuinely distinct reviewer must be a distinct session (its own record /
+    env), not a flag on the authoring session.
+
     When ``actor_id`` is overridden and ``clear_principal=True``, the
     env-resolved principal (``on_behalf_of``) is cleared — a reviewer with a
     distinct identity is its own principal, not acting on behalf of the
@@ -162,6 +170,20 @@ def actor_with_overrides(
     principal is always preserved — the actor is still the same agent,
     just declaring its lineage explicitly.
     """
+    from agent_notes.core.session_identity import (
+        SessionIdentityConflictError,
+        declared_session_lineage,
+    )
+
+    declared = declared_session_lineage()
+    if model_lineage is not None and declared is not None and model_lineage != declared:
+        raise SessionIdentityConflictError(
+            f"session has already declared lineage {declared!r}; explicit "
+            f"model_lineage {model_lineage!r} cannot change a session's "
+            "identity mid-session (a declared session record is the stable "
+            "source for the cross-lineage review gate)."
+        )
+
     config = load_actor_config()
     if actor_id is not None and clear_principal:
         config = dataclasses.replace(

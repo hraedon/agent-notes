@@ -60,6 +60,10 @@ def discovery_pins() -> dict[str, str]:
         "AGENT_SUITE_CONFIG": str(missing / "suite.env"),
         "AGENT_SUITE_SYSTEM_CONFIG": str(missing / "suite.env"),
         "AGENT_NOTES_CONFIG": str(missing / "config.json"),
+        # Session records (WI-067): pin the records dir under the hermetic
+        # home so the operator's real harness session id cannot leak a lineage
+        # into a CLI subprocess.
+        "AGENT_NOTES_SESSION_DIR": str(home / "sessions"),
     }
 
 

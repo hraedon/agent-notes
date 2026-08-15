@@ -160,7 +160,7 @@ class TestNativeReviewTransition:
             transition_name="reject",
             review_note="Fundamental flaw in the approach.",
             actor_id="r2",
-            model_lineage="opus",
+            model_lineage="claude-opus",
         )
         assert result["status"] == "in_progress"
 
@@ -193,7 +193,7 @@ class TestNativeReviewTransition:
                 transition_name="accept",
                 review_note="accepting",
                 actor_id="r2",
-                model_lineage="opus",
+                model_lineage="claude-opus",
             )
 
     def test_empty_review_note_raises(self, default_project, monkeypatch):
@@ -236,7 +236,7 @@ class TestNativeReviewTransition:
             transition_name="reject",
             review_note="On second thought, no.",
             actor_id="r2",
-            model_lineage="opus",
+            model_lineage="claude-opus",
         )
         diag = result.get("diagnostic_keys") or {}
         notes = diag.get("review_notes") or []
@@ -349,7 +349,7 @@ class TestRegistaReviewTransition:
                 transition_name="accept",
                 review_note="accepted — good work",
                 actor_id="accepter-opus",
-                model_lineage="opus",
+                model_lineage="claude-opus",
             )
             assert result["status"] == "done"
         finally:
@@ -657,7 +657,7 @@ class TestActorWithOverrides:
             identifier="RV-CLI-03",
             note="accepting",
             actor_id="r2",
-            model_lineage="opus",
+            model_lineage="claude-opus",
             same_lineage_acknowledged=False,
         )
         assert cmd_wi_review_accept(ns) != 0
@@ -685,7 +685,7 @@ class TestActorWithOverrides:
             identifier="RV-CLI-04",
             note="rejecting — fundamental flaw",
             actor_id="r2",
-            model_lineage="opus",
+            model_lineage="claude-opus",
             same_lineage_acknowledged=False,
         )
         assert cmd_wi_review_reject(ns) == 0

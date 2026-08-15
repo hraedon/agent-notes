@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import re
 import sys
 from contextlib import redirect_stderr, redirect_stdout
@@ -247,10 +248,33 @@ def _success_output() -> dict[str, bool]:
     return {"continue": True}
 
 
+def _forward_harness_session_id(payload: dict[str, Any]) -> None:
+    """Forward the Codex ``session_id`` to the child process env (WI-067).
+
+    Codex sends a ``session_id`` on every hook invocation. The session-scoped
+    identity record (``agent-notes session declare``) is keyed by that id, so
+    the hook adapter re-exports it as ``CODEX_SESSION_ID`` for the duration of
+    the process. The payload's ``session_id`` is **authoritative within this
+    hook process**: it overwrites any stale ``CODEX_SESSION_ID`` left over from
+    an earlier hook run, so a re-used process cannot attribute a session record
+    to the wrong (previous) session. When the payload carries no ``session_id``
+    at all, any stale ``CODEX_SESSION_ID`` is cleared for the same reason — a
+    hook invocation without a session must not keep attributing identity to a
+    dead session. It is only ever an environment variable — never logged or
+    persisted.
+    """
+    raw = payload.get("session_id")
+    if isinstance(raw, str) and raw:
+        os.environ["CODEX_SESSION_ID"] = raw
+    else:
+        os.environ.pop("CODEX_SESSION_ID", None)
+
+
 def run_session_start(payload: dict[str, Any]) -> dict[str, object]:
     cwd = _cwd_for(payload, "SessionStart")
     if cwd is None:
         return _success_output()
+    _forward_harness_session_id(payload)
     try:
         context = _orientation_for_cwd(cwd)
     except (Exception, SystemExit):
@@ -273,6 +297,7 @@ def run_stop(payload: dict[str, Any]) -> dict[str, object]:
     # if another concurrently-running hook does request one.
     if cwd is None or payload.get("stop_hook_active") is True:
         return _success_output()
+    _forward_harness_session_id(payload)
     try:
         _reconcile_cwd(cwd)
     except (Exception, SystemExit):

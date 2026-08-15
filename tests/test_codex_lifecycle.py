@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import sys
 
 from agent_notes import codex_lifecycle as lifecycle
@@ -133,3 +134,26 @@ def test_wrong_event_and_relative_cwd_are_non_blocking(tmp_path) -> None:
     payload = _stop_payload(tmp_path)
     payload["cwd"] = "relative/path"
     assert lifecycle.run_stop(payload) == {"continue": True}
+
+
+def test_session_id_is_forwarded_as_codex_session_env(monkeypatch, tmp_path) -> None:
+    """WI-067: the Codex session_id keys the session-scoped identity record."""
+    monkeypatch.delenv("CODEX_SESSION_ID", raising=False)
+    lifecycle.run_session_start(_session_payload(tmp_path))
+    assert os.environ.get("CODEX_SESSION_ID") == "session-1"
+
+    # The payload's session_id is authoritative within the hook process: a
+    # stale env value is overwritten, not preserved (a re-used process must
+    # not attribute a session record to the previous session).
+    monkeypatch.setenv("CODEX_SESSION_ID", "stale-session")
+    lifecycle.run_session_start(_session_payload(tmp_path, session_id="fresh-session"))
+    assert os.environ["CODEX_SESSION_ID"] == "fresh-session"
+    lifecycle.run_stop(_stop_payload(tmp_path, session_id="stop-session"))
+    assert os.environ["CODEX_SESSION_ID"] == "stop-session"
+
+    # A payload with no session id clears a stale env value: a hook
+    # invocation without a session must not keep attributing identity to a
+    # dead session.
+    monkeypatch.setenv("CODEX_SESSION_ID", "stale-session")
+    lifecycle.run_session_start({"cwd": str(tmp_path), "hook_event_name": "SessionStart"})
+    assert "CODEX_SESSION_ID" not in os.environ
