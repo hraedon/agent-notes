@@ -35,6 +35,28 @@ from agent_notes.core.session_identity import (
 
 _CLI = (sys.executable, "-m", "agent_notes.cli")
 
+# Candidate WI-286 contract used only when the released suite-lock Regista
+# predates the export. A real export always wins; keep this fixture aligned
+# with regista._lineage.MODEL_LINEAGE_FAMILIES until the coordinated release.
+_CANDIDATE_LINEAGE_FAMILIES = frozenset(
+    {
+        "claude-haiku",
+        "claude-opus",
+        "claude-sonnet",
+        "deepseek",
+        "fable",
+        "glm",
+        "gpt-luna",
+        "gpt-sol",
+        "gpt-terra",
+        "kimi",
+        "longcat",
+        "minimax",
+        "nemotron",
+        "qwen",
+    }
+)
+
 # Harness session-id env vars that must be scrubbed in the fixture so the
 # operator's real harness never leaks into a test.
 _HARNESS_ID_VARS = (
@@ -63,6 +85,29 @@ def _isolated_session_state(monkeypatch, tmp_path):
     suite_env = tmp_path / "suite.env"
     monkeypatch.setenv("AGENT_SUITE_CONFIG", str(suite_env))
     monkeypatch.setenv("AGENT_SUITE_SYSTEM_CONFIG", str(suite_env))
+
+    # CI develops against the released suite lock, whose Regista may predate
+    # WI-286's exported registry. Subprocess tests exercise the candidate
+    # contract through a hermetic provider rather than duplicating a fallback
+    # in production or advancing the lock before the coordinated release.
+    registry_root = tmp_path / "registry-provider"
+    registry_root.mkdir()
+    (registry_root / "sitecustomize.py").write_text(
+        "try:\n"
+        "    import regista\n"
+        "except ImportError:\n"
+        "    pass\n"
+        "else:\n"
+        "    if not hasattr(regista, 'MODEL_LINEAGE_FAMILIES'):\n"
+        "        regista.MODEL_LINEAGE_FAMILIES = "
+        f"frozenset({sorted(_CANDIDATE_LINEAGE_FAMILIES)!r})\n",
+        encoding="utf-8",
+    )
+    inherited_pythonpath = os.environ.get("PYTHONPATH")
+    pythonpath = str(registry_root)
+    if inherited_pythonpath:
+        pythonpath += os.pathsep + inherited_pythonpath
+    monkeypatch.setenv("PYTHONPATH", pythonpath)
     yield
     _si._WARNED_FALLBACK_SESSION = False
 
@@ -135,11 +180,13 @@ def test_session_record_write_is_atomic_and_private(tmp_path):
     assert path == session_record_path("sess-atomic")
     assert path.is_file()
     assert read_session_record("sess-atomic") == {MODEL_LINEAGE_ENV: "glm"}
-    # Private permissions: dir 0700, file 0600.
-    assert path.parent.stat().st_mode & 0o777 == 0o700
-    assert path.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        # Windows ACLs do not expose POSIX mode semantics through st_mode.
+        assert path.parent.stat().st_mode & 0o777 == 0o700
+        assert path.stat().st_mode & 0o777 == 0o600
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows ACLs do not expose POSIX mode bits")
 def test_session_record_write_tightens_preexisting_dir_permissions(tmp_path):
     """A pre-existing loose records dir is tightened to 0700 on write."""
     os.environ["AGENT_NOTES_SESSION"] = "sess-tighten"
@@ -238,6 +285,18 @@ def test_resolve_precedence_suite_is_last_resort():
 def test_resolve_precedence_nothing_resolves_to_none():
     lineage, source = resolve_model_lineage(suite={})
     assert (lineage, source) == (None, None)
+
+
+def test_missing_regista_registry_export_fails_closed(monkeypatch):
+    import types
+
+    import agent_notes.core.session_identity as _si
+
+    regista_without_registry = types.ModuleType("regista")
+    monkeypatch.setitem(sys.modules, "regista", regista_without_registry)
+
+    assert _si.canonical_lineage_families() is None
+    assert _si._is_canonical_lineage("glm") is False
 
 
 def test_declared_session_lineage_helper():
