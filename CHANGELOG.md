@@ -12,8 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   stores one canonical model family per harness session, and `agent-notes
   invariants probe --json` fails closed through
   `agent_notes.session_identity_resolvable` when that identity cannot be
-  resolved. Claude, Codex, and OpenCode session identifiers are handled without
-  a host-wide lineage value; conflicting mid-session relabeling is refused.
+  resolved. Claude and OpenCode session identifiers are handled without a
+  host-wide lineage value; the Codex hook identifier is scoped to its hook
+  process, so other Codex tool processes must pass `--session-id` explicitly.
+  Conflicting mid-session relabeling is refused.
 - **Codex lifecycle integration (Plan 019 / suite Plan 007):** `install-harness codex` installs the canonical skills at `$HOME/.agents/skills` plus hash-owned `SessionStart` orientation and `Stop` reconciliation groups in `$CODEX_HOME/hooks.json`; the bounded `plugins/agent-notes` component bundle carries drift-checked copies of the same skills and hook definitions without packaging the checkout or `.venv`. Hook output is bounded, metadata-only, fail-open, and never requests Stop continuation. Surgical uninstall preserves Cairn, user, duplicated, and locally modified groups. Doctor names plugin, direct, duplicate, stale, absent, and `/hooks` trust-unverified states.
 - **Suite-shape `doctor --json` (Plan 017 WI-3.1):** `agent-notes doctor --json` (and `agent-notes-doctor --json`) now emit the suite contract shape — `{component, version, status, regista:{reachable, project, writes_enabled, chain_ok, mode}, checks:[…]}` — so a suite-doctor umbrella can aggregate agent-notes alongside the other components. `status` is three-state: `healthy` / `degraded` (spine absent — coordinator-absent is the default safe mode, non-failing) / `unhealthy`. A configured-but-unreachable regista is a failure; an unconfigured one is `degraded`. The human-readable `doctor` now runs the same suite-layer checks (chain integrity, skills installed, harness wired, regista reachable) so both surfaces agree.
 - **`SUITE.lock` + suite install runbook (Plan 017 WI-2.2):** `SUITE.lock` records the regista git SHA + envelope/workflow versions this release is tested against; `deploy/SUITE-INSTALL.md` documents the pin procedure and the embedding-model pre-cache path (HF_HOME) for air-gapped installs.
