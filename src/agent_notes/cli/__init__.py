@@ -539,9 +539,11 @@ def _dispatch(func: Callable[[argparse.Namespace], int], args: argparse.Namespac
     *last* thing on the operator's terminal. It is caught here rather than in
     each subcommand because the subcommands' ``except ValueError`` handlers
     would relabel it ``NOT_FOUND`` / ``VALIDATION_FAILED`` — which is how the
-    original failure stayed invisible.
+    original failure stayed invisible. ``InvalidLineageError`` (agent-suite
+    WI-072 step 2) is the same class of failure one notch later: the lineage is
+    declared but names no registry family.
     """
-    from agent_notes.core.actor import UndeclaredLineageError
+    from agent_notes.core.actor import InvalidLineageError, UndeclaredLineageError
 
     try:
         return func(args)
@@ -553,6 +555,20 @@ def _dispatch(func: Callable[[argparse.Namespace], int], args: argparse.Namespac
             str(exc),
             use_json=bool(getattr(args, "json", False)),
             detail={"actor_id": exc.actor_id, "operation": exc.operation or ""},
+            exit_code=EXIT_NOT_CONFIGURED,
+        )
+    except InvalidLineageError as exc:
+        from agent_notes.cli.common import emit_error
+
+        return emit_error(
+            exc.code,
+            str(exc),
+            use_json=bool(getattr(args, "json", False)),
+            detail={
+                "model_lineage": exc.lineage,
+                "allowed": exc.allowed,
+                "operation": exc.operation or "",
+            },
             exit_code=EXIT_NOT_CONFIGURED,
         )
     except RegistaError as exc:

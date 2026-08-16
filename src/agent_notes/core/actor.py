@@ -94,6 +94,56 @@ class UndeclaredLineageError(RuntimeError):
         )
 
 
+class InvalidLineageError(RuntimeError):
+    """A declared ``model_lineage`` is not a family in regista's closed registry.
+
+    Same ``RuntimeError`` rationale as :class:`UndeclaredLineageError`: it must
+    travel intact past the write path's ``except ValueError`` handlers to the
+    CLI's ``_dispatch``, which renders it under its own code. The code string
+    deliberately matches regista's ingress error (``INVALID_MODEL_LINEAGE``) so
+    operators meet one name for one fact — the difference is *where* it is
+    caught: here, at agent-notes' own boundary, before anything is written or
+    queued for the outbox (agent-suite WI-072 step 2).
+    """
+
+    code = "INVALID_MODEL_LINEAGE"
+
+    def __init__(self, lineage: str, allowed: list[str], operation: str | None = None) -> None:
+        self.lineage = lineage
+        self.allowed = allowed
+        self.operation = operation
+        what = f"`{operation}`" if operation else "this agent-authored write"
+        super().__init__(
+            f"INVALID_MODEL_LINEAGE: {what} refused — {lineage!r} is not a "
+            "model-lineage family in regista's closed registry.\n"
+            "\n"
+            "Lineage is the family, not the exact build or a harness name. "
+            f"Allowed: {', '.join(allowed)}.\n"
+            "\n"
+            "Fix the declaration (env or per-invocation):\n"
+            f"    export {_MODEL_LINEAGE_ENV}=<model-family>\n"
+            "    --model-lineage <model-family>"
+        )
+
+
+def registry_families() -> frozenset[str] | None:
+    """regista's closed lineage registry, or ``None`` when it has none.
+
+    The installed regista predating the closed vocabulary (< 0.6 line) exports
+    no ``MODEL_LINEAGE_FAMILIES``; returning ``None`` keeps this boundary check
+    dormant there — free-text lineage remains regista's own ingress problem —
+    and makes it activate by itself the moment SUITE.lock advances past the
+    registry. Safe on both sides of the lock.
+    """
+    try:
+        from regista import MODEL_LINEAGE_FAMILIES
+    except ImportError:
+        return None
+    if not isinstance(MODEL_LINEAGE_FAMILIES, frozenset):
+        return None
+    return MODEL_LINEAGE_FAMILIES
+
+
 def declared_lineage(value: str | None) -> str | None:
     """The declared lineage in *value*, or ``None`` if it declares nothing.
 
@@ -117,8 +167,12 @@ def require_declared_lineage(actor: Actor, operation: str | None = None) -> Acto
     """
     if actor.actor_kind != "agent":
         return actor
-    if declared_lineage(actor.model_lineage) is None:
+    lineage = declared_lineage(actor.model_lineage)
+    if lineage is None:
         raise UndeclaredLineageError(actor.actor_id, operation)
+    families = registry_families()
+    if families is not None and lineage not in families:
+        raise InvalidLineageError(lineage, sorted(families), operation)
     return actor
 
 

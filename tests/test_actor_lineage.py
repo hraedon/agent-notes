@@ -89,28 +89,27 @@ def test_lineage_resolves_from_suite_env_alone(_clean_actor_env, monkeypatch):
     WI-062 was filed.
     """
     _clean_actor_env.write_text(
-        "AGENT_NOTES_ACTOR_ID=hermes\n"
-        "AGENT_NOTES_MODEL_LINEAGE=deepseek-v4-flash\n",
+        "AGENT_NOTES_ACTOR_ID=hermes\nAGENT_NOTES_MODEL_LINEAGE=deepseek\n",
         encoding="utf-8",
     )
     actor = resolve_actor(load_actor_config())
     assert actor.actor_id == "hermes"
-    assert actor.model_lineage == "deepseek-v4-flash"
+    assert actor.model_lineage == "deepseek"
     require_declared_lineage(actor)  # must not raise
 
 
 def test_process_env_beats_suite_env(_clean_actor_env, monkeypatch):
     _clean_actor_env.write_text("AGENT_NOTES_MODEL_LINEAGE=from-file\n", encoding="utf-8")
-    monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "from-env")
-    assert resolve_actor(load_actor_config()).model_lineage == "from-env"
+    monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")
+    assert resolve_actor(load_actor_config()).model_lineage == "glm"
 
 
 def test_explicit_override_beats_env(monkeypatch):
     """``--model-lineage`` (threaded as the override arg) wins over the env."""
     from agent_notes.core.face_factory import actor_with_overrides
 
-    monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "from-env")
-    assert actor_with_overrides(None, "from-flag").model_lineage == "from-flag"
+    monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")
+    assert actor_with_overrides(None, "kimi").model_lineage == "kimi"
 
 
 def test_whitespace_lineage_declares_nothing(monkeypatch):
@@ -148,3 +147,94 @@ def test_non_agent_actors_are_not_required_to_declare_a_lineage():
     from agent_notes.core.actor import migration_actor
 
     assert require_declared_lineage(migration_actor()) is not None
+
+
+# --- Closed-registry boundary validation (agent-suite WI-072 step 2) ---------
+
+
+def _agent(lineage: str) -> Actor:
+    return Actor(actor_id="test-agent", actor_kind="agent", model_lineage=lineage)
+
+
+def test_invalid_lineage_refused_when_registry_present(monkeypatch):
+    """A declared token outside regista's closed registry fails at THIS boundary.
+
+    The named agent-notes error must fire before anything is written or queued
+    for the outbox — a regista INVALID_MODEL_LINEAGE surfacing later through
+    the outbox is exactly what WI-072 step 2 exists to prevent.
+    """
+    import regista
+
+    from agent_notes.core.actor import InvalidLineageError
+
+    monkeypatch.setattr(
+        regista,
+        "MODEL_LINEAGE_FAMILIES",
+        frozenset({"glm", "kimi", "fable"}),
+        raising=False,
+    )
+    with pytest.raises(InvalidLineageError) as exc_info:
+        require_declared_lineage(_agent("glm-5.2"), operation="work-item file")
+
+    exc = exc_info.value
+    assert exc.code == "INVALID_MODEL_LINEAGE"
+    assert exc.lineage == "glm-5.2"
+    assert exc.allowed == ["fable", "glm", "kimi"]
+    assert exc.operation == "work-item file"
+    text = str(exc)
+    assert "INVALID_MODEL_LINEAGE" in text
+    # The remedy and the allowed set must be in the message itself.
+    assert "AGENT_NOTES_MODEL_LINEAGE" in text
+    assert "--model-lineage" in text
+    assert "fable, glm, kimi" in text
+
+
+def test_registry_member_passes_when_registry_present(monkeypatch):
+    import regista
+
+    monkeypatch.setattr(regista, "MODEL_LINEAGE_FAMILIES", frozenset({"glm"}), raising=False)
+    assert require_declared_lineage(_agent("glm")).model_lineage == "glm"
+
+
+def test_validation_is_dormant_without_the_registry_export(monkeypatch):
+    """Pinned below the closed-vocabulary regista, free text still passes here.
+
+    The check must activate by itself when SUITE.lock advances — and impose
+    nothing before that. Safe on both sides of the lock.
+    """
+    import regista
+
+    from agent_notes.core.actor import registry_families
+
+    monkeypatch.delattr(regista, "MODEL_LINEAGE_FAMILIES", raising=False)
+    assert registry_families() is None
+    assert require_declared_lineage(_agent("anything-goes")).model_lineage == ("anything-goes")
+
+
+def test_non_frozenset_export_reads_as_no_registry(monkeypatch):
+    """A malformed export is not a registry; degrade to dormant, don't crash."""
+    import regista
+
+    from agent_notes.core.actor import registry_families
+
+    monkeypatch.setattr(regista, "MODEL_LINEAGE_FAMILIES", ["glm"], raising=False)
+    assert registry_families() is None
+
+
+def test_documented_lineage_examples_are_registry_members():
+    """Anti-drift: the families our error messages teach must exist upstream.
+
+    Nothing else stops cross-repo drift behind SUITE.lock (the cairn lesson):
+    if regista renames or drops a family, the remedy text in our refusals must
+    fail here rather than teach operators a token that ingress will reject.
+    """
+    from agent_notes.core.actor import registry_families
+
+    families = registry_families()
+    if families is None:
+        pytest.skip("installed regista predates the closed lineage registry")
+    for example in ("claude-opus", "gpt-sol", "glm", "kimi"):
+        assert example in families, (
+            f"actor.py error text recommends {example!r}, absent from regista's "
+            "MODEL_LINEAGE_FAMILIES"
+        )
