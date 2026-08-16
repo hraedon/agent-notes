@@ -238,3 +238,42 @@ def test_documented_lineage_examples_are_registry_members():
             f"actor.py error text recommends {example!r}, absent from regista's "
             "MODEL_LINEAGE_FAMILIES"
         )
+
+
+def test_padded_override_is_stripped_before_it_propagates(monkeypatch):
+    """Review finding (WI-062 pass, deepseek): ``--model-lineage " kimi "``
+    passed the stripped registry check but the un-stripped token propagated to
+    the actor (and so to the outbox envelope and regista)."""
+    from agent_notes.core.face_factory import actor_with_overrides
+
+    assert actor_with_overrides(None, " kimi ").model_lineage == "kimi"
+
+
+def test_whitespace_only_override_refuses_loudly(monkeypatch):
+    """An explicit whitespace flag declares nothing and must not silently
+    defer to the env value it was presumably meant to replace."""
+    from agent_notes.core.face_factory import actor_with_overrides
+
+    monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")
+    with pytest.raises(UndeclaredLineageError):
+        actor_with_overrides(None, "   ")
+
+
+def test_broken_regista_install_is_not_dormant(monkeypatch):
+    """Review finding (WI-062 pass, deepseek): a failed transitive import
+    inside regista must re-raise, not silently deactivate the boundary check
+    on the very host where something is already wrong."""
+    import builtins
+
+    from agent_notes.core.actor import registry_families
+
+    real_import = builtins.__import__
+
+    def broken(name, *args, **kwargs):
+        if name == "regista":
+            raise ImportError("broken transitive dep", name="asn1crypto")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", broken)
+    with pytest.raises(ImportError):
+        registry_families()

@@ -31,6 +31,7 @@ from typing import Callable
 
 from agent_notes.core.actor import (
     Actor,
+    declared_lineage,
     load_actor_config,
     require_declared_lineage,
     resolve_actor,
@@ -200,7 +201,12 @@ def actor_with_overrides(
             actor_id=actor_id,
         )
     if model_lineage is not None:
-        config = dataclasses.replace(config, model_lineage=model_lineage)
+        # Normalize like the env path (actor.py declared_lineage at resolve):
+        # a padded token must not propagate un-stripped to the actor/outbox/
+        # regista after passing the stripped registry check. A whitespace-only
+        # override declares nothing and overwrites any env value — explicit
+        # garbage refuses loudly rather than silently deferring to env.
+        config = dataclasses.replace(config, model_lineage=declared_lineage(model_lineage))
     return require_declared_lineage(resolve_actor(config), operation)
 
 

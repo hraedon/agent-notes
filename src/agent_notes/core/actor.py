@@ -137,8 +137,15 @@ def registry_families() -> frozenset[str] | None:
     """
     try:
         from regista import MODEL_LINEAGE_FAMILIES
-    except ImportError:
-        return None
+    except ImportError as exc:
+        # Dormant ONLY when regista itself is absent or lacks the export
+        # (exc.name is the from-module in both cases). A broken install — a
+        # failed transitive import inside regista — must NOT read as "no
+        # registry": that would silently deactivate boundary validation on the
+        # very host where something is already wrong. Re-raise it.
+        if exc.name == "regista":
+            return None
+        raise
     if not isinstance(MODEL_LINEAGE_FAMILIES, frozenset):
         return None
     return MODEL_LINEAGE_FAMILIES
