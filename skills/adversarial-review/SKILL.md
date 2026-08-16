@@ -40,10 +40,20 @@ The gate enforces two identity checks:
    --actor-id <your-distinct-id> --model-lineage <your-lineage>
    ```
 
-   Common lineage values: `kimi`, `glm`, `nemotron`, `minimax`, `opus`,
-   `human`. If you share a lineage with an author, the gate allows the
-   review only with `--same-lineage-acknowledged` (the note must justify
-   why same-lineage review is acceptable here).
+   Lineage values are regista's closed registry families — the family,
+   never a versioned build or harness name: `kimi`, `glm`, `nemotron`,
+   `minimax`, `deepseek`, `qwen`, `claude-opus`, `claude-sonnet`, `fable`,
+   `gpt-sol`, `human`. If you share a lineage with an author, the gate
+   allows the review only with `--same-lineage-acknowledged` (the note must
+   justify why same-lineage review is acceptable here).
+
+   Both identity checks gate the *positive* verdicts (`pass`, `accept`).
+   Under canonical workflow v3 (regista WI-284), `request-changes` is
+   `finding_only`: any actor — including one whose independence is
+   unprovable — may record a negative finding, provided the note is
+   substantive. No independence claim is made or required for it. (A
+   deployment still on canonical v2 gates `request-changes` on
+   independence too; declare your lineage either way.)
 
 ## Step 1: Discover what's awaiting review
 
