@@ -555,7 +555,17 @@ def cmd_bc_reconcile(args: argparse.Namespace) -> int:
             refs["resolved_by_subject"] = info["subject"]
             try:
                 WorkItemModel.update_work_item(
-                    proj_id, ident, status="closed", external_refs=refs, force=True
+                    proj_id,
+                    ident,
+                    status="closed",
+                    external_refs=refs,
+                    force=True,
+                    # WI-062: reconcile writes a real status transition, so it
+                    # is a real authored event and needs a declared lineage
+                    # like any other. Without these the only source would be
+                    # the env, and `/start` / `/end` invoke this unattended.
+                    actor_id=getattr(args, "actor_id", None),
+                    model_lineage=getattr(args, "model_lineage", None),
                 )
                 applied = True
             except Exception as exc:
@@ -718,6 +728,7 @@ def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
         default=400,
         help="Number of recent commits to scan (default: 400)",
     )
+    _add_author_identity(bc_reconcile)
     _add_common(bc_reconcile)
     bc_reconcile.set_defaults(func=cmd_bc_reconcile)
 

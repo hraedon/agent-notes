@@ -51,6 +51,8 @@ def file_work_item(
     actor_id: str | None,
     model_lineage: str | None = None,
 ) -> dict:
+    # WI-062: refuse before any op is written, not after.
+    face_factory.assert_declared_lineage(actor_id, model_lineage, operation="work-item file")
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         _common.validate_vocab(conn, workspace_id, "wi_kind", kind)
@@ -149,6 +151,7 @@ def update_work_item(
     (WI-020): it writes ops, folds the cache, and writes the change_log row but
     never commits — the caller owns the transaction boundary.
     """
+    face_factory.assert_declared_lineage(actor_id, model_lineage, operation="work-item update")
     workspace_id = _common.resolve_workspace_for_project(conn, project_id)
     cur = conn.cursor(row_factory=dict_row)
     cur.execute(
@@ -364,6 +367,7 @@ def close_work_item_force(
     model_lineage: str | None = None,
 ) -> dict:
     """Native force-close: writes the legacy terminal ``close`` op (admin/repair)."""
+    face_factory.assert_declared_lineage(actor_id, model_lineage, operation="work-item close")
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)
@@ -444,9 +448,11 @@ def attest_gate_waiver(project_id: int, identifier: str, reason: str, actor_id: 
             )
 
         actor = (
-            face_factory.actor_with_overrides(actor_id, None, clear_principal=True)
+            face_factory.actor_with_overrides(
+                actor_id, None, clear_principal=True, operation="attest-gate-waiver"
+            )
             if actor_id
-            else face_factory.default_actor()
+            else face_factory.actor_with_overrides(operation="attest-gate-waiver")
         )
         attestation = {
             "status": "waived",
@@ -514,6 +520,9 @@ def review_transition(
     """
     from datetime import datetime, timezone
 
+    face_factory.assert_declared_lineage(
+        actor_id, model_lineage, operation=f"work-item review {transition_name}"
+    )
     target_status = _REVIEW_TRANSITION_TO_STATUS[transition_name]
 
     with _conn() as conn:

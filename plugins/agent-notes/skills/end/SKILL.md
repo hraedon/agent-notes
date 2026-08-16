@@ -32,7 +32,7 @@ Run:
 
 ```
 agent-notes breadcrumb reconcile --path <repo-path>          # dry-run: shows matches
-agent-notes breadcrumb reconcile --path <repo-path> --apply  # transition them to resolved
+agent-notes breadcrumb reconcile --path <repo-path> --apply --model-lineage <your-model-family>  # transition them to resolved
 ```
 
 It scans recent git history for open work items whose identifier appears in a

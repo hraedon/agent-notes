@@ -51,6 +51,37 @@ One Postgres database (`agent_notes`), one Python package (`agent_notes`), one `
 - **`links` table accepts dangling rows**; filter at query time. `links_audit` reports orphans (Phase 6.3).
 - **DB is the only source of truth** (decision 39, Plan 003). Markdown projection was removed in Phase 8a. No files are written to disk by the servers.
 
+## Actor identity and declared lineage
+
+Every work-item write is an *agent-authored event*. regista's cross-lineage
+review gate (`derive_authors` in `regista/_review_validators.py`) marks any
+event with `actor_kind="agent"` and no `model_lineage` as
+`agent_author_undeclared` — and **history cannot be cured**: declaring a lineage
+later does not fix an event already written, so one such event makes the item
+un-passable by any agent reviewer forever. WI-062.
+
+So the write path **fails closed** (`core/actor.py::require_declared_lineage`,
+enforced at `core/face_factory.py::actor_with_overrides` and, for the degrade
+path, `assert_declared_lineage`): filing/updating/closing/reviewing/claiming a
+work item without a resolvable lineage raises `UndeclaredLineageError` and the
+CLI renders it as an `UNDECLARED_LINEAGE` envelope (exit 3). Nothing is written.
+
+Identity resolves through the standard suite layering —
+`process env > per-user suite.env > system suite.env > default` — for
+`AGENT_NOTES_ACTOR_ID`, `AGENT_NOTES_MODEL_LINEAGE`,
+`AGENT_NOTES_PRINCIPAL_KIND`, and `AGENT_NOTES_PRINCIPAL_DISPLAY_NAME`. Set the
+lineage once per host in `~/.config/agent-suite/suite.env`, or pass
+`--model-lineage` per command. Declare the model *family* (`claude-opus`,
+`gpt-sol`, `glm`, `kimi`), not the exact build — the gate compares
+families.
+
+Two deliberate exemptions: `actor_kind="system"` actors (the migration actor)
+carry no model and are never counted by the gate, and note-shaped entities
+(memories, reflections via `core/note_model.py`) still use the un-gated
+`face_factory.default_actor()` because `derive_authors` never reads them.
+Moving notes under the same rule is a deliberate decision, not a tidy-up — it
+fails `memory add` for every unconfigured caller.
+
 ## Embedding
 
 In-process lazy singleton (decision 2). 270MB nomic model loads on first call; thread-safe. `AGENT_NOTES_EMBED_MODEL` / `AGENT_NOTES_EMBED_DIM` env vars override defaults. Always embed *before* opening a DB transaction (decision 26).

@@ -25,6 +25,13 @@ agent-notes workspace list --json
 It returns `id`, `slug`, `name`, and `project_count` for every
 workspace. Don't go fishing through `vocabulary list` for this.
 
+A note on `<repo-path>`: `--path` is matched as a **string** against the
+registered `projects.repo_root` (exact, then ancestor) — the filesystem
+is never stat'd. Most registered roots are spelled `/projects/<name>` (a few, e.g. `switchboard`, are not), so prefer
+that form even if your checkout lives elsewhere. If a path won't resolve
+(`PROJECT_NOT_REGISTERED`), fall back to `--workspace default
+--project <slug>` on any command (limitation tracked as agent-notes WI-065).
+
 ## First — reconcile against git
 
 Before listing what's open, let the tool self-heal the most common drift:
@@ -41,13 +48,15 @@ glance at it. If the matches are genuine resolutions, apply them so the open
 list below reflects reality:
 
 ```
-agent-notes breadcrumb reconcile --path <repo-path> --apply
+agent-notes breadcrumb reconcile --path <repo-path> --apply --model-lineage <your-model-family>
 ```
 
 This is the session-start counterpart to the same step in `/end`; running it
 here catches drift left by a prior session that ended without it. Note what you
 reconciled in the briefing (e.g. "reconciled 2 already resolved in git"). If the
-repo isn't git or isn't registered, reconcile prints nothing — move on.
+path isn't registered, reconcile errors (`PROJECT_NOT_REGISTERED`, exit 3) —
+use the `--workspace`/`--project` fallback above or move on; with no usable
+git history it just reports no matches.
 
 ## Then — three quick lookups
 
@@ -63,8 +72,12 @@ agent-notes work-item find \
   --json
 ```
 
-Also pull `--status claimed` if the project uses that. Combine and
-sort by severity then recency. Show the top 5–8 in a list:
+Also pull `--status claimed` if the project uses that. The filter flag
+is `--type` (there is no `--kind` flag), even though the JSON field it
+matches is named `kind`. Valid kinds: `todo, observation, decision,
+risk, task, bug, feature, improvement, question, experiment, spike,
+refactor, docs, ci, job` — `rfc` is not one, here or in `work-item
+file`. Combine and sort by severity then recency. Show the top 5–8 in a list:
 
 ```
 - WI-007 (bug / high) — Memory CLI swaps workspace/project args
@@ -114,12 +127,12 @@ Aim for ~10 lines, not a full dossier. Sample:
 **Open work items (3):**
 - WI-007 (bug / high) — workspace/project arg swap in get_memory
 - WI-002 (todo / medium) — install-skills frontmatter validation
-- WI-003 (rfc / low)    — expose LISTEN helpers via CLI
+- WI-003 (feature / low) — expose LISTEN helpers via CLI
 
 **Where we left off (reflection 2026-05-24-kimi-k2-6):**
 - Phase 9a landed; 204 tests pass.
 - Next: Phase 9b skills (file-breadcrumb, add-memory, start).
-- Gaps: --kind vs --type inconsistency, link trace --all CLI test.
+- Gaps: link trace --all CLI test still missing.
 
 **Active anchor memory:**
 - project-agent-notes-refactor — MCP→CLI+skills pivot via Plan 004.
@@ -132,4 +145,5 @@ to do; you're just laying out the state.
 
 If `agent-notes` exits non-zero or its JSON shape doesn't match what
 this skill expects, the CLI contract has drifted — file a work item
-under project agent-notes.
+under project agent-notes (`work-item file --workspace default
+--project agent-notes --type bug ...`).

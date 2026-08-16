@@ -104,9 +104,10 @@ def test_force_close_on_regista_path_terminalizes_instead_of_fold_crash(
         reg.close()
 
 
-def test_force_close_native_path_still_writes_legacy_terminal(default_project):
+def test_force_close_native_path_still_writes_legacy_terminal(default_project, monkeypatch):
     """The degrade (no-face) path is unchanged: force writes the terminal
     'closed' op directly (Plan 014 A(b))."""
+    monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")  # WI-062
     reset_face()
     WorkItemModel.file_work_item(
         project_id=default_project.id,
@@ -246,22 +247,27 @@ def test_mem_add_empty_body_returns_validation_error(capsys, monkeypatch):
 
 
 def test_review_pass_cli_catches_regista_error(default_project, hmac_key_path, monkeypatch, capsys):
-    """When the review gate raises RegistaError (e.g. undeclared author
-    lineage), the CLI catches it and emits a VALIDATION_FAILED envelope
-    instead of a traceback."""
+    """When the review gate raises RegistaError, the CLI catches it and emits a
+    VALIDATION_FAILED envelope instead of a traceback.
+
+    The trigger used to be an undeclared author lineage; WI-062 makes that
+    unwritable, so the trigger is now a same-lineage review without
+    ``--same-lineage-acknowledged`` — a rejection the gate still raises and the
+    CLI must still render cleanly.
+    """
     from agent_notes.cli.work_items import cmd_wi_review_pass
 
     monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
     monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "author-agent")
     monkeypatch.setenv("AGENT_NOTES_PRINCIPAL_ID", "author@example.com")
-    monkeypatch.delenv("AGENT_NOTES_MODEL_LINEAGE", raising=False)
+    monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "kimi")
 
     reg = InMemoryRegista(hmac_key_path=hmac_key_path)
     face = RegistaFace(reg)
     reset_face()
     set_face_for_test(face)
     try:
-        # File and drive to in_review without declaring model_lineage.
+        # File and drive to in_review as a "kimi" author.
         WorkItemModel.file_work_item(
             project_id=default_project.id,
             identifier="RV-CLI-ERR",
@@ -279,7 +285,7 @@ def test_review_pass_cli_catches_regista_error(default_project, hmac_key_path, m
         )
         WorkItemModel.close_work_item(default_project.id, "RV-CLI-ERR")
 
-        # The adversarial_pass should raise RegistaError (undeclared lineage).
+        # A kimi reviewer on a kimi-authored item without an ack is rejected.
         # The CLI must catch it and return a VALIDATION_FAILED envelope.
         ns = argparse.Namespace(
             workspace=None,

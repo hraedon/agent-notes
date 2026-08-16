@@ -61,6 +61,8 @@ def _set_regista_env(dsn: str):
     os.environ["AGENT_NOTES_REGISTA_PROJECT"] = "test_project"
     os.environ["AGENT_NOTES_REGISTA_HMAC_KEY_PATH"] = os.devnull
     os.environ["AGENT_NOTES_ACTOR_ID"] = "test-agent"
+    # WI-062: agent-kind writes refuse without a declared lineage.
+    os.environ["AGENT_NOTES_MODEL_LINEAGE"] = "glm"
 
 
 def _clear_regista_env():
@@ -70,6 +72,9 @@ def _clear_regista_env():
         "AGENT_NOTES_REGISTA_PROJECT",
         "AGENT_NOTES_REGISTA_HMAC_KEY_PATH",
         "AGENT_NOTES_ACTOR_ID",
+        # NOT AGENT_NOTES_MODEL_LINEAGE: conftest's hermetic fixture sets a
+        # session-wide default (WI-062) and this helper pops from os.environ
+        # directly, so removing it here would leak into every later test.
     ):
         os.environ.pop(key, None)
 
@@ -163,7 +168,7 @@ class TestRegistaWriteThrough:
                 actor_id="accepter-opus",
                 actor_kind="agent",
                 role="agent",
-                model_lineage="opus",
+                model_lineage="claude-opus",
             )
             face.transition_breadcrumb(
                 accepter,
@@ -306,6 +311,7 @@ class TestRegistaWriteThrough:
         # the status stays `open`; the lease is recorded in work_item_leases.
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
         monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")  # WI-062
 
         reg = InMemoryRegista(hmac_key_path=hmac_key_path)
         face = RegistaFace(reg)
@@ -360,6 +366,7 @@ class TestRegistaWriteThrough:
         # lease row is a projection mirror of the authoritative claim.
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
         monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")  # WI-062
 
         reg = InMemoryRegista(hmac_key_path=hmac_key_path)
         face = RegistaFace(reg)
@@ -463,6 +470,7 @@ class TestMigrateToRegista:
         self, default_project, hmac_key_path, monkeypatch
     ):
         monkeypatch.delenv("AGENT_NOTES_REGISTA_WRITES", raising=False)
+        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")  # WI-062
         reset_face()
 
         legacy = WorkItemModel.file_work_item(
@@ -480,6 +488,7 @@ class TestMigrateToRegista:
         monkeypatch.setenv("AGENT_NOTES_REGISTA_HMAC_KEY_PATH", hmac_key_path)
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
         monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")  # WI-062
 
         import regista as regista_module
 
@@ -526,6 +535,7 @@ class TestMigrateToRegista:
         self, default_project, hmac_key_path, monkeypatch
     ):
         monkeypatch.delenv("AGENT_NOTES_REGISTA_WRITES", raising=False)
+        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")  # WI-062
         reset_face()
 
         WorkItemModel.file_work_item(
@@ -539,6 +549,7 @@ class TestMigrateToRegista:
         monkeypatch.setenv("AGENT_NOTES_REGISTA_DSN", "postgresql://unused")
         monkeypatch.setenv("AGENT_NOTES_REGISTA_HMAC_KEY_PATH", hmac_key_path)
         monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")  # WI-062
 
         from agent_notes.scripts import migrate_to_regista
 
@@ -563,6 +574,7 @@ class TestLegacyPathUnchanged:
         reset_face()
         monkeypatch.delenv("AGENT_NOTES_REGISTA_WRITES", raising=False)
         monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")  # WI-062
 
         wi = WorkItemModel.file_work_item(
             project_id=default_project.id,

@@ -56,8 +56,16 @@ agent-notes work-item update <identifier> \
   --path <repo-path> \
   --status <new-status> \
   --body "<existing body + appended note>" \
+  --model-lineage <your-model-family> \
   --json
 ```
+
+**`--model-lineage` is required** (WI-062): a status transition is an
+agent-authored event like any other, and an event with no declared model
+family permanently blocks the cross-lineage review gate, so the CLI refuses
+it with `UNDECLARED_LINEAGE`. Declare the family (`claude-opus`,
+`gpt-sol`, `glm`, `kimi`), or set `AGENT_NOTES_MODEL_LINEAGE` in the
+environment / `~/.config/agent-suite/suite.env` and omit the flag.
 
 Two things to know about the CLI:
 

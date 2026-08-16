@@ -51,7 +51,9 @@ def file_work_item(
             identifier = cur.fetchone()[0]
 
     effective_title = title or identifier
-    actor = face_factory.actor_with_overrides(actor_id, model_lineage)
+    actor = face_factory.actor_with_overrides(
+        actor_id, model_lineage, operation="work-item file"
+    )
     norm_sid = normalize_source_identifier(identifier)
 
     # Idempotency guard (Plan 015): regista is the SoT, but the create-vs-update
@@ -164,7 +166,9 @@ def update_work_item(
         old_body = kernel.get_blob(conn, old["body_hash"]) or ""
         wid = old["regista_work_item_id"]
 
-    actor = face_factory.actor_with_overrides(actor_id, model_lineage)
+    actor = face_factory.actor_with_overrides(
+        actor_id, model_lineage, operation="work-item update"
+    )
     custom_fields: dict[str, Any] = {}
     if title is not None:
         custom_fields["title"] = title or identifier
@@ -247,7 +251,9 @@ def close_work_item(
         wid = old["regista_work_item_id"]
         state = old["status"]
 
-    actor = face_factory.actor_with_overrides(actor_id, model_lineage)
+    actor = face_factory.actor_with_overrides(
+        actor_id, model_lineage, operation="work-item close"
+    )
     # Plan 010 WI-3: close → submit_for_review → in_review. The agent cannot
     # reach `done` unilaterally (Invariant G); work awaits a cross-lineage
     # review pass + accept. `closed` (legacy terminal) is treated as `done`.
@@ -322,6 +328,7 @@ def review_transition(
         actor_id,
         model_lineage,
         clear_principal=True,
+        operation=f"work-item review {transition_name}",
     )
     payload: dict[str, Any] = {"review_note": review_note}
     if same_lineage_acknowledged:
@@ -374,7 +381,7 @@ def claim_work_item(face: Any, project_id: int, identifier: str, ttl_seconds: in
         wid = old["regista_work_item_id"]
         entity_id = old["entity_id"]
 
-    actor = face_factory.default_actor()
+    actor = face_factory.actor_with_overrides(operation="work-item claim")
     # Plan 010 WI-2: lease is a regista claim, NOT a lifecycle state.
     # acquire_claim is the authoritative lease; the lifecycle does not move.
     claim = face.acquire_claim(actor, wid, ttl_seconds=ttl_seconds)
@@ -426,7 +433,7 @@ def release_work_item(face: Any, project_id: int, identifier: str) -> dict:
         wid = old["regista_work_item_id"]
         entity_id = old["entity_id"]
 
-    actor = face_factory.default_actor()
+    actor = face_factory.actor_with_overrides(operation="work-item release")
     # Plan 010 WI-2: release the regista claim; the lifecycle is untouched.
     face.release_claim(actor, wid)
     regista_work_item = face.get(wid)
@@ -462,7 +469,7 @@ def heartbeat_work_item(face: Any, project_id: int, identifier: str, ttl_seconds
         entity_id = old["entity_id"]
         wid = old["regista_work_item_id"]
 
-    actor = face_factory.default_actor()
+    actor = face_factory.actor_with_overrides(operation="work-item heartbeat")
     # Plan 010 WI-2: authoritative liveness is the regista claim heartbeat.
     claim = face.heartbeat_claim(actor, wid, ttl_seconds=ttl_seconds)
     expires_at = getattr(claim, "expires_at", None)
