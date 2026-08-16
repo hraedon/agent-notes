@@ -1357,3 +1357,62 @@ def test_cli_configures_structlog_to_stderr(capsys):
         # leaving it bound would poison later tests once that stream is
         # torn down. Reset to structlog's lazy defaults.
         structlog.reset_defaults()
+
+
+def test_lease_and_attest_parsers_accept_and_thread_model_lineage(monkeypatch, capsys):
+    """WI-068: claim / release / heartbeat / attest-gate accept --model-lineage
+    and thread it to the model layer.
+
+    Before this, the documented per-invocation lineage fallback was env-only on
+    these four subcommands: the flag existed on file/update/close/review but
+    argparse rejected it here, so an undeclared-env caller had no remedy the
+    refusal text promised.
+    """
+    import argparse
+
+    from agent_notes.cli import work_items as wi_cli
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command")
+    wi_cli.register_work_item_parsers(sub)
+
+    monkeypatch.setattr(wi_cli, "_resolve", lambda *a, **k: (1, 1, "ws", "proj"))
+
+    threaded: dict[str, str | None] = {}
+    row = {
+        "identifier": "WI-1",
+        "title": "t",
+        "kind": "task",
+        "status": "open",
+        "expires_at": "2026-01-01T00:00:00Z",
+        "heartbeat_count": 1,
+        "diagnostic_keys": {},
+    }
+
+    def _capture(name):
+        def _fake(*a, **kw):
+            threaded[name] = kw.get("model_lineage")
+            return dict(row)
+
+        return _fake
+
+    monkeypatch.setattr(WorkItemModel, "claim_work_item", _capture("claim"))
+    monkeypatch.setattr(WorkItemModel, "release_work_item", _capture("release"))
+    monkeypatch.setattr(WorkItemModel, "heartbeat_work_item", _capture("heartbeat"))
+    monkeypatch.setattr(WorkItemModel, "attest_gate_waiver", _capture("attest-gate"))
+
+    invocations = [
+        ("claim", ["work-item", "claim", "WI-1"]),
+        ("release", ["work-item", "release", "WI-1"]),
+        ("heartbeat", ["work-item", "heartbeat", "WI-1"]),
+        ("attest-gate", ["work-item", "attest-gate", "WI-1", "--reason", "r"]),
+    ]
+    for name, argv in invocations:
+        args = parser.parse_args([*argv, "--model-lineage", "glm", "--json"])
+        rc = args.func(args)
+        capsys.readouterr()  # drain the fake JSON output
+        assert rc == 0, name
+        assert threaded[name] == "glm", (
+            f"--model-lineage did not reach the model layer for {name!r}"
+        )

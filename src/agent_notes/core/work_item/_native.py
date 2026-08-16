@@ -418,7 +418,13 @@ def close_work_item_force(
         return dict(folded)
 
 
-def attest_gate_waiver(project_id: int, identifier: str, reason: str, actor_id: str | None) -> dict:
+def attest_gate_waiver(
+    project_id: int,
+    identifier: str,
+    reason: str,
+    actor_id: str | None,
+    model_lineage: str | None = None,
+) -> dict:
     """Record that the review gate was retroactively waived (Plan 014 WI-4)."""
     from datetime import datetime, timezone
 
@@ -449,10 +455,12 @@ def attest_gate_waiver(project_id: int, identifier: str, reason: str, actor_id: 
 
         actor = (
             face_factory.actor_with_overrides(
-                actor_id, None, clear_principal=True, operation="attest-gate-waiver"
+                actor_id, model_lineage, clear_principal=True, operation="attest-gate-waiver"
             )
             if actor_id
-            else face_factory.actor_with_overrides(operation="attest-gate-waiver")
+            else face_factory.actor_with_overrides(
+                None, model_lineage, operation="attest-gate-waiver"
+            )
         )
         attestation = {
             "status": "waived",
@@ -629,8 +637,16 @@ def review_transition(
 
 
 def claim_work_item(
-    project_id: int, identifier: str, actor_id: str | None, ttl_seconds: int
+    project_id: int,
+    identifier: str,
+    actor_id: str | None,
+    ttl_seconds: int,
+    model_lineage: str | None = None,
 ) -> dict:
+    # WI-068: the lease verbs write ops (claim + set_status) with the caller's
+    # actor_id, so they are agent-authored writes like any other — gate them
+    # exactly as the regista lease path does (3d2552e gated that side only).
+    face_factory.assert_declared_lineage(actor_id, model_lineage, operation="work-item claim")
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)
@@ -720,7 +736,14 @@ def claim_work_item(
         return dict(folded)
 
 
-def release_work_item(project_id: int, identifier: str, actor_id: str | None) -> dict:
+def release_work_item(
+    project_id: int,
+    identifier: str,
+    actor_id: str | None,
+    model_lineage: str | None = None,
+) -> dict:
+    # WI-068: same gate as claim — release writes a release op + set_status.
+    face_factory.assert_declared_lineage(actor_id, model_lineage, operation="work-item release")
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)
@@ -789,8 +812,14 @@ def release_work_item(project_id: int, identifier: str, actor_id: str | None) ->
 
 
 def heartbeat_work_item(
-    project_id: int, identifier: str, actor_id: str | None, ttl_seconds: int
+    project_id: int,
+    identifier: str,
+    actor_id: str | None,
+    ttl_seconds: int,
+    model_lineage: str | None = None,
 ) -> dict:
+    # WI-068: same gate as claim — heartbeat writes a heartbeat op.
+    face_factory.assert_declared_lineage(actor_id, model_lineage, operation="work-item heartbeat")
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)
@@ -853,8 +882,16 @@ def heartbeat_work_item(
         return dict(row)
 
 
-def delete_work_item(project_id: int, identifier: str) -> bool:
+def delete_work_item(
+    project_id: int,
+    identifier: str,
+    actor_id: str | None = None,
+    model_lineage: str | None = None,
+) -> bool:
     """Native soft-delete via snapshot op with tombstone. Removes from cache."""
+    # WI-068: the tombstone snapshot is an authored op like any other — gate it,
+    # and (below) stamp the actor on the op instead of committing it anonymous.
+    face_factory.assert_declared_lineage(actor_id, model_lineage, operation="work-item delete")
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)
@@ -874,6 +911,7 @@ def delete_work_item(project_id: int, identifier: str) -> bool:
             op_type="snapshot",
             payload={"tombstone": True},
             parent_op_ids=[entity_id],
+            actor_id=actor_id,
         )
 
         # Delete leases first to avoid FK violation (BC-028).
@@ -903,6 +941,7 @@ def delete_work_item(project_id: int, identifier: str) -> bool:
             identifier=identifier,
             event="deleted",
             payload={"title": old["title"]},
+            actor=actor_id,
         )
 
         conn.commit()

@@ -221,10 +221,19 @@ def assert_declared_lineage(
     The native (degrade) write path records ``actor_id`` / ``model_lineage`` as
     plain columns on an op rather than building an ``Actor``, so it has nothing
     to guard *through*. It calls this instead, so the same refusal applies on
-    both paths: the op-log is replayed into regista by
-    ``migrate-to-regista`` / outbox reconcile, and an undeclared-lineage op
-    written today becomes an undeclared-lineage regista event tomorrow. Gating
-    only the regista path would just defer the poisoning.
+    both paths.
+
+    The rationale is write-path parity, not replay (corrected in WI-068: an
+    earlier version of this note claimed op-log ops are replayed into regista
+    as authored events — they are not). ``migrate-to-regista`` snapshot-migrates
+    final state under the system-kind ``migration_actor`` (D8: no per-op actor
+    replay), and ``outbox reconcile`` replays queued *outbox envelopes* —
+    regista writes that already passed this gate before being queued — never
+    op-log ops. So an undeclared-lineage op written in degrade mode would not
+    poison the regista review gate later; it would instead be an agent-authored
+    write that dodged the declared-lineage rule entirely, leaving degrade mode
+    as a bypass and the op-chain's provenance columns unattributable. Both
+    paths therefore refuse at write time, where it is cheap.
     """
     actor_with_overrides(actor_id, model_lineage, operation=operation)
 

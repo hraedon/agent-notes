@@ -318,7 +318,12 @@ def cmd_bc_delete(args: argparse.Namespace) -> int:
 
     from agent_notes.core.work_item_model import WorkItemModel
 
-    deleted = WorkItemModel.delete_work_item(proj_id, args.identifier)
+    deleted = WorkItemModel.delete_work_item(
+        proj_id,
+        args.identifier,
+        actor_id=getattr(args, "actor_id", None),
+        model_lineage=getattr(args, "model_lineage", None),
+    )
     if not deleted:
         return emit_error(
             "NOT_FOUND",
@@ -521,6 +526,7 @@ def cmd_bc_reconcile(args: argparse.Namespace) -> int:
         report_resolution_failure(args, code)
         return code
 
+    from agent_notes.core.actor import InvalidLineageError, UndeclaredLineageError
     from agent_notes.core.db import list_projects
     from agent_notes.core.git_reconcile import scan_git_for_resolutions
     from agent_notes.core.work_item_model import WorkItemModel
@@ -568,6 +574,16 @@ def cmd_bc_reconcile(args: argparse.Namespace) -> int:
                     model_lineage=getattr(args, "model_lineage", None),
                 )
                 applied = True
+            except (UndeclaredLineageError, InvalidLineageError):
+                # WI-068: never fold the lineage refusal into a generic
+                # per-item error — burying it under a relabeled code is the
+                # exact failure mode the gate's RuntimeError choice exists to
+                # prevent (WI-062), and it is not a per-item condition anyway:
+                # every remaining item would refuse identically. Re-raise so
+                # ``_dispatch`` emits the canonical UNDECLARED_LINEAGE /
+                # INVALID_MODEL_LINEAGE envelope (exit 3) with the remedy text
+                # intact.
+                raise
             except Exception as exc:
                 # A work item in a state with no direct terminal transition
                 # (e.g. in_review, which must go through the review gate)

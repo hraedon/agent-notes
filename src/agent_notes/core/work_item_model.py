@@ -280,6 +280,7 @@ class WorkItemModel:
         identifier: str,
         reason: str,
         actor_id: str | None = None,
+        model_lineage: str | None = None,
     ) -> dict:
         """Record that the review gate was retroactively waived (Plan 014 WI-4).
 
@@ -296,7 +297,9 @@ class WorkItemModel:
         op-log only — regista-path items (projection-only, no ops) are
         gate-verified by construction and have nothing to attest.
         """
-        return _native.attest_gate_waiver(project_id, identifier, reason, actor_id)
+        return _native.attest_gate_waiver(
+            project_id, identifier, reason, actor_id, model_lineage=model_lineage
+        )
 
     # ------------------------------------------------------------------
     # Review-gate transitions (adversarial_pass / accept / reject /
@@ -373,13 +376,29 @@ class WorkItemModel:
         return _queries.get_work_item(project_id, identifier)
 
     @classmethod
-    def delete_work_item(cls, project_id: int, identifier: str) -> bool:
+    def delete_work_item(
+        cls,
+        project_id: int,
+        identifier: str,
+        actor_id: str | None = None,
+        model_lineage: str | None = None,
+    ) -> bool:
         """Soft-delete via snapshot op with tombstone. Removes from cache."""
         if face_factory.get_face() is not None:
             existing = _queries.get_work_item(project_id, identifier)
             if existing is not None and existing.get("regista_work_item_id") is not None:
-                return _queries.delete_work_item_regista(project_id, identifier)
-        return _native.delete_work_item(project_id, identifier)
+                return _queries.delete_work_item_regista(
+                    project_id,
+                    identifier,
+                    actor_id=actor_id,
+                    model_lineage=model_lineage,
+                )
+        return _native.delete_work_item(
+            project_id,
+            identifier,
+            actor_id=actor_id,
+            model_lineage=model_lineage,
+        )
 
     @classmethod
     def query_work_items(
@@ -465,6 +484,7 @@ class WorkItemModel:
         identifier: str,
         actor_id: str | None = None,
         ttl_seconds: int = 300,
+        model_lineage: str | None = None,
     ) -> dict:
         """Claim a work item (Plan 010 WI-2 — lease as a regista claim).
 
@@ -476,8 +496,16 @@ class WorkItemModel:
         """
         face = face_factory.get_face()
         if face is not None:
-            return _regista.claim_work_item(face, project_id, identifier, ttl_seconds)
-        return _native.claim_work_item(project_id, identifier, actor_id, ttl_seconds)
+            return _regista.claim_work_item(
+                face,
+                project_id,
+                identifier,
+                ttl_seconds,
+                model_lineage=model_lineage,
+            )
+        return _native.claim_work_item(
+            project_id, identifier, actor_id, ttl_seconds, model_lineage=model_lineage
+        )
 
     @classmethod
     def release_work_item(
@@ -485,6 +513,7 @@ class WorkItemModel:
         project_id: int,
         identifier: str,
         actor_id: str | None = None,
+        model_lineage: str | None = None,
     ) -> dict:
         """Release a claimed work item (Plan 010 WI-2 — lease as a regista claim).
 
@@ -493,8 +522,15 @@ class WorkItemModel:
         """
         face = face_factory.get_face()
         if face is not None:
-            return _regista.release_work_item(face, project_id, identifier)
-        return _native.release_work_item(project_id, identifier, actor_id)
+            return _regista.release_work_item(
+                face,
+                project_id,
+                identifier,
+                model_lineage=model_lineage,
+            )
+        return _native.release_work_item(
+            project_id, identifier, actor_id, model_lineage=model_lineage
+        )
 
     @classmethod
     def heartbeat_work_item(
@@ -503,6 +539,7 @@ class WorkItemModel:
         identifier: str,
         actor_id: str | None = None,
         ttl_seconds: int = 300,
+        model_lineage: str | None = None,
     ) -> dict:
         """Heartbeat a claimed work item to extend its lease (Plan 010 WI-2).
 
@@ -511,8 +548,16 @@ class WorkItemModel:
         """
         face = face_factory.get_face()
         if face is not None:
-            return _regista.heartbeat_work_item(face, project_id, identifier, ttl_seconds)
-        return _native.heartbeat_work_item(project_id, identifier, actor_id, ttl_seconds)
+            return _regista.heartbeat_work_item(
+                face,
+                project_id,
+                identifier,
+                ttl_seconds,
+                model_lineage=model_lineage,
+            )
+        return _native.heartbeat_work_item(
+            project_id, identifier, actor_id, ttl_seconds, model_lineage=model_lineage
+        )
 
     # ------------------------------------------------------------------
     # Cross-project support (P3)
