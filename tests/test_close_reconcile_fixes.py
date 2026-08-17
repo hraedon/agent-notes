@@ -314,3 +314,51 @@ def test_review_pass_cli_catches_regista_error(default_project, hmac_key_path, m
     finally:
         reset_face()
         reg.close()
+
+
+# ── WI-068: reconcile --apply must not relabel the lineage refusal ────────
+
+
+def test_reconcile_apply_surfaces_the_undeclared_lineage_envelope(monkeypatch, capsys):
+    """``UndeclaredLineageError`` inside the --apply loop is re-raised, so the
+    CLI emits the canonical UNDECLARED_LINEAGE envelope (exit 3, remedy text
+    intact) instead of the generic per-item error + EXIT_CONFLICT that buried
+    the original WI-062 failure."""
+    from agent_notes.cli import _dispatch
+    from agent_notes.core.actor import UndeclaredLineageError
+
+    monkeypatch.setattr(
+        "agent_notes.cli.breadcrumbs._resolve",
+        lambda *a, **k: (1, 1, "ws", "proj"),
+    )
+    monkeypatch.setattr(
+        "agent_notes.core.db.list_projects",
+        lambda workspace_id=None: [SimpleNamespace(id=1, repo_root="/projects/x")],
+    )
+    monkeypatch.setattr(
+        "agent_notes.core.work_item_model.WorkItemModel.query_work_items",
+        lambda **k: [{"identifier": "X-1", "status": "open", "external_refs": {}}],
+    )
+    monkeypatch.setattr(
+        "agent_notes.core.git_reconcile.scan_git_for_resolutions",
+        lambda root, ids, lookback=500, project_slug=None: {
+            "X-1": {"commit": "aaaaaaa", "subject": "resolve X-1"}
+        },
+    )
+
+    def _refuse(proj_id, identifier, **kw):
+        raise UndeclaredLineageError("agent-notes", "work-item update")
+
+    monkeypatch.setattr(
+        "agent_notes.core.work_item_model.WorkItemModel.update_work_item",
+        _refuse,
+    )
+
+    rc = _dispatch(cmd_bc_reconcile, _ns(apply=True))
+    assert rc == 3  # EXIT_NOT_CONFIGURED — the envelope's exit code, not EXIT_CONFLICT (4)
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert out["error"]["code"] == "UNDECLARED_LINEAGE"
+    # The remedy travels intact instead of being flattened into a per-item note.
+    assert "AGENT_NOTES_MODEL_LINEAGE" in out["error"]["message"]
+    assert "--model-lineage" in out["error"]["message"]

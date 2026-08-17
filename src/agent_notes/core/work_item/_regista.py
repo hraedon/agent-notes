@@ -368,7 +368,13 @@ def review_transition(
     return dict(mirrored)
 
 
-def claim_work_item(face: Any, project_id: int, identifier: str, ttl_seconds: int) -> dict:
+def claim_work_item(
+    face: Any,
+    project_id: int,
+    identifier: str,
+    ttl_seconds: int,
+    model_lineage: str | None = None,
+) -> dict:
     with _conn() as conn:
         _common.resolve_workspace_for_project(conn, project_id)
         old = _common.load_work_item_row(conn, project_id, identifier)
@@ -381,7 +387,12 @@ def claim_work_item(face: Any, project_id: int, identifier: str, ttl_seconds: in
         wid = old["regista_work_item_id"]
         entity_id = old["entity_id"]
 
-    actor = face_factory.actor_with_overrides(operation="work-item claim")
+    # The claim identity is the env-resolved actor: the caller-supplied
+    # actor_id is a legacy native-path parameter and deliberately does NOT
+    # re-identify a regista claim (Plan 010 WI-2/WI-5; pinned by
+    # test_claim_release_uses_regista_claims_not_lifecycle). Only the lineage
+    # declaration is threaded (WI-068), so --model-lineage works here too.
+    actor = face_factory.actor_with_overrides(None, model_lineage, operation="work-item claim")
     # Plan 010 WI-2: lease is a regista claim, NOT a lifecycle state.
     # acquire_claim is the authoritative lease; the lifecycle does not move.
     claim = face.acquire_claim(actor, wid, ttl_seconds=ttl_seconds)
@@ -422,7 +433,12 @@ def claim_work_item(face: Any, project_id: int, identifier: str, ttl_seconds: in
     return dict(mirrored)
 
 
-def release_work_item(face: Any, project_id: int, identifier: str) -> dict:
+def release_work_item(
+    face: Any,
+    project_id: int,
+    identifier: str,
+    model_lineage: str | None = None,
+) -> dict:
     with _conn() as conn:
         _common.resolve_workspace_for_project(conn, project_id)
         old = _common.load_work_item_row(conn, project_id, identifier)
@@ -433,7 +449,8 @@ def release_work_item(face: Any, project_id: int, identifier: str) -> dict:
         wid = old["regista_work_item_id"]
         entity_id = old["entity_id"]
 
-    actor = face_factory.actor_with_overrides(operation="work-item release")
+    # Env-resolved claim identity, lineage-only threading — see claim above.
+    actor = face_factory.actor_with_overrides(None, model_lineage, operation="work-item release")
     # Plan 010 WI-2: release the regista claim; the lifecycle is untouched.
     face.release_claim(actor, wid)
     regista_work_item = face.get(wid)
@@ -463,13 +480,22 @@ def release_work_item(face: Any, project_id: int, identifier: str) -> dict:
     return dict(mirrored)
 
 
-def heartbeat_work_item(face: Any, project_id: int, identifier: str, ttl_seconds: int) -> dict:
+def heartbeat_work_item(
+    face: Any,
+    project_id: int,
+    identifier: str,
+    ttl_seconds: int,
+    model_lineage: str | None = None,
+) -> dict:
     with _conn() as conn:
         old = _common.load_work_item_row(conn, project_id, identifier)
         entity_id = old["entity_id"]
         wid = old["regista_work_item_id"]
 
-    actor = face_factory.actor_with_overrides(operation="work-item heartbeat")
+    # Env-resolved claim identity, lineage-only threading — see claim above.
+    actor = face_factory.actor_with_overrides(
+        None, model_lineage, operation="work-item heartbeat"
+    )
     # Plan 010 WI-2: authoritative liveness is the regista claim heartbeat.
     claim = face.heartbeat_claim(actor, wid, ttl_seconds=ttl_seconds)
     expires_at = getattr(claim, "expires_at", None)

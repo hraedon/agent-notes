@@ -277,3 +277,53 @@ def test_broken_regista_install_is_not_dormant(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", broken)
     with pytest.raises(ImportError):
         registry_families()
+
+
+# ---------------------------------------------------------------------------
+# WI-068 — the native lease/delete verbs are gated too (finding 2 of the
+# WI-062 adversarial pass): 3d2552e gated the regista lease verbs but left
+# their native (degrade-mode) twins writing agent-authored ops ungated.
+# ---------------------------------------------------------------------------
+
+
+def test_native_lease_and_delete_verbs_refuse_undeclared_lineage():
+    """claim / release / heartbeat / delete refuse before touching the DB.
+
+    The gate runs ahead of ``_conn()`` (refuse before any op is written, like
+    ``file_work_item``), which is why this needs no database: an undeclared
+    caller never gets that far.
+    """
+    from agent_notes.core.work_item import _native
+
+    attempts = {
+        "work-item claim": lambda: _native.claim_work_item(1, "WI-X", None, 300),
+        "work-item release": lambda: _native.release_work_item(1, "WI-X", None),
+        "work-item heartbeat": lambda: _native.heartbeat_work_item(1, "WI-X", None, 300),
+        "work-item delete": lambda: _native.delete_work_item(1, "WI-X"),
+    }
+    for operation, attempt in attempts.items():
+        with pytest.raises(UndeclaredLineageError) as exc_info:
+            attempt()
+        assert exc_info.value.operation == operation
+
+
+def test_cross_project_verbs_refuse_undeclared_lineage():
+    """WI-068 (B1): request / wait / link-cross are agent-authored op writes.
+
+    They were the last ungated authored-write surface — ops landed with
+    actor_id=None and no lineage. Like the native verbs above, the gate runs
+    before ``_conn()``, so the refusal needs no database.
+    """
+    from agent_notes.core.work_item import _cross_project
+
+    attempts = {
+        "work-item request": lambda: _cross_project.request_work_item(1, "target", "title"),
+        "work-item wait": lambda: _cross_project.wait_on_work_item(1, "target", "WI-9"),
+        "work-item link-cross": lambda: _cross_project.add_cross_project_link(
+            1, "WI-1", "target", "WI-9"
+        ),
+    }
+    for operation, attempt in attempts.items():
+        with pytest.raises(UndeclaredLineageError) as exc_info:
+            attempt()
+        assert exc_info.value.operation == operation

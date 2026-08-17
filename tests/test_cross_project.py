@@ -656,3 +656,103 @@ class TestRoundTrip:
         ready = WorkItemModel.ready_work_items(project_id=default_project.id)
         ids = {r["identifier"] for r in ready}
         assert "WI-LOCAL-BLOCK" in ids
+
+
+# ---------------------------------------------------------------------------
+# WI-068 (B1): the cross-project verbs are lineage-gated authored writes —
+# their ops must land with the RESOLVED actor, never actor_id=None.
+# ---------------------------------------------------------------------------
+
+
+class TestCrossProjectLineageGate:
+    @staticmethod
+    def _op_actor(entity_id: str, op_type: str) -> str | None:
+        from psycopg.rows import dict_row
+
+        from agent_notes.core.db import _conn
+
+        with _conn() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            cur.execute(
+                "SELECT actor_id FROM op_log WHERE entity_id = %s AND op_type = %s",
+                (entity_id, op_type),
+            )
+            row = cur.fetchone()
+        return row["actor_id"] if row else None
+
+    def test_request_stamps_explicit_actor_with_explicit_lineage(
+        self, default_project, monkeypatch
+    ):
+        """Env declares nothing; the per-invocation identity carries the op."""
+        monkeypatch.delenv("AGENT_NOTES_MODEL_LINEAGE", raising=False)
+        req = WorkItemModel.request_work_item(
+            project_id=default_project.id,
+            target_project_slug="target",
+            title="cross-project request",
+            actor_id="req-agent",
+            model_lineage="claude-opus",
+        )
+        assert self._op_actor(req["entity_id"], "request") == "req-agent"
+
+    def test_request_resolves_env_actor_when_none_passed(self, default_project):
+        """No explicit identity: the op carries the env-RESOLVED actor, not
+        NULL (the anonymous-write defect this closes)."""
+        from agent_notes.core.actor import load_actor_config, resolve_actor
+
+        req = WorkItemModel.request_work_item(
+            project_id=default_project.id,
+            target_project_slug="target",
+            title="anonymous no more",
+        )
+        # Session conftest declares the lineage; the actor_id resolves to the
+        # env-resolved default rather than committing NULL.
+        expected = resolve_actor(load_actor_config()).actor_id
+        stamped = self._op_actor(req["entity_id"], "request")
+        assert stamped is not None
+        assert stamped == expected
+
+    def test_wait_stamps_resolved_actor(self, default_project, monkeypatch):
+        monkeypatch.delenv("AGENT_NOTES_MODEL_LINEAGE", raising=False)
+        wait = WorkItemModel.wait_on_work_item(
+            project_id=default_project.id,
+            target_project_slug="target",
+            target_identifier="WI-9",
+            actor_id="wait-agent",
+            model_lineage="claude-opus",
+        )
+        assert self._op_actor(wait["entity_id"], "wait") == "wait-agent"
+
+    def test_link_cross_stamps_resolved_actor(self, default_project, monkeypatch):
+        monkeypatch.delenv("AGENT_NOTES_MODEL_LINEAGE", raising=False)
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-LINKSRC",
+            title="link source",
+            status="open",
+            embedding=_vec768(),
+            actor_id="link-agent",
+            model_lineage="claude-opus",
+        )
+        result = WorkItemModel.add_cross_project_link(
+            from_project_id=default_project.id,
+            from_identifier="WI-LINKSRC",
+            to_project_slug="foreign-project",
+            to_identifier="WI-9",
+            actor_id="link-agent",
+            model_lineage="claude-opus",
+        )
+        # add_cross_project_link's return has no entity_id; find the add_link op.
+        from psycopg.rows import dict_row
+
+        from agent_notes.core.db import _conn
+
+        with _conn() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            cur.execute(
+                "SELECT actor_id, payload FROM op_log WHERE op_type = 'add_link' "
+                "ORDER BY lamport DESC LIMIT 1",
+            )
+            row = cur.fetchone()
+        assert row is not None
+        assert row["payload"]["from_identifier"] == result["from_identifier"] == "WI-LINKSRC"
+        assert row["actor_id"] == "link-agent"

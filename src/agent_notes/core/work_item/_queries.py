@@ -286,7 +286,12 @@ def claimable_work_items(
     return kernel.claimable_work_items(project_id, workspace_id, limit)
 
 
-def delete_work_item_regista(project_id: int, identifier: str) -> bool:
+def delete_work_item_regista(
+    project_id: int,
+    identifier: str,
+    actor_id: str | None = None,
+    model_lineage: str | None = None,
+) -> bool:
     """Regista-path delete: drops local cache + leases; regista retains the item."""
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
@@ -298,6 +303,11 @@ def delete_work_item_regista(project_id: int, identifier: str) -> bool:
         old = cur.fetchone()
         if old is None:
             return False
+        # WI-068: resolve (and lineage-gate) the actor before any row is
+        # touched, so an undeclared lineage refuses the delete outright.
+        actor = face_factory.actor_with_overrides(
+            actor_id, model_lineage, operation="work-item delete"
+        )
         cur.execute(
             "DELETE FROM work_item_leases WHERE entity_id = %s",
             (old["entity_id"],),
@@ -314,7 +324,7 @@ def delete_work_item_regista(project_id: int, identifier: str) -> bool:
             identifier=identifier,
             event="deleted",
             payload={"title": old["title"], "regista_retained": True},
-            actor=face_factory.actor_with_overrides(operation="work-item delete").actor_id,
+            actor=actor.actor_id,
         )
         conn.commit()
     return True

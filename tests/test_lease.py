@@ -371,3 +371,116 @@ class TestLeaseChangeLog:
             assert events[event]["actor"] == "agent-a"
         assert events["claimed"]["payload"]["ttl_seconds"] == 60
         assert events["heartbeat"]["payload"]["ttl_seconds"] == 120
+
+
+class TestLineageGateWI068:
+    """WI-068: the native lease/delete verbs are lineage-gated like everything
+    else (commit 3d2552e gated only the regista lease verbs), the per-invocation
+    ``model_lineage`` override takes effect when the env declares nothing, and
+    ``delete`` stamps the actor on its tombstone op instead of committing it
+    anonymous."""
+
+    def test_lease_verbs_refuse_undeclared_and_accept_explicit_lineage(
+        self, default_project, monkeypatch
+    ):
+        from agent_notes.core.actor import UndeclaredLineageError
+
+        # File while the session lineage is still present.
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-LIN-NAT-01",
+            title="Native lease gate",
+            status="open",
+            embedding=_vec768(),
+        )
+
+        # Env declares nothing: every lease verb refuses before writing.
+        monkeypatch.delenv("AGENT_NOTES_MODEL_LINEAGE", raising=False)
+        with pytest.raises(UndeclaredLineageError):
+            WorkItemModel.claim_work_item(
+                project_id=default_project.id,
+                identifier="WI-LIN-NAT-01",
+                actor_id="agent-a",
+                ttl_seconds=60,
+            )
+        # Nothing was written by the refused claim.
+        with _conn() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            cur.execute(
+                "SELECT 1 FROM work_item_leases l JOIN work_items w"
+                " ON w.entity_id = l.entity_id WHERE w.identifier = %s",
+                ("WI-LIN-NAT-01",),
+            )
+            assert cur.fetchone() is None
+
+        # The explicit per-invocation declaration takes effect over env absence
+        # for the whole lease lifecycle.
+        claimed = WorkItemModel.claim_work_item(
+            project_id=default_project.id,
+            identifier="WI-LIN-NAT-01",
+            actor_id="agent-a",
+            ttl_seconds=60,
+            model_lineage="claude-opus",
+        )
+        assert claimed["status"] == "claimed"
+        with pytest.raises(UndeclaredLineageError):
+            WorkItemModel.heartbeat_work_item(
+                project_id=default_project.id,
+                identifier="WI-LIN-NAT-01",
+                actor_id="agent-a",
+                ttl_seconds=60,
+            )
+        WorkItemModel.heartbeat_work_item(
+            project_id=default_project.id,
+            identifier="WI-LIN-NAT-01",
+            actor_id="agent-a",
+            ttl_seconds=60,
+            model_lineage="claude-opus",
+        )
+        with pytest.raises(UndeclaredLineageError):
+            WorkItemModel.release_work_item(
+                project_id=default_project.id,
+                identifier="WI-LIN-NAT-01",
+                actor_id="agent-a",
+            )
+        released = WorkItemModel.release_work_item(
+            project_id=default_project.id,
+            identifier="WI-LIN-NAT-01",
+            actor_id="agent-a",
+            model_lineage="claude-opus",
+        )
+        assert released["status"] == "open"
+
+    def test_delete_refuses_undeclared_and_stamps_actor_on_tombstone(
+        self, default_project, monkeypatch
+    ):
+        from agent_notes.core.actor import UndeclaredLineageError
+
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-LIN-DEL-01",
+            title="Delete gate + actor stamp",
+            status="open",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+
+        monkeypatch.delenv("AGENT_NOTES_MODEL_LINEAGE", raising=False)
+        with pytest.raises(UndeclaredLineageError):
+            WorkItemModel.delete_work_item(default_project.id, "WI-LIN-DEL-01")
+        # The refused delete wrote nothing: the item is still in the cache.
+        assert WorkItemModel.get_work_item(default_project.id, "WI-LIN-DEL-01") is not None
+
+        assert WorkItemModel.delete_work_item(
+            default_project.id,
+            "WI-LIN-DEL-01",
+            actor_id="deleter-agent",
+            model_lineage="claude-opus",
+        )
+        # The tombstone snapshot op carries the actor (pre-WI-068 it was NULL).
+        snapshots = [op for op in _ops_for_entity(entity_id) if op["op_type"] == "snapshot"]
+        assert snapshots, "delete must write the tombstone snapshot op"
+        assert snapshots[-1]["actor_id"] == "deleter-agent"
+        # ...and so does the change_log row.
+        deleted_rows = [r for r in _change_log_for("WI-LIN-DEL-01") if r["event"] == "deleted"]
+        assert deleted_rows and deleted_rows[-1]["actor"] == "deleter-agent"

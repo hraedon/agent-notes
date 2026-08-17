@@ -365,7 +365,12 @@ def cmd_wi_delete(args: argparse.Namespace) -> int:
 
     from agent_notes.core.work_item_model import WorkItemModel
 
-    deleted = WorkItemModel.delete_work_item(proj_id, args.identifier)
+    deleted = WorkItemModel.delete_work_item(
+        proj_id,
+        args.identifier,
+        actor_id=getattr(args, "actor_id", None),
+        model_lineage=getattr(args, "model_lineage", None),
+    )
     if not deleted:
         return emit_error(
             "NOT_FOUND",
@@ -463,7 +468,13 @@ def cmd_wi_attest_gate(args: argparse.Namespace) -> int:
     from agent_notes.core.work_item_model import WorkItemModel
 
     try:
-        wi = WorkItemModel.attest_gate_waiver(proj_id, args.identifier, reason=args.reason)
+        wi = WorkItemModel.attest_gate_waiver(
+            proj_id,
+            args.identifier,
+            reason=args.reason,
+            actor_id=getattr(args, "actor_id", None),
+            model_lineage=getattr(args, "model_lineage", None),
+        )
     except ValueError as exc:
         return emit_error(
             "NOT_FOUND",
@@ -680,6 +691,8 @@ def cmd_wi_request(args: argparse.Namespace) -> int:
             title=args.title,
             body=args.body or "",
             kind=args.type,
+            actor_id=getattr(args, "actor_id", None),
+            model_lineage=getattr(args, "model_lineage", None),
         )
     except ValueError as exc:
         return emit_error(
@@ -723,6 +736,8 @@ def cmd_wi_wait(args: argparse.Namespace) -> int:
             project_id=proj_id,
             target_project_slug=target_project,
             target_identifier=target_identifier,
+            actor_id=getattr(args, "actor_id", None),
+            model_lineage=getattr(args, "model_lineage", None),
         )
     except ValueError as exc:
         return emit_error(
@@ -768,6 +783,8 @@ def cmd_wi_link_cross(args: argparse.Namespace) -> int:
             to_project_slug=target_project,
             to_identifier=target_identifier,
             relationship=args.relationship,
+            actor_id=getattr(args, "actor_id", None),
+            model_lineage=getattr(args, "model_lineage", None),
         )
     except ValueError as exc:
         return emit_error(
@@ -878,6 +895,7 @@ def cmd_wi_claim(args: argparse.Namespace) -> int:
             identifier=args.identifier,
             actor_id=args.actor_id,
             ttl_seconds=args.ttl,
+            model_lineage=getattr(args, "model_lineage", None),
         )
     except ValueError as exc:
         return emit_error(
@@ -911,6 +929,7 @@ def cmd_wi_release(args: argparse.Namespace) -> int:
             project_id=proj_id,
             identifier=args.identifier,
             actor_id=args.actor_id,
+            model_lineage=getattr(args, "model_lineage", None),
         )
     except ValueError as exc:
         return emit_error(
@@ -945,6 +964,7 @@ def cmd_wi_heartbeat(args: argparse.Namespace) -> int:
             identifier=args.identifier,
             actor_id=args.actor_id,
             ttl_seconds=args.ttl,
+            model_lineage=getattr(args, "model_lineage", None),
         )
     except ValueError as exc:
         return emit_error(
@@ -981,18 +1001,32 @@ def cmd_wi_requeue_expired(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
+def _add_model_lineage(parser: argparse.ArgumentParser) -> None:
+    """The per-invocation lineage declaration (WI-062 / WI-068).
+
+    Every subcommand that writes agent-authored ops must accept it — an
+    agent-kind write with no resolvable lineage is refused
+    (``UNDECLARED_LINEAGE``), and without this flag the only per-invocation
+    fallback would be the env var. The two write-ish subcommands without it
+    author no ops: ``requeue-expired`` sweeps lease projection rows via a DB
+    function, and ``ingest-ops`` imports *foreign*-authored ops that carry
+    their source's actor.
+    """
+    parser.add_argument(
+        "--model-lineage",
+        default=None,
+        help="Declare the caller's model lineage (default: AGENT_NOTES_MODEL_LINEAGE env). "
+        "Agents must declare this so the cross-lineage review gate can verify distinctness.",
+    )
+
+
 def _add_author_identity(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--actor-id",
         default=None,
         help="Override the author's actor_id (default: AGENT_NOTES_ACTOR_ID env)",
     )
-    parser.add_argument(
-        "--model-lineage",
-        default=None,
-        help="Declare the author's model lineage (default: AGENT_NOTES_MODEL_LINEAGE env). "
-        "Agents must declare this so the cross-lineage review gate can verify distinctness.",
-    )
+    _add_model_lineage(parser)
 
 
 def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
@@ -1081,16 +1115,28 @@ def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
     # Claim / lease commands (P4)
     wi_claim = wi_sub.add_parser("claim", help="Claim a work item (acquire lease)")
     wi_claim.add_argument("identifier")
-    wi_claim.add_argument("--actor-id", default=None, help="Actor claiming the item")
+    wi_claim.add_argument(
+        "--actor-id",
+        default=None,
+        help="Actor claiming the item (ignored when regista writes are enabled — "
+        "claim identity is the env-resolved actor, Plan 010)",
+    )
     wi_claim.add_argument(
         "--ttl", type=int, default=300, help="Lease TTL in seconds (default: 300)"
     )
+    _add_model_lineage(wi_claim)
     _add_common(wi_claim)
     wi_claim.set_defaults(func=cmd_wi_claim)
 
     wi_release = wi_sub.add_parser("release", help="Release a claimed work item")
     wi_release.add_argument("identifier")
-    wi_release.add_argument("--actor-id", default=None, help="Actor releasing the item")
+    wi_release.add_argument(
+        "--actor-id",
+        default=None,
+        help="Actor releasing the item (ignored when regista writes are enabled — "
+        "claim identity is the env-resolved actor, Plan 010)",
+    )
+    _add_model_lineage(wi_release)
     _add_common(wi_release)
     wi_release.set_defaults(func=cmd_wi_release)
 
@@ -1098,10 +1144,16 @@ def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
         "heartbeat", help="Heartbeat a claimed work item to extend lease"
     )
     wi_heartbeat.add_argument("identifier")
-    wi_heartbeat.add_argument("--actor-id", default=None, help="Actor heartbeating the item")
+    wi_heartbeat.add_argument(
+        "--actor-id",
+        default=None,
+        help="Actor heartbeating the item (ignored when regista writes are enabled — "
+        "claim identity is the env-resolved actor, Plan 010)",
+    )
     wi_heartbeat.add_argument(
         "--ttl", type=int, default=300, help="Extended TTL in seconds (default: 300)"
     )
+    _add_model_lineage(wi_heartbeat)
     _add_common(wi_heartbeat)
     wi_heartbeat.set_defaults(func=cmd_wi_heartbeat)
 
@@ -1124,6 +1176,7 @@ def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
 
     wi_delete = wi_sub.add_parser("delete", help="Delete a work item")
     wi_delete.add_argument("identifier")
+    _add_author_identity(wi_delete)
     _add_common(wi_delete)
     wi_delete.set_defaults(func=cmd_wi_delete)
 
@@ -1142,6 +1195,7 @@ def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
         required=True,
         help="Why the cross-lineage review gate was waived (recorded in the op-chain)",
     )
+    _add_model_lineage(wi_attest)
     _add_common(wi_attest)
     wi_attest.set_defaults(func=cmd_wi_attest_gate)
 
@@ -1235,11 +1289,13 @@ def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
     wi_request.add_argument("--title", required=True)
     wi_request.add_argument("--body", default="")
     wi_request.add_argument("--type", default="task", dest="type")
+    _add_author_identity(wi_request)
     _add_common(wi_request)
     wi_request.set_defaults(func=cmd_wi_request)
 
     wi_wait = wi_sub.add_parser("wait", help="Wait on a target project's work item (cross-project)")
     wi_wait.add_argument("target", help="Target address: project:identifier")
+    _add_author_identity(wi_wait)
     _add_common(wi_wait)
     wi_wait.set_defaults(func=cmd_wi_wait)
 
@@ -1251,6 +1307,7 @@ def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
     wi_link_cross.add_argument(
         "--relationship", default="blocks", help="Link relationship (default: blocks)"
     )
+    _add_author_identity(wi_link_cross)
     _add_common(wi_link_cross)
     wi_link_cross.set_defaults(func=cmd_wi_link_cross)
 
