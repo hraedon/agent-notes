@@ -756,3 +756,44 @@ class TestCrossProjectLineageGate:
         assert row is not None
         assert row["payload"]["from_identifier"] == result["from_identifier"] == "WI-LINKSRC"
         assert row["actor_id"] == "link-agent"
+
+    def test_link_cross_change_log_row_carries_resolved_actor(
+        self, default_project, target_project, monkeypatch
+    ):
+        """WI-069: when the target project is local, the mirrored ``links``
+        write's ``link_added`` change_log row is attributed to the
+        lineage-gated actor — not NULL, even though the verb was already
+        gated (WI-068 refused the write; this makes the audit row name who
+        performed it)."""
+        monkeypatch.delenv("AGENT_NOTES_MODEL_LINEAGE", raising=False)
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-LINKSRC-CL",
+            title="link source (change_log attribution)",
+            status="open",
+            embedding=_vec768(),
+            actor_id="link-agent",
+            model_lineage="claude-opus",
+        )
+        WorkItemModel.add_cross_project_link(
+            from_project_id=default_project.id,
+            from_identifier="WI-LINKSRC-CL",
+            to_project_slug="target",  # local project → the links mirror fires
+            to_identifier="WI-T1",
+            actor_id="link-agent",
+            model_lineage="claude-opus",
+        )
+
+        from psycopg.rows import dict_row
+
+        from agent_notes.core.db import _conn
+
+        with _conn() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            cur.execute(
+                "SELECT actor FROM change_log WHERE event = 'link_added' AND identifier = %s",
+                ("WI-LINKSRC-CL",),
+            )
+            rows = cur.fetchall()
+        assert rows, "the mirrored add_link must write a link_added change_log row"
+        assert all(r["actor"] == "link-agent" for r in rows)

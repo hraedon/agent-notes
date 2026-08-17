@@ -118,6 +118,74 @@ class TestRemoveLink:
         assert any(r.identifier == "REM-LOG-A" for r in removed_rows)
 
 
+class TestLinkActorAttribution:
+    """WI-069: link change_log rows carry the resolved actor, never NULL."""
+
+    @staticmethod
+    def _rows(link_ws, kind: str, event: str, identifier: str):
+        from datetime import datetime, timezone
+
+        from agent_notes.core import change_log as cl
+
+        since = datetime(2000, 1, 1, tzinfo=timezone.utc)
+        rows = cl.changes_since(since, workspace_id=link_ws.id, kind=kind)
+        return [r for r in rows if r.event == event and r.identifier == identifier]
+
+    def test_add_link_stamps_env_resolved_actor(self, pg, link_ws, link_proj, monkeypatch):
+        """No explicit actor: the row carries the env-resolved default actor,
+        not NULL (the anonymous audit row this closes)."""
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "env-linker")
+        lnk.add_link(
+            from_kind="bc",
+            from_workspace=link_ws.id,
+            from_project=link_proj.id,
+            from_identifier="ATTR-ADD-A",
+            to_kind="mem",
+            to_workspace=link_ws.id,
+            to_project=link_proj.id,
+            to_identifier="ATTR-ADD-B",
+            relationship="relates_to",
+        )
+        rows = self._rows(link_ws, "bc", "link_added", "ATTR-ADD-A")
+        assert rows, "add_link must write a link_added change_log row"
+        assert rows[0].actor == "env-linker"
+
+    def test_add_link_stamps_explicit_actor(self, pg, link_ws, link_proj):
+        lnk.add_link(
+            from_kind="bc",
+            from_workspace=link_ws.id,
+            from_project=link_proj.id,
+            from_identifier="ATTR-EXP-A",
+            to_kind="mem",
+            to_workspace=link_ws.id,
+            to_project=link_proj.id,
+            to_identifier="ATTR-EXP-B",
+            relationship="relates_to",
+            actor="explicit-linker",
+        )
+        rows = self._rows(link_ws, "bc", "link_added", "ATTR-EXP-A")
+        assert rows, "add_link must write a link_added change_log row"
+        assert rows[0].actor == "explicit-linker"
+
+    def test_remove_link_stamps_actor(self, pg, link_ws, link_proj):
+        kwargs = dict(
+            from_kind="bc",
+            from_workspace=link_ws.id,
+            from_project=link_proj.id,
+            from_identifier="ATTR-REM-A",
+            to_kind="bc",
+            to_workspace=link_ws.id,
+            to_project=link_proj.id,
+            to_identifier="ATTR-REM-B",
+            relationship="blocks",
+        )
+        lnk.add_link(**kwargs, actor="link-remover")
+        lnk.remove_link(**kwargs, actor="link-remover")
+        rows = self._rows(link_ws, "bc", "link_removed", "ATTR-REM-A")
+        assert rows, "remove_link must write a link_removed change_log row"
+        assert rows[0].actor == "link-remover"
+
+
 class TestTraceGraph:
     def test_dependencies_direct(self, pg, link_ws, link_proj) -> None:
         # A → B → C

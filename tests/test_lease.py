@@ -484,3 +484,80 @@ class TestLineageGateWI068:
         # ...and so does the change_log row.
         deleted_rows = [r for r in _change_log_for("WI-LIN-DEL-01") if r["event"] == "deleted"]
         assert deleted_rows and deleted_rows[-1]["actor"] == "deleter-agent"
+
+
+# ---------------------------------------------------------------------------
+# Lease-op attribution (WI-069)
+# ---------------------------------------------------------------------------
+
+
+class TestLeaseAttributionWI069:
+    """WI-069: the native lease-op payloads and their change_log rows record
+    the lineage the WI-068 gate checked, so the op-chain can say WHICH lineage
+    held a lease after the fact (the regista path already carries it in the
+    claim's ``actor_metadata``)."""
+
+    def test_lease_ops_and_change_log_stamp_lineage(self, default_project):
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-LEASE-ATTR-01",
+            title="Lease attribution",
+            status="open",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+
+        # No per-call declaration: the gate resolves the session env lineage
+        # (conftest sets claude-opus) — that resolved value must be stamped.
+        WorkItemModel.claim_work_item(
+            project_id=default_project.id,
+            identifier="WI-LEASE-ATTR-01",
+            actor_id="agent-a",
+            ttl_seconds=60,
+        )
+        WorkItemModel.heartbeat_work_item(
+            project_id=default_project.id,
+            identifier="WI-LEASE-ATTR-01",
+            actor_id="agent-a",
+            ttl_seconds=120,
+        )
+        WorkItemModel.release_work_item(
+            project_id=default_project.id,
+            identifier="WI-LEASE-ATTR-01",
+            actor_id="agent-a",
+        )
+
+        ops = {op["op_type"]: op for op in _ops_for_entity(entity_id)}
+        for op_type in ("claim", "heartbeat", "release"):
+            assert ops[op_type]["payload"].get("model_lineage") == "claude-opus", op_type
+
+        events = {row["event"]: row for row in _change_log_for("WI-LEASE-ATTR-01")}
+        for event in ("claimed", "heartbeat", "released"):
+            assert events[event]["payload"].get("model_lineage") == "claude-opus", event
+
+    def test_lease_ops_stamp_explicit_lineage_param(self, default_project, monkeypatch):
+        """WI-069: with no env declaration, the per-invocation ``model_lineage``
+        is what lands in the claim op payload and the claimed change_log row —
+        the stamp is the gate-resolved declaration, not a raw env echo."""
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-LEASE-ATTR-02",
+            title="Lease attribution (explicit param)",
+            status="open",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+
+        monkeypatch.delenv("AGENT_NOTES_MODEL_LINEAGE", raising=False)
+        WorkItemModel.claim_work_item(
+            project_id=default_project.id,
+            identifier="WI-LEASE-ATTR-02",
+            actor_id="agent-a",
+            ttl_seconds=60,
+            model_lineage="claude-opus",
+        )
+
+        ops = {op["op_type"]: op for op in _ops_for_entity(entity_id)}
+        assert ops["claim"]["payload"].get("model_lineage") == "claude-opus"
+        events = {row["event"]: row for row in _change_log_for("WI-LEASE-ATTR-02")}
+        assert events["claimed"]["payload"].get("model_lineage") == "claude-opus"
