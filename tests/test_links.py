@@ -185,6 +185,27 @@ class TestLinkActorAttribution:
         assert rows, "remove_link must write a link_removed change_log row"
         assert rows[0].actor == "link-remover"
 
+    def test_remove_link_stamps_env_resolved_actor(self, pg, link_ws, link_proj, monkeypatch):
+        """WI-069 review (NB-5b): no explicit actor on remove — the row carries
+        the env-resolved default actor, not NULL."""
+        kwargs = dict(
+            from_kind="bc",
+            from_workspace=link_ws.id,
+            from_project=link_proj.id,
+            from_identifier="ATTR-REME-A",
+            to_kind="bc",
+            to_workspace=link_ws.id,
+            to_project=link_proj.id,
+            to_identifier="ATTR-REME-B",
+            relationship="blocks",
+        )
+        lnk.add_link(**kwargs, actor="someone-else")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "env-remover")
+        assert lnk.remove_link(**kwargs)
+        rows = self._rows(link_ws, "bc", "link_removed", "ATTR-REME-A")
+        assert rows, "remove_link must write a link_removed change_log row"
+        assert rows[0].actor == "env-remover"
+
 
 class TestTraceGraph:
     def test_dependencies_direct(self, pg, link_ws, link_proj) -> None:

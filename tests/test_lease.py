@@ -561,3 +561,86 @@ class TestLeaseAttributionWI069:
         assert ops["claim"]["payload"].get("model_lineage") == "claude-opus"
         events = {row["event"]: row for row in _change_log_for("WI-LEASE-ATTR-02")}
         assert events["claimed"]["payload"].get("model_lineage") == "claude-opus"
+
+    def test_default_invocation_stamps_env_resolved_actor(self, default_project, monkeypatch):
+        """WI-069 review (blocking finding 1): with no explicit ``actor_id`` —
+        the documented default; the CLI ``--actor-id`` is an *override* of the
+        env-wired identity — the op payloads, op actor columns, change_log
+        rows, and the lease row all carry the env-resolved actor. Before the
+        fix the raw None was stamped everywhere: payload ``actor_id: None``,
+        op column ``"null"`` (the signer key_id substitute), change_log
+        ``actor=None``, lease row ``"unknown"`` — half-attributed rows in the
+        exact class this ticket closes."""
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "env-lease-agent")
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-LEASE-ATTR-03",
+            title="Lease attribution (default identity)",
+            status="open",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+
+        WorkItemModel.claim_work_item(
+            project_id=default_project.id,
+            identifier="WI-LEASE-ATTR-03",
+            ttl_seconds=60,
+        )
+        # The lease row carries the resolved actor (was `actor_id or "unknown"`).
+        with _conn() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            cur.execute(
+                "SELECT actor_id FROM work_item_leases WHERE entity_id = %s",
+                (entity_id,),
+            )
+            lease = cur.fetchone()
+        assert lease is not None
+        assert lease["actor_id"] == "env-lease-agent"
+
+        WorkItemModel.heartbeat_work_item(
+            project_id=default_project.id,
+            identifier="WI-LEASE-ATTR-03",
+            ttl_seconds=60,
+        )
+        WorkItemModel.release_work_item(
+            project_id=default_project.id,
+            identifier="WI-LEASE-ATTR-03",
+        )
+
+        ops = {op["op_type"]: op for op in _ops_for_entity(entity_id)}
+        for op_type in ("claim", "heartbeat", "release"):
+            # Payload attribution (was None)...
+            assert ops[op_type]["payload"].get("actor_id") == "env-lease-agent", op_type
+            # ...and the op actor column (was the signer key_id "null").
+            assert ops[op_type]["actor_id"] == "env-lease-agent", op_type
+
+        events = {row["event"]: row for row in _change_log_for("WI-LEASE-ATTR-03")}
+        for event in ("claimed", "heartbeat", "released"):
+            assert events[event]["actor"] == "env-lease-agent", event
+            assert events[event]["payload"].get("actor_id") == "env-lease-agent", event
+
+    def test_per_call_lineage_wins_over_env_in_stamp(self, default_project):
+        """WI-069 review (NB-5a): the env declares a lineage (session conftest:
+        claude-opus) AND the call declares another — the stamp records the
+        per-call declaration, matching the gate's param-over-env precedence."""
+        wi = WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-LEASE-ATTR-04",
+            title="Lease attribution (precedence)",
+            status="open",
+            embedding=_vec768(),
+        )
+        entity_id = wi["entity_id"]
+
+        WorkItemModel.claim_work_item(
+            project_id=default_project.id,
+            identifier="WI-LEASE-ATTR-04",
+            actor_id="agent-a",
+            ttl_seconds=60,
+            model_lineage="claude-sonnet",
+        )
+
+        ops = {op["op_type"]: op for op in _ops_for_entity(entity_id)}
+        assert ops["claim"]["payload"].get("model_lineage") == "claude-sonnet"
+        events = {row["event"]: row for row in _change_log_for("WI-LEASE-ATTR-04")}
+        assert events["claimed"]["payload"].get("model_lineage") == "claude-sonnet"
