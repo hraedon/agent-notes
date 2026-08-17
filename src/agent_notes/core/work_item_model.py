@@ -572,9 +572,16 @@ class WorkItemModel:
         body: str = "",
         kind: str = "task",
         actor_id: str | None = None,
+        model_lineage: str | None = None,
     ) -> dict:
         return _cross_project.request_work_item(
-            project_id, target_project_slug, title, body, kind, actor_id
+            project_id,
+            target_project_slug,
+            title,
+            body,
+            kind,
+            actor_id,
+            model_lineage=model_lineage,
         )
 
     @classmethod
@@ -584,9 +591,14 @@ class WorkItemModel:
         target_project_slug: str,
         target_identifier: str,
         actor_id: str | None = None,
+        model_lineage: str | None = None,
     ) -> dict:
         return _cross_project.wait_on_work_item(
-            project_id, target_project_slug, target_identifier, actor_id
+            project_id,
+            target_project_slug,
+            target_identifier,
+            actor_id,
+            model_lineage=model_lineage,
         )
 
     @classmethod
@@ -598,6 +610,7 @@ class WorkItemModel:
         to_identifier: str,
         relationship: str = "blocks",
         actor_id: str | None = None,
+        model_lineage: str | None = None,
     ) -> dict:
         return _cross_project.add_cross_project_link(
             from_project_id,
@@ -606,6 +619,7 @@ class WorkItemModel:
             to_identifier,
             relationship,
             actor_id,
+            model_lineage=model_lineage,
         )
 
     @staticmethod

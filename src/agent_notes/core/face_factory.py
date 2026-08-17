@@ -144,8 +144,15 @@ def default_actor():
     use this. They are signed regista note events, but they are not work items:
     ``derive_authors`` never reads them, so an undeclared lineage there does not
     poison a review gate the way a work-item event does (WI-062). Every
-    work-item write goes through :func:`actor_with_overrides` instead, which
-    does enforce it. If the note path is ever brought under the same rule, move
+    *authored* work-item write — file/update/close/delete, the lease verbs, the
+    review transitions, attest-gate, and the cross-project request/wait/link
+    verbs — goes through :func:`actor_with_overrides` instead (directly or via
+    :func:`assert_declared_lineage`), which does enforce it. The only work-item
+    writers outside it carry no agent intent of their own: the expired-lease
+    sweep (writes no ops), the ingest of foreign-authored ops (which keep their
+    source's actor), and ``kernel.reconcile_entity``'s mechanical merge record
+    (library-only; no CLI path reaches it). If the note path is ever brought
+    under the same rule, move
     the ``require_declared_lineage`` call in here and delete this note — but do
     it deliberately, because it fails `memory add` for every unconfigured
     caller in the estate.

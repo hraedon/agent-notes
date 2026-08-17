@@ -464,6 +464,58 @@ class TestClaimLineage:
             reset_face()
             reg.close()
 
+    def test_per_invocation_lineage_override_beats_env_on_regista_path(
+        self, default_project, hmac_key_path, monkeypatch
+    ):
+        """WI-068: ``--model-lineage`` takes effect on the REGISTA lease path.
+
+        The env path is pinned above; this pins the per-invocation override —
+        with a lineage set in the env, an explicit ``model_lineage`` must win
+        on claim / heartbeat / release, so the flag added in WI-068 is not a
+        native-path-only courtesy. The claim *identity* stays the env-resolved
+        actor (Plan 010 WI-2/WI-5) — only the declaration is overridable.
+        """
+        monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")
+
+        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        face = RegistaFace(reg)
+        reset_face()
+        set_face_for_test(face)
+
+        try:
+            wi = WorkItemModel.file_work_item(
+                project_id=default_project.id,
+                identifier="WI-REG-LIN-OVR",
+                title="Lineage override test",
+                status="open",
+                embedding=_vec768(),
+            )
+            regista_id = wi["regista_work_item_id"]
+
+            WorkItemModel.claim_work_item(
+                default_project.id, "WI-REG-LIN-OVR", model_lineage="kimi"
+            )
+            WorkItemModel.heartbeat_work_item(
+                default_project.id, "WI-REG-LIN-OVR", model_lineage="kimi"
+            )
+            WorkItemModel.release_work_item(
+                default_project.id, "WI-REG-LIN-OVR", model_lineage="kimi"
+            )
+
+            events = face.history(regista_id)
+            for transition in ("claim_acquired", "claim_heartbeat", "claim_released"):
+                matching = [e for e in events if e.transition == transition]
+                assert len(matching) == 1, transition
+                assert matching[0].actor_metadata is not None
+                assert matching[0].actor_metadata.get("model_lineage") == "kimi", transition
+                # Identity is still the env-resolved actor, not re-declared.
+                assert matching[0].actor_id == "test-agent"
+        finally:
+            reset_face()
+            reg.close()
+
 
 class TestMigrateToRegista:
     def test_migration_creates_regista_items_and_records_id(

@@ -305,3 +305,25 @@ def test_native_lease_and_delete_verbs_refuse_undeclared_lineage():
         with pytest.raises(UndeclaredLineageError) as exc_info:
             attempt()
         assert exc_info.value.operation == operation
+
+
+def test_cross_project_verbs_refuse_undeclared_lineage():
+    """WI-068 (B1): request / wait / link-cross are agent-authored op writes.
+
+    They were the last ungated authored-write surface — ops landed with
+    actor_id=None and no lineage. Like the native verbs above, the gate runs
+    before ``_conn()``, so the refusal needs no database.
+    """
+    from agent_notes.core.work_item import _cross_project
+
+    attempts = {
+        "work-item request": lambda: _cross_project.request_work_item(1, "target", "title"),
+        "work-item wait": lambda: _cross_project.wait_on_work_item(1, "target", "WI-9"),
+        "work-item link-cross": lambda: _cross_project.add_cross_project_link(
+            1, "WI-1", "target", "WI-9"
+        ),
+    }
+    for operation, attempt in attempts.items():
+        with pytest.raises(UndeclaredLineageError) as exc_info:
+            attempt()
+        assert exc_info.value.operation == operation

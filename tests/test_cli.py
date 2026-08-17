@@ -1401,12 +1401,21 @@ def test_lease_and_attest_parsers_accept_and_thread_model_lineage(monkeypatch, c
     monkeypatch.setattr(WorkItemModel, "release_work_item", _capture("release"))
     monkeypatch.setattr(WorkItemModel, "heartbeat_work_item", _capture("heartbeat"))
     monkeypatch.setattr(WorkItemModel, "attest_gate_waiver", _capture("attest-gate"))
+    # WI-068 B1/NB2: the cross-project verbs and delete take the flags too.
+    monkeypatch.setattr(WorkItemModel, "request_work_item", _capture("request"))
+    monkeypatch.setattr(WorkItemModel, "wait_on_work_item", _capture("wait"))
+    monkeypatch.setattr(WorkItemModel, "add_cross_project_link", _capture("link-cross"))
+    monkeypatch.setattr(WorkItemModel, "delete_work_item", _capture("delete"))
 
     invocations = [
         ("claim", ["work-item", "claim", "WI-1"]),
         ("release", ["work-item", "release", "WI-1"]),
         ("heartbeat", ["work-item", "heartbeat", "WI-1"]),
         ("attest-gate", ["work-item", "attest-gate", "WI-1", "--reason", "r"]),
+        ("request", ["work-item", "request", "target-proj", "--title", "t"]),
+        ("wait", ["work-item", "wait", "target-proj:WI-9"]),
+        ("link-cross", ["work-item", "link-cross", "WI-1", "target-proj:WI-9"]),
+        ("delete", ["work-item", "delete", "WI-1"]),
     ]
     for name, argv in invocations:
         args = parser.parse_args([*argv, "--model-lineage", "glm", "--json"])

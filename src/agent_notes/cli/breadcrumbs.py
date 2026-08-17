@@ -691,6 +691,7 @@ def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
 
     bc_delete = bc_sub.add_parser("delete", help="Delete a breadcrumb (work item)")
     bc_delete.add_argument("identifier")
+    _add_author_identity(bc_delete)
     _add_common(bc_delete)
     bc_delete.set_defaults(func=cmd_bc_delete)
 

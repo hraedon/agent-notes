@@ -88,8 +88,9 @@ class UndeclaredLineageError(RuntimeError):
             "build (e.g. claude-opus, gpt-sol, glm, kimi):\n"
             f"    export {_MODEL_LINEAGE_ENV}=<model-family>\n"
             "or pass it per-invocation on the write commands (work-item "
-            "file/update/close/claim/release/heartbeat/attest-gate/review, "
-            "breadcrumb file/update/reconcile):\n"
+            "file/update/close/delete/claim/release/heartbeat/attest-gate/"
+            "review/request/wait/link-cross, breadcrumb "
+            "file/update/delete/reconcile):\n"
             "    --model-lineage <model-family>"
         )
 
