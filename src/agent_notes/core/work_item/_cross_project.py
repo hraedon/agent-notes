@@ -264,6 +264,9 @@ def add_cross_project_link(
                 to_project=to_project_id,
                 to_identifier=to_identifier,
                 relationship=relationship,
+                # WI-069: the mirrored link_added change_log row carries the
+                # lineage-gated actor resolved above, not NULL.
+                actor=actor.actor_id,
             )
 
         # Write a link op to the op_log for provenance.

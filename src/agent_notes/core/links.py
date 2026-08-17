@@ -49,6 +49,24 @@ def _conn():
     return _db_conn()
 
 
+def _resolved_actor(actor: str | None) -> str:
+    """The actor to stamp on a link change_log row (WI-069).
+
+    Callers that already resolved (and gated) an identity pass it through —
+    e.g. ``add_cross_project_link`` passes the lineage-gated actor. Everyone
+    else (the plain ``link add``/``link remove`` CLI) gets the env-resolved
+    default actor, so the audit row is attributed instead of NULL. Resolution
+    only — no lineage gate here: links span every kind (memories, breadcrumbs),
+    not just the gated work-item verbs.
+    """
+    if actor is not None:
+        return actor
+    from agent_notes.core.face_factory import default_actor
+
+    resolved: str = default_actor().actor_id
+    return resolved
+
+
 # ---------------------------------------------------------------------------
 # add_link / remove_link
 # ---------------------------------------------------------------------------
@@ -64,10 +82,16 @@ def add_link(
     to_project: int,
     to_identifier: str,
     relationship: str,
+    actor: str | None = None,
 ) -> None:
-    """Idempotent INSERT into links; writes a change_log row (decision 20)."""
+    """Idempotent INSERT into links; writes a change_log row (decision 20).
+
+    The change_log row is attributed to *actor* (or the env-resolved default
+    when None) instead of NULL (WI-069).
+    """
     from agent_notes.core.change_log import write_change
 
+    resolved_actor = _resolved_actor(actor)
     with _conn() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -103,6 +127,7 @@ def add_link(
                     "to_identifier": to_identifier,
                     "relationship": relationship,
                 },
+                actor=resolved_actor,
             )
         conn.commit()
 
@@ -117,10 +142,16 @@ def remove_link(
     to_project: int,
     to_identifier: str,
     relationship: str,
+    actor: str | None = None,
 ) -> bool:
-    """DELETE from links; writes a change_log row. Returns True if deleted."""
+    """DELETE from links; writes a change_log row. Returns True if deleted.
+
+    The change_log row is attributed to *actor* (or the env-resolved default
+    when None) instead of NULL (WI-069).
+    """
     from agent_notes.core.change_log import write_change
 
+    resolved_actor = _resolved_actor(actor)
     with _conn() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -156,6 +187,7 @@ def remove_link(
                     "to_identifier": to_identifier,
                     "relationship": relationship,
                 },
+                actor=resolved_actor,
             )
             conn.commit()
         return deleted

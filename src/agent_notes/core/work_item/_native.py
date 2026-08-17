@@ -646,7 +646,19 @@ def claim_work_item(
     # WI-068: the lease verbs write ops (claim + set_status) with the caller's
     # actor_id, so they are agent-authored writes like any other — gate them
     # exactly as the regista lease path does (3d2552e gated that side only).
-    face_factory.assert_declared_lineage(actor_id, model_lineage, operation="work-item claim")
+    # WI-069: keep the gate's resolved actor so the op payload and change_log
+    # row record the lineage the gate actually checked (param over env), not
+    # just the raw parameter. Attribution only — refusal behavior is unchanged.
+    # WI-069 review (blocking 1): an explicit actor_id keeps the caller's
+    # identity (Plan 010 semantics unchanged); with none given, stamp the
+    # env-resolved actor everywhere instead of None / signer "null" / lease
+    # "unknown" — matching the regista twin, which stamps actor.actor_id on
+    # its op mirror, change_log row, and lease row.
+    resolved = face_factory.actor_with_overrides(
+        actor_id, model_lineage, operation="work-item claim"
+    )
+    lineage = resolved.model_lineage
+    stamped_actor = actor_id if actor_id is not None else resolved.actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)
@@ -679,9 +691,13 @@ def claim_work_item(
             entity_id=entity_id,
             entity_type=ENTITY_TYPE,
             op_type="claim",
-            payload={"actor_id": actor_id, "ttl_seconds": ttl_seconds},
+            payload={
+                "actor_id": stamped_actor,
+                "ttl_seconds": ttl_seconds,
+                "model_lineage": lineage,
+            },
             parent_op_ids=[entity_id],
-            actor_id=actor_id,
+            actor_id=stamped_actor,
         )
 
         cur.execute(
@@ -694,7 +710,7 @@ def claim_work_item(
                 expires_at = EXCLUDED.expires_at,
                 heartbeat_count = work_item_leases.heartbeat_count + 1
             """,
-            (entity_id, actor_id or "unknown", ttl_seconds),
+            (entity_id, stamped_actor, ttl_seconds),
         )
 
         # Write a set_status op to move status to 'claimed'
@@ -705,14 +721,18 @@ def claim_work_item(
             op_type="set_status",
             payload={"status": "claimed"},
             parent_op_ids=[op["op_id"]],
-            actor_id=actor_id,
+            actor_id=stamped_actor,
         )
 
         kernel.emit_event(
             conn,
             op_id=op["op_id"],
             event_type="claim.granted",
-            payload={"entity_id": entity_id, "identifier": identifier, "actor_id": actor_id},
+            payload={
+                "entity_id": entity_id,
+                "identifier": identifier,
+                "actor_id": stamped_actor,
+            },
         )
 
         # Fold into cache
@@ -728,8 +748,12 @@ def claim_work_item(
             project_id=project_id,
             identifier=identifier,
             event="claimed",
-            payload={"actor_id": actor_id, "ttl_seconds": ttl_seconds},
-            actor=actor_id,
+            payload={
+                "actor_id": stamped_actor,
+                "ttl_seconds": ttl_seconds,
+                "model_lineage": lineage,
+            },
+            actor=stamped_actor,
         )
 
         conn.commit()
@@ -743,7 +767,12 @@ def release_work_item(
     model_lineage: str | None = None,
 ) -> dict:
     # WI-068: same gate as claim — release writes a release op + set_status.
-    face_factory.assert_declared_lineage(actor_id, model_lineage, operation="work-item release")
+    # WI-069: stamp the resolved lineage + resolved actor (see claim above).
+    resolved = face_factory.actor_with_overrides(
+        actor_id, model_lineage, operation="work-item release"
+    )
+    lineage = resolved.model_lineage
+    stamped_actor = actor_id if actor_id is not None else resolved.actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)
@@ -763,9 +792,9 @@ def release_work_item(
             entity_id=entity_id,
             entity_type=ENTITY_TYPE,
             op_type="release",
-            payload={"actor_id": actor_id},
+            payload={"actor_id": stamped_actor, "model_lineage": lineage},
             parent_op_ids=[entity_id],
-            actor_id=actor_id,
+            actor_id=stamped_actor,
         )
 
         # Delete lease
@@ -781,14 +810,18 @@ def release_work_item(
             op_type="set_status",
             payload={"status": "open"},
             parent_op_ids=[op["op_id"]],
-            actor_id=actor_id,
+            actor_id=stamped_actor,
         )
 
         kernel.emit_event(
             conn,
             op_id=op["op_id"],
             event_type="claim.released",
-            payload={"entity_id": entity_id, "identifier": identifier, "actor_id": actor_id},
+            payload={
+                "entity_id": entity_id,
+                "identifier": identifier,
+                "actor_id": stamped_actor,
+            },
         )
 
         folded = kernel.fold_work_item(conn, entity_id)
@@ -803,8 +836,8 @@ def release_work_item(
             project_id=project_id,
             identifier=identifier,
             event="released",
-            payload={"actor_id": actor_id},
-            actor=actor_id,
+            payload={"actor_id": stamped_actor, "model_lineage": lineage},
+            actor=stamped_actor,
         )
 
         conn.commit()
@@ -819,7 +852,12 @@ def heartbeat_work_item(
     model_lineage: str | None = None,
 ) -> dict:
     # WI-068: same gate as claim — heartbeat writes a heartbeat op.
-    face_factory.assert_declared_lineage(actor_id, model_lineage, operation="work-item heartbeat")
+    # WI-069: stamp the resolved lineage + resolved actor (see claim above).
+    resolved = face_factory.actor_with_overrides(
+        actor_id, model_lineage, operation="work-item heartbeat"
+    )
+    lineage = resolved.model_lineage
+    stamped_actor = actor_id if actor_id is not None else resolved.actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)
@@ -852,16 +890,24 @@ def heartbeat_work_item(
             entity_id=entity_id,
             entity_type=ENTITY_TYPE,
             op_type="heartbeat",
-            payload={"actor_id": actor_id, "ttl_seconds": ttl_seconds},
+            payload={
+                "actor_id": stamped_actor,
+                "ttl_seconds": ttl_seconds,
+                "model_lineage": lineage,
+            },
             parent_op_ids=[entity_id],
-            actor_id=actor_id,
+            actor_id=stamped_actor,
         )
 
         kernel.emit_event(
             conn,
             op_id=op["op_id"],
             event_type="item.heartbeat",
-            payload={"entity_id": entity_id, "identifier": identifier, "actor_id": actor_id},
+            payload={
+                "entity_id": entity_id,
+                "identifier": identifier,
+                "actor_id": stamped_actor,
+            },
         )
 
         # Audit trail (BC-027): record the lease heartbeat in change_log so the
@@ -874,8 +920,12 @@ def heartbeat_work_item(
             project_id=project_id,
             identifier=identifier,
             event="heartbeat",
-            payload={"actor_id": actor_id, "ttl_seconds": ttl_seconds},
-            actor=actor_id,
+            payload={
+                "actor_id": stamped_actor,
+                "ttl_seconds": ttl_seconds,
+                "model_lineage": lineage,
+            },
+            actor=stamped_actor,
         )
 
         conn.commit()
