@@ -97,10 +97,12 @@ argued in `core/invariant_probe.py`'s docstring: an **unavailable** regista
 lineage registry is a *failure*, not a degradation (an unproven claim must not
 report `pass` on a gate-feeding probe — and the gate already requires
 `regista.closed_lineage_registry`, so no honest gate opening is blocked); and a
-blank `AGENT_NOTES_ACTOR_ID` fails even though the write path tolerates it. The
-probe takes no `--actor-id`/`--model-lineage` — its subject is the *ambient*
-session identity, so to test a different declaration set the env var the write
-path actually reads.
+*whitespace-only* `AGENT_NOTES_ACTOR_ID` fails even though the write path
+tolerates it (an *empty* value is not the same thing — it falls through to the
+`agent-notes` default and passes). The probe takes no
+`--actor-id`/`--model-lineage` — its subject is the *ambient* session identity,
+so to test a different declaration set the env var the write path actually
+reads.
 
 Two deliberate exemptions: `actor_kind="system"` actors (the migration actor)
 carry no model and are never counted by the gate, and note-shaped entities

@@ -86,9 +86,24 @@ this probe, for three reasons:
 
 The consequence is honest and worth stating plainly: on an environment pinned to
 the locked spine (``SUITE.lock`` [spine].version 0.5.5 at time of writing) this
-probe reports ``ok: false`` with reason ``lineage_registry_unavailable`` even
-though writes work fine there. That is the probe saying "I cannot prove this",
-not "your host is broken" — the ``detail`` and ``evidence`` say so.
+probe reports ``ok: false`` even though writes work fine there. Which *reason*
+the required check carries depends on the ambient lineage, because the write
+path's own refusals rank ahead of this stricter condition (see
+:func:`probe_identity`):
+
+==============================  ================================================
+locked spine, lineage declared  ``lineage_registry_unavailable``
+locked spine, none declared     ``lineage_undeclared`` — the write path refuses
+                                first, so the registry never gets a say on the
+                                required check; the unavailable registry is
+                                still reported by the separate
+                                ``agent_notes.lineage_registry_available`` check
+                                and by the ``lineage_registry_available``
+                                evidence key
+==============================  ================================================
+
+Either way it is the probe saying "I cannot prove this", not "your host is
+broken" — the ``detail`` and ``evidence`` say so.
 
 Read-only by construction
 -------------------------
@@ -306,10 +321,15 @@ def probe_identity(registry: RegistryProbe) -> IdentityProbe:
     if reason == "resolved":
         if not isinstance(actor_id, str) or not actor_id.strip():
             # Stricter than the write path on purpose: `require_declared_lineage`
-            # never inspects `actor_id`, so a blank/whitespace
+            # never inspects `actor_id`, so a *whitespace-only*
             # AGENT_NOTES_ACTOR_ID is accepted by a write and stamped as the
             # author. An identity that names nobody is not resolvable, whatever
             # the write path tolerates.
+            #
+            # Whitespace-only, precisely: `_layered()` returns None for an
+            # *empty* value, so `AGENT_NOTES_ACTOR_ID=""` falls through to the
+            # `agent-notes` default and passes. Only a non-empty value that
+            # strips to nothing (`" "`) reaches here.
             reason = "no_actor_resolvable"
         elif actor_kind != "agent":
             # `resolve_actor` hardcodes "agent"; anything else means the
@@ -457,8 +477,9 @@ _IDENTITY_DETAIL: dict[str, str] = {
         "and a lineage in regista's closed registry"
     ),
     "no_actor_resolvable": (
-        "no actor identity resolvable: AGENT_NOTES_ACTOR_ID resolved to a blank "
-        "value, so a write would stamp an author that names nobody"
+        "no actor identity resolvable: AGENT_NOTES_ACTOR_ID resolved to a "
+        "whitespace-only value, so a write would stamp an author that names "
+        "nobody"
     ),
     "unexpected_actor_kind": (
         "the resolved actor is not agent-kind; the write-path resolution no "

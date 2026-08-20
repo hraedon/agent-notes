@@ -189,18 +189,27 @@ def test_broken_registry_import_is_reported_as_a_registry_error(monkeypatch):
     assert (result.ok, result.reason) == (False, "lineage_registry_error")
 
 
-def test_blank_actor_id_is_not_a_resolvable_identity(monkeypatch, registry):
+def test_whitespace_only_actor_id_is_not_a_resolvable_identity(monkeypatch, registry):
     """Stricter than the write path, deliberately.
 
-    ``require_declared_lineage`` never inspects ``actor_id``, so a whitespace
-    ``AGENT_NOTES_ACTOR_ID`` is accepted by a real write and stamped as the
-    author. The probe refuses to call that resolvable.
+    ``require_declared_lineage`` never inspects ``actor_id``, so a
+    whitespace-only ``AGENT_NOTES_ACTOR_ID`` is accepted by a real write and
+    stamped as the author. The probe refuses to call that resolvable.
+
+    Whitespace-only, not "blank": ``actor._layered`` returns ``None`` for an
+    empty value, so ``AGENT_NOTES_ACTOR_ID=""`` resolves to the ``agent-notes``
+    default and *passes* — asserted below so the distinction stays pinned.
     """
     registry()
     monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")
     monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "   ")
     result = probe.probe_identity(probe.probe_registry())
     assert (result.ok, result.reason) == (False, "no_actor_resolvable")
+
+    monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "")
+    empty = probe.probe_identity(probe.probe_registry())
+    assert (empty.ok, empty.reason) == (True, "resolved")
+    assert empty.actor_id == "agent-notes"
 
 
 def test_non_agent_actor_kind_fails(monkeypatch, registry):
@@ -437,24 +446,77 @@ def test_every_reason_is_declared_and_has_a_detail_string():
 def test_probe_opens_no_database_connection_and_builds_no_face(monkeypatch, registry):
     """Structural proof of the read-only claim.
 
-    Both doors to a write — the regista face and the projection DB pool — are
-    booby-trapped. A probe that touched either would fail here rather than in
+    Every door to the store — the regista face, the projection DB pool, the
+    ``psycopg_pool.ConnectionPool`` constructor the pool is built from (it
+    connects eagerly, ``open=True``), and ``socket.create_connection`` — is
+    booby-trapped. A probe that touched any of them fails here rather than in
     production, where "read-only" is the only reason it is safe to run this from
     a scheduled timer against a live store.
+
+    Two properties make this a real trap rather than a shape:
+
+    - It calls :func:`build_report`, **not** ``invariant_probe_report()``. The
+      public entry point is wrapped in a deliberately broad ``except Exception``
+      (a crashed probe must still emit a well-formed report), which would
+      swallow a tripped trap's ``AssertionError`` and surface the violation only
+      as an unnamed ``ok`` flip. Against ``build_report`` the trap's own message
+      — naming the door — propagates.
+    - Each door also appends to ``touched``, which is asserted separately. That
+      covers the doors reached from inside ``probe_identity``, whose own broad
+      ``except Exception`` turns a trap trip into ``identity_resolution_error``
+      rather than letting the ``AssertionError`` escape.
+
+    This is a *structural* trap: it forbids the doors it names and nothing else.
+    Any new way this package reaches the network or the store — another pool
+    class, a raw ``psycopg.connect``, an HTTP client — must be added to the list
+    below, or the read-only claim silently stops being proven. The subprocess
+    test ``test_probe_does_not_reach_the_store`` in
+    ``tests/test_invariant_probe_cli.py`` is a smoke check over the same claim,
+    not a substitute for this one.
     """
     registry()
     monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")
 
+    import socket
+
+    import psycopg_pool
+
     from agent_notes.core import db as coredb
     from agent_notes.core import face_factory
 
-    def _forbidden(*_a, **_kw):
-        raise AssertionError("the invariant probe must not touch the store")
+    touched: list[str] = []
 
-    monkeypatch.setattr(face_factory, "get_face", _forbidden)
-    monkeypatch.setattr(face_factory, "_build_face", _forbidden)
-    monkeypatch.setattr(coredb, "_conn", _forbidden)
-    monkeypatch.setattr(coredb, "_get_pool", _forbidden, raising=False)
+    def _forbid(door: str):
+        def _forbidden(*_a, **_kw):
+            touched.append(door)
+            raise AssertionError(f"the invariant probe must not touch the store: {door}")
 
-    report = probe.invariant_probe_report()
+        return _forbidden
+
+    # `raising=False` is deliberately absent everywhere here: every symbol below
+    # exists today, and a rename must fail this test loudly rather than quietly
+    # disarm the trap by patching an attribute nothing calls.
+    monkeypatch.setattr(face_factory, "get_face", _forbid("face_factory.get_face"))
+    monkeypatch.setattr(face_factory, "_build_face", _forbid("face_factory._build_face"))
+    monkeypatch.setattr(coredb, "_conn", _forbid("db._conn"))
+    monkeypatch.setattr(coredb, "_get_pool", _forbid("db._get_pool"))
+    # Both bindings: `db.py` from-imports the class, so patching the
+    # `psycopg_pool` attribute alone would leave `db.ConnectionPool` live.
+    monkeypatch.setattr(coredb, "ConnectionPool", _forbid("db.ConnectionPool"))
+    monkeypatch.setattr(psycopg_pool, "ConnectionPool", _forbid("psycopg_pool.ConnectionPool"))
+    monkeypatch.setattr(socket, "create_connection", _forbid("socket.create_connection"))
+
+    report = probe.build_report()
+
+    assert touched == [], f"the probe reached the store through: {touched}"
+    required = next(c for c in report["checks"] if c["id"] == probe.SESSION_IDENTITY_CHECK)
+    assert required["reason"] == "resolved", required
     assert report["ok"] is True
+
+    # The public entry point is read-only too — asserted after `build_report` so
+    # a trap trip is reported by the un-guarded call above, with its own message,
+    # rather than as `probe_error` here.
+    guarded = probe.invariant_probe_report()
+    assert touched == [], f"the probe reached the store through: {touched}"
+    guarded_required = next(c for c in guarded["checks"] if c["id"] == probe.SESSION_IDENTITY_CHECK)
+    assert guarded_required["reason"] == "resolved", guarded_required

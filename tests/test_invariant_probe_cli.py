@@ -198,11 +198,20 @@ def test_lineage_outside_the_registry_is_a_failing_report(registry_available):
 
 
 def test_probe_does_not_reach_the_store():
-    """Read-only, proven end to end.
+    """Read-only, end to end — a *smoke check*, not the primary guarantee.
 
     A DSN pointing at a closed port with regista writes enabled: a probe that
     connected would hang or fail. It must produce the same verdict as a probe
     with no store configured at all.
+
+    The primary read-only guarantee is the unit booby-trap,
+    ``test_probe_opens_no_database_connection_and_builds_no_face`` in
+    ``tests/test_invariant_probe.py``, which forbids each door by name. This
+    test is deliberately weaker and can pass for the wrong reason: on a host
+    with no closed lineage registry the verdict is already a failure, so both
+    arms of the comparison fail and the equality holds whether or not a
+    connection was attempted. It earns its place by exercising the real
+    subprocess with a real DSN configured; it does not stand in for the trap.
     """
     dead = "postgresql://nobody@127.0.0.1:1/nothing"
     proc = _probe(
