@@ -13,7 +13,22 @@ dependencies = [
     "uvicorn>=0.20",
     "cryptography>=42.0",
     "platformdirs>=4.0",
-    "regista-hraedon>=0.5.1",
+    # Upper cap <0.6 (WI-072): regista 0.6.0 refuses `on_behalf_of` inside a v6
+    # epoch (`on_behalf_of_has_no_v6_field`) and refuses legacy writes on both
+    # sides of genesis. agent-notes still passes `on_behalf_of` in src (core/
+    # regista_face.py, actor.py, outbox.py, reconcile.py, face_factory.py), so
+    # resolving to 0.6.0 breaks writes at run time with confusing errors.
+    #
+    # NOTE — this cap binds the *published* metadata and the pip install path
+    # (scripts/dev-install.py, which is what CI uses). It does NOT bind the
+    # `[tool.uv.sources]` editable ../regista mapping below: uv ignores version
+    # specifiers on path/editable sources, so `uv lock` will happily record
+    # whatever version the sibling checkout happens to be — silently, with
+    # `uv lock --check` still passing. That hole is covered by the belt-and-
+    # braces tripwires in tests/test_develop_against_lock.py, which assert the
+    # locked/pinned regista stays <0.6. Remove the cap and those tripwires
+    # together as part of the v6 port ([D] phase), not before.
+    "regista-hraedon>=0.5.1,<0.6",
 ]
 
 [project.optional-dependencies]
