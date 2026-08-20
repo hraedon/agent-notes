@@ -29,6 +29,7 @@ from agent_notes.cli.common import (
 from agent_notes.cli.events import register_events_parsers
 from agent_notes.cli.export import register_export_parsers
 from agent_notes.cli.harness import register_harness_parser
+from agent_notes.cli.invariants import register_invariants_parsers
 from agent_notes.cli.links import register_link_parsers
 from agent_notes.cli.memory import register_memory_parsers
 from agent_notes.cli.memory_provider import register_memory_provider_parsers
@@ -478,6 +479,7 @@ def main() -> int:
     register_verify_parsers(sub)
     register_outbox_parsers(sub)
     register_projection_parsers(sub)
+    register_invariants_parsers(sub)
     register_admin_parsers(sub)
 
     contract_p = sub.add_parser(

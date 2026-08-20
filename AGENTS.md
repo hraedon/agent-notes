@@ -75,6 +75,35 @@ lineage once per host in `~/.config/agent-suite/suite.env`, or pass
 `gpt-sol`, `glm`, `kimi`), not the exact build — the gate compares
 families.
 
+**Checking the wiring: `agent-notes invariants probe`** (WI-071). This is the
+read-only probe the suite genesis gate consumes
+(`agent_suite.genesis_gate`, required check
+`agent_notes.session_identity_resolvable`). It answers one question about *this*
+environment — "would a work-item write issued right now carry a resolvable,
+valid identity?" — by resolving through `face_factory.actor_with_overrides`,
+the same entry point every authored write uses, and reporting what that call
+did. It writes nothing and opens no connection.
+
+```bash
+agent-notes invariants probe          # human-readable
+agent-notes invariants probe --json   # the gate contract: one JSON doc, exit 0/1, (exit==0)==ok
+```
+
+Failure modes are named in each check's `reason`: `lineage_undeclared`,
+`lineage_not_in_registry`, `lineage_registry_unavailable`,
+`lineage_registry_error`, `no_actor_resolvable`, `unexpected_actor_kind`,
+`identity_resolution_error`, `probe_error`. Two deliberate strictnesses, both
+argued in `core/invariant_probe.py`'s docstring: an **unavailable** regista
+lineage registry is a *failure*, not a degradation (an unproven claim must not
+report `pass` on a gate-feeding probe — and the gate already requires
+`regista.closed_lineage_registry`, so no honest gate opening is blocked); and a
+*whitespace-only* `AGENT_NOTES_ACTOR_ID` fails even though the write path
+tolerates it (an *empty* value is not the same thing — it falls through to the
+`agent-notes` default and passes). The probe takes no
+`--actor-id`/`--model-lineage` — its subject is the *ambient* session identity,
+so to test a different declaration set the env var the write path actually
+reads.
+
 Two deliberate exemptions: `actor_kind="system"` actors (the migration actor)
 carry no model and are never counted by the gate, and note-shaped entities
 (memories, reflections via `core/note_model.py`) still use the un-gated
