@@ -38,6 +38,7 @@ agent-notes memory add --name "postgres-tuning" --body "..." --type note
 agent-notes init [path]
 agent-notes resolve [--path PATH] [--json]
 agent-notes doctor [--json]
+agent-notes invariants probe [--json]      # read-only session-identity probe (suite genesis gate)
 
 agent-notes breadcrumb file --title T --body B [--type ...] [--status ...] [--path PATH] [--json]
 agent-notes breadcrumb update <id> [--status ...] [--body ...] [--append-body ...] [--json]
