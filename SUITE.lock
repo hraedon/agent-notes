@@ -34,9 +34,11 @@ version = "0.5.5"
 # Resolve the local sibling with: git -C ../regista checkout <sha>
 sha = "375f1a1b4b808d4693493a8e98e7bfbe4bb0d278"
 describe = "v0.5.5"
-# Mirrors the floor declared in pyproject.toml (the published lower bound); the
-# exact version to develop against is `version` above, not this floor.
-pyproject_floor = "regista>=0.5.1"
+# Mirrors the range declared in pyproject.toml (the published bounds); the
+# exact version to develop against is `version` above, not this range. The <0.6
+# upper cap is the WI-072 v6 guard (regista 0.6.0 refuses on_behalf_of in a v6
+# epoch); it lifts when the v6 port lands.
+pyproject_floor = "regista-hraedon>=0.5.1,<0.6"
 
 [envelope]
 # Regista event-envelope + canonical-workflow versions the face writes.
