@@ -19,7 +19,7 @@ make dev            # or: python scripts/dev-install.py
 ```
 
 installs `regista-hraedon==<SUITE.lock [spine].version>` from PyPI (today
-`0.5.4`), then `ruff` and `-e ".[test]"` (pytest, testcontainers, and the pinned
+`0.5.5`), then `ruff` and `-e ".[test]"` (pytest, testcontainers, and the pinned
 `agent-suite-conformance` kit). CI runs the **same** `scripts/dev-install.py` in
 both the Linux and Windows lanes, so "works on my machine" means "works in CI".
 
@@ -77,8 +77,16 @@ with the cap in place.
 Three tripwires in `tests/test_develop_against_lock.py` make that loud instead of
 silent — they assert the cap is present, that `SUITE.lock [spine].version` is
 pre-v6, and that the committed `uv.lock` records a pre-v6 regista. If the
-`uv.lock` one fires, your sibling checkout has moved to v6: point `../regista` at
-a 0.5.x revision and re-lock, or fall back to the default `DEV_AGAINST=lock`.
+`uv.lock` one fires, your sibling checkout has moved to v6: the only way to make
+`make test` / `uv run` healthy again is to point `../regista` at a 0.5.x revision
+and re-lock (`DEV_AGAINST` affects only `scripts/dev-install.py`'s pip install —
+the editable `[tool.uv.sources]` mapping always wins for uv, so
+`DEV_AGAINST=lock` gives you a healthy *pip* venv but does not fix the uv path).
+
+One expected piece of churn: the first `uv lock`/`uv run` after this cap landed
+rewrites `uv.lock` (the lock is stale relative to the changed pyproject
+specifier) even on a healthy 0.5.x-sibling box — committing that re-lock is
+correct and the tripwire stays green.
 
 Retire the cap and all three tripwires together as part of the v6 port ([D]
 phase) — not by muting them.

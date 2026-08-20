@@ -180,9 +180,10 @@ def test_suite_lock_spine_is_below_v6():
     version = _lock()["spine"]["version"]
     assert _release(version) < _V6, (
         f"SUITE.lock pins regista {version}, which is >=0.6. dev-install.py "
-        "installs exactly this version, so CI and local dev would both be on a "
-        "substrate that refuses agent-notes' on_behalf_of writes. Complete the "
-        "v6 port (WI-072) before advancing the spine."
+        "installs this version first, but its final `pip install -e .[test]` "
+        "re-resolves against the pyproject cap and silently DOWNGRADES back to "
+        "0.5.x — pip stays green while the spine record lies. This test is the "
+        "loud failure. Complete the v6 port (WI-072) before advancing the spine."
     )
 
 

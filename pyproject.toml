@@ -15,9 +15,9 @@ dependencies = [
     "platformdirs>=4.0",
     # Upper cap <0.6 (WI-072): regista 0.6.0 refuses `on_behalf_of` inside a v6
     # epoch (`on_behalf_of_has_no_v6_field`) and refuses legacy writes on both
-    # sides of genesis. agent-notes still passes `on_behalf_of` in src
-    # (regista_face.py, actor.py), so resolving to 0.6.0 breaks writes at run
-    # time with confusing errors.
+    # sides of genesis. agent-notes still passes `on_behalf_of` in src (core/
+    # regista_face.py, actor.py, outbox.py, reconcile.py, face_factory.py), so
+    # resolving to 0.6.0 breaks writes at run time with confusing errors.
     #
     # NOTE — this cap binds the *published* metadata and the pip install path
     # (scripts/dev-install.py, which is what CI uses). It does NOT bind the
