@@ -58,6 +58,31 @@ equivalent of `DEV_AGAINST=sibling` (develop against the local working tree).
 Reach for it deliberately when co-developing the spine; `make dev` is the
 default that composes against the shipped release.
 
+## Caution: regista must stay below 0.6 until the v6 port (WI-072)
+
+regista 0.6.0 refuses `on_behalf_of` inside a v6 epoch
+(`on_behalf_of_has_no_v6_field`) and refuses legacy writes on both sides of
+genesis. agent-notes still passes `on_behalf_of` in `src`, so a 0.6.x substrate
+does not fail at install time — it fails at *write* time, pointing at the epoch
+rather than at the dependency that moved.
+
+`pyproject.toml` therefore caps the spine at `regista-hraedon>=0.5.1,<0.6`. That
+cap binds the published metadata and the pip path (`scripts/dev-install.py`, and
+so CI). It does **not** bind `[tool.uv.sources]`: uv ignores version specifiers
+on path/editable sources, so `uv lock` will record whatever version `../regista`
+happens to be — silently, with `uv lock --check` still passing afterwards. So
+`DEV_AGAINST=sibling` and `make test` / `uv run` can put you on a v6 spine even
+with the cap in place.
+
+Three tripwires in `tests/test_develop_against_lock.py` make that loud instead of
+silent — they assert the cap is present, that `SUITE.lock [spine].version` is
+pre-v6, and that the committed `uv.lock` records a pre-v6 regista. If the
+`uv.lock` one fires, your sibling checkout has moved to v6: point `../regista` at
+a 0.5.x revision and re-lock, or fall back to the default `DEV_AGAINST=lock`.
+
+Retire the cap and all three tripwires together as part of the v6 port ([D]
+phase) — not by muting them.
+
 ## Enforcement
 
 `tests/test_develop_against_lock.py` is the mechanical control: it fails if CI

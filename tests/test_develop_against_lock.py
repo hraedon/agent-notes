@@ -131,5 +131,84 @@ def test_dev_install_has_no_version_literal():
     assert "regista-hraedon==" not in src
 
 
+# ---------------------------------------------------------------------------
+# v6 tripwires (WI-072) — keep the regista substrate below 0.6 until the port.
+#
+# regista 0.6.0 refuses `on_behalf_of` inside a v6 epoch
+# (`on_behalf_of_has_no_v6_field`) and refuses legacy writes on both sides of
+# genesis. agent-notes still passes `on_behalf_of` in src (regista_face.py,
+# actor.py), so a 0.6.0 substrate breaks writes at run time with confusing
+# errors instead of failing where the version is chosen.
+#
+# pyproject's `regista-hraedon>=0.5.1,<0.6` cap covers the published metadata
+# and the pip path (scripts/dev-install.py, i.e. CI). It does NOT cover the
+# `[tool.uv.sources]` editable ../regista mapping: uv ignores version
+# specifiers on path/editable sources, so `uv lock` silently records whatever
+# the sibling checkout is (measured: it advanced 0.5.4 -> 0.6.0 with the cap in
+# place, and `uv lock --check` then passed clean). These tests are the loud
+# failure for that path, and for an accidental SUITE.lock advance.
+#
+# Retire this whole section together with the pyproject cap as part of the v6
+# port ([D] phase) — not by muting it.
+# ---------------------------------------------------------------------------
+
+_V6 = (0, 6)
+
+
+def _release(version: str) -> tuple[int, int]:
+    """Leading (major, minor) of a PEP 440-ish version string."""
+    parts = re.match(r"(\d+)\.(\d+)", version)
+    assert parts, f"unparseable version: {version!r}"
+    return (int(parts.group(1)), int(parts.group(2)))
+
+
+def test_pyproject_caps_regista_below_v6():
+    """The published floor carries an explicit <0.6 upper bound."""
+    pyproject = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    spec = next(
+        d for d in pyproject["project"]["dependencies"] if d.startswith("regista-hraedon")
+    )
+    assert "<0.6" in spec, (
+        f"regista dependency {spec!r} lost its <0.6 cap. regista 0.6.0 refuses "
+        "on_behalf_of in a v6 epoch and agent-notes still uses it — restore the "
+        "cap, or remove this test as part of the v6 port (WI-072)."
+    )
+
+
+def test_suite_lock_spine_is_below_v6():
+    """The substrate CI installs (SUITE.lock [spine].version) stays pre-v6."""
+    version = _lock()["spine"]["version"]
+    assert _release(version) < _V6, (
+        f"SUITE.lock pins regista {version}, which is >=0.6. dev-install.py "
+        "installs exactly this version, so CI and local dev would both be on a "
+        "substrate that refuses agent-notes' on_behalf_of writes. Complete the "
+        "v6 port (WI-072) before advancing the spine."
+    )
+
+
+def test_uv_lock_records_regista_below_v6():
+    """The committed uv.lock stays pre-v6.
+
+    This is the tripwire for the editable-source hole: `uv lock` resolves
+    ../regista by path and ignores the pyproject cap, so a routine re-lock on a
+    machine whose sibling checkout has moved to 0.6.0 silently rewrites this
+    entry. `uv run` (make test / make lint) syncs through the same lock, so a
+    0.6.0 entry here means local writes are already broken.
+    """
+    lock_path = _ROOT / "uv.lock"
+    packages = tomllib.loads(lock_path.read_text(encoding="utf-8"))["package"]
+    entry = next(p for p in packages if p["name"] == "regista-hraedon")
+    version = entry["version"]
+    assert _release(version) < _V6, (
+        f"uv.lock records regista-hraedon {version} (>=0.6), source "
+        f"{entry.get('source')}. uv ignores the pyproject <0.6 cap for the "
+        "editable ../regista path source, so this most likely came from a "
+        "`uv lock` / `uv run` against a sibling checkout that has moved to v6. "
+        "Point ../regista at a 0.5.x revision and re-lock, or use "
+        "DEV_AGAINST=lock (scripts/dev-install.py) to develop against the "
+        "released spine — or complete the v6 port (WI-072) and retire this test."
+    )
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
