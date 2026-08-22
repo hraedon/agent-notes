@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -95,7 +96,7 @@ def test_delegation_paths_are_loaded_in_order(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:worker")
     monkeypatch.setenv(
         "AGENT_NOTES_ACTION_DELEGATION_PATHS",
-        f"{first}:{second}",
+        os.pathsep.join((str(first), str(second))),
     )
 
     config = load_actor_config()
@@ -108,7 +109,7 @@ def test_delegation_paths_are_loaded_in_order(monkeypatch, tmp_path):
 
 def test_empty_delegation_path_list_is_rejected(monkeypatch):
     monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:worker")
-    monkeypatch.setenv("AGENT_NOTES_ACTION_DELEGATION_PATHS", " : ")
+    monkeypatch.setenv("AGENT_NOTES_ACTION_DELEGATION_PATHS", f" {os.pathsep} ")
 
     with pytest.raises(DelegationConfigurationError):
         resolve_actor()
