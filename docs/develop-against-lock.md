@@ -19,7 +19,7 @@ make dev            # or: python scripts/dev-install.py
 ```
 
 installs `regista-hraedon==<SUITE.lock [spine].version>` from PyPI (today
-`0.7.0`), then `ruff` and `-e ".[test]"` (pytest, testcontainers, and the pinned
+`0.7.1`), then `ruff` and `-e ".[test]"` (pytest, testcontainers, and the pinned
 `agent-suite-conformance` kit). CI runs the **same** `scripts/dev-install.py` in
 both the Linux and Windows lanes, so "works on my machine" means "works in CI".
 
@@ -72,8 +72,8 @@ The regista configuration surface is also breaking: use `REGISTA_DSN`,
 aliases are ignored. `AGENT_NOTES_REGISTA_WRITES` remains the write-mode gate.
 
 `pyproject.toml` targets the published post-port spine range
-(`regista-hraedon>=0.7.0,<0.8`). `SUITE.lock` pins the published 0.7.0 artifact,
-its `v0.7.0` merge SHA, envelope v6, and canonical workflow v3 together.
+(`regista-hraedon>=0.7.0,<0.8`). `SUITE.lock` pins the published 0.7.1 artifact,
+its `v0.7.1` merge SHA, envelope v6, and canonical workflow v3 together.
 
 The editable `[tool.uv.sources]` mapping is a co-development hatch: uv may
 resolve the local sibling regardless of the published requirement. Treat that
@@ -97,7 +97,7 @@ The pre-port tripwires in `tests/test_develop_against_lock.py` made that drift
 loud instead of silent. They were retired with the cap as part of the v6 port;
 the remaining tests keep the resolver tied to the face-local lock.
 
-The current editable `uv.lock` records the sibling checkout's 0.7.0 metadata.
+The current editable `uv.lock` records the sibling checkout's 0.7.1 metadata.
 That remains co-development state; the published artifact and exact git
 provenance are independently recorded in `SUITE.lock`.
 
