@@ -26,12 +26,11 @@ mandatory native DSN.
 
 Suite config adoption (Plan 017 WI-1.1): the three shared facts that every
 suite consumer reads — the regista DSN, the signing-key path, and the SSL flag —
-are sourced from canonical suite env vars (``REGISTA_DSN``,
+are sourced from the canonical suite env vars (``REGISTA_DSN``,
 ``REGISTA_KEY_PATH``, ``REGISTA_REQUIRE_SSL``), the names regista/dossier/cairn
-also use. Each retains its ``AGENT_NOTES_REGISTA_*`` predecessor as a back-compat
-alias for one release; using the alias emits a ``DeprecationWarning``. The
-per-tool slug (``AGENT_NOTES_REGISTA_PROJECT``) and the writes gate
-(``AGENT_NOTES_REGISTA_WRITES``) are tool-specific and keep their names.
+also use. The per-tool slug is ``AGENT_NOTES_PROJECT`` and the writes gate
+(``AGENT_NOTES_REGISTA_WRITES``) remains tool-specific. There are no deprecated
+configuration aliases: an unrecognised name is ignored.
 
 Note: ``REGISTA_DSN`` is used only by the optional regista face; the native
 agent-notes DSN (``AGENT_NOTES_DSN``) does not fall back to it. The deployment
@@ -44,7 +43,6 @@ from __future__ import annotations
 
 import json
 import os
-import warnings
 from pathlib import Path
 
 import platformdirs
@@ -55,92 +53,24 @@ _DSN_ENV = "AGENT_NOTES_DSN"
 _CONFIG_ENV = "AGENT_NOTES_CONFIG"  # override the config file path
 
 # Canonical suite env vars (Plan 017 WI-1.1). These are the shared facts every
-# suite consumer reads, sourced from one suite.env. Each has a legacy
-# AGENT_NOTES_REGISTA_* alias kept for one release (deprecation warning).
+# suite consumer reads, sourced from one suite.env.
 _SUITE_REGISTA_DSN_ENV = "REGISTA_DSN"
 _SUITE_REGISTA_KEY_ENV = "REGISTA_KEY_PATH"
 _SUITE_REGISTA_SSL_ENV = "REGISTA_REQUIRE_SSL"
 
 # Canonical suite var for the per-consumer project slug (blueprint §2.6 /
 # bootstrap-contract §2: "per-consumer <TOOL>_PROJECT"). The per-user suite.env
-# overlay sets this (multi-user-onboarding §3). The legacy
-# AGENT_NOTES_REGISTA_PROJECT is kept as a fallback alias.
+# overlay sets this (multi-user-onboarding §3).
 _SUITE_PROJECT_ENV = "AGENT_NOTES_PROJECT"
 
-# Legacy aliases (retained for one release — emit DeprecationWarning when used).
-_REGISTA_DSN_ENV = "AGENT_NOTES_REGISTA_DSN"
-_REGISTA_PROJECT_ENV = "AGENT_NOTES_REGISTA_PROJECT"  # legacy alias for project
-_REGISTA_KEY_ENV = "AGENT_NOTES_REGISTA_HMAC_KEY_PATH"
-_REGISTA_SSL_ENV = "AGENT_NOTES_REGISTA_REQUIRE_SSL"
 # Tool-specific (not a shared fact) — keeps its AGENT_NOTES_* name.
 _REGISTA_WRITES_ENV = "AGENT_NOTES_REGISTA_WRITES"
 _REGISTA_PROJECT_DEFAULT = "agent_notes"
 
-# Track which legacy aliases have already warned this process so a tight loop
-# (e.g. regista_config() called per-write) does not spam stderr.
-_WARNED_LEGACY: set[str] = set()
 
-
-def _warn_legacy_alias(legacy_env: str, canonical_env: str) -> None:
-    """Emit a one-shot ``DeprecationWarning`` when a legacy
-    ``AGENT_NOTES_REGISTA_*`` alias is the source of a value instead of the
-    canonical suite var. Idempotent per alias per process.
-    """
-    if legacy_env not in _WARNED_LEGACY:
-        _WARNED_LEGACY.add(legacy_env)
-        warnings.warn(
-            f"{legacy_env} is deprecated; use the canonical suite env var "
-            f"{canonical_env} instead (Plan 017 WI-1.1). The alias is retained "
-            f"for one release.",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-
-
-def _aliased_env(canonical_env: str, legacy_env: str) -> str | None:
-    """Resolve an env var preferring the canonical suite name, falling back to
-    the legacy alias with a one-shot deprecation warning. An empty string is
-    treated as unset (falls through), mirroring :func:`resolve_dsn`.
-    """
-    val = os.environ.get(canonical_env)
-    if val:
-        return val
-    legacy = os.environ.get(legacy_env)
-    if legacy:
-        _warn_legacy_alias(legacy_env, canonical_env)
-        return legacy
-    return None
-
-
-def _aliased_suite(suite: dict[str, str], canonical_env: str, legacy_env: str) -> str | None:
-    """Resolve a var from the suite.env dict (per-user > system merge).
-
-    Prefers the canonical suite name, falling back to the legacy alias with a
-    one-shot deprecation warning. This is the suite.env-file layer of the
-    precedence chain (process env is checked separately by :func:`_aliased_env`
-    with higher precedence).
-    """
-    val = suite.get(canonical_env)
-    if val:
-        return val
-    legacy = suite.get(legacy_env)
-    if legacy:
-        _warn_legacy_alias(legacy_env, canonical_env)
-        return legacy
-    return None
-
-
-def _env_or_suite(canonical_env: str, legacy_env: str, suite: dict[str, str]) -> str | None:
-    """Resolve a shared suite fact through the full precedence chain.
-
-    Precedence: process env (canonical > legacy) > suite.env (canonical > legacy).
-    The caller supplies the suite.env dict (already merged per-user > system).
-    The tool-specific config file is a further fallback handled by the caller.
-    """
-    val = _aliased_env(canonical_env, legacy_env)
-    if val:
-        return val
-    return _aliased_suite(suite, canonical_env, legacy_env)
+def _env_or_suite(canonical_env: str, suite: dict[str, str]) -> str | None:
+    """Resolve one canonical value through process env and suite.env."""
+    return os.environ.get(canonical_env) or suite.get(canonical_env) or None
 
 
 def config_path(home: Path | None = None) -> Path:
@@ -276,10 +206,9 @@ class RegistaConfig:
     is on. When False, the legacy op_log path is used unchanged. Each field
     resolves through the suite precedence (Plan 017 WI-1.1 + WI-4.2):
 
-        process env (canonical > legacy alias)
-        > per-user suite.env  (canonical > legacy alias)
-        > system suite.env    (canonical > legacy alias)
-        > tool config file    (``regista`` block in config.json)
+        process env > per-user suite.env > system suite.env
+        > tool config file    (``regista`` block in config.json; ``key_path``
+        for the signing key-set manifest)
 
     The suite.env layer is the per-user overlay (blueprint §2.6): each human's
     ``principal_id`` and default project live there, layered on the system-wide
@@ -292,28 +221,26 @@ class RegistaConfig:
 
         # DSN / key / SSL resolve: process env > suite.env > config file
         # (Plan 017 WI-1.1 + WI-4.2). An empty env var falls through.
-        env_dsn = _env_or_suite(_SUITE_REGISTA_DSN_ENV, _REGISTA_DSN_ENV, suite)
+        env_dsn = _env_or_suite(_SUITE_REGISTA_DSN_ENV, suite)
         file_dsn = file_cfg.get("dsn")
         self.dsn: str | None = env_dsn or (file_dsn if isinstance(file_dsn, str) else None)
 
-        # Project slug: canonical AGENT_NOTES_PROJECT (suite) > legacy
-        # AGENT_NOTES_REGISTA_PROJECT > suite.env > default. The per-user
-        # overlay sets AGENT_NOTES_PROJECT (multi-user-onboarding §3).
+        # Project slug: canonical AGENT_NOTES_PROJECT process env > suite.env
+        # > default. The per-user overlay sets AGENT_NOTES_PROJECT
+        # (multi-user-onboarding §3).
         self.project: str = (
             os.environ.get(_SUITE_PROJECT_ENV)
-            or os.environ.get(_REGISTA_PROJECT_ENV)
             or suite.get(_SUITE_PROJECT_ENV)
-            or suite.get(_REGISTA_PROJECT_ENV)
             or _REGISTA_PROJECT_DEFAULT
         )
 
-        env_key = _env_or_suite(_SUITE_REGISTA_KEY_ENV, _REGISTA_KEY_ENV, suite)
-        file_key = file_cfg.get("hmac_key_path")
-        self.hmac_key_path: str | None = env_key or (
+        env_key = _env_or_suite(_SUITE_REGISTA_KEY_ENV, suite)
+        file_key = file_cfg.get("key_path")
+        self.key_path: str | None = env_key or (
             file_key if isinstance(file_key, str) else None
         )
 
-        ssl_env = _env_or_suite(_SUITE_REGISTA_SSL_ENV, _REGISTA_SSL_ENV, suite)
+        ssl_env = _env_or_suite(_SUITE_REGISTA_SSL_ENV, suite)
         self.require_ssl: bool = _parse_bool(ssl_env, file_cfg.get("require_ssl", False))
         gate = _parse_bool(
             os.environ.get(_REGISTA_WRITES_ENV), file_cfg.get("writes_enabled", False)

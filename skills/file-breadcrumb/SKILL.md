@@ -71,27 +71,22 @@ Do **not** file one when:
 5. **File it.** Run:
 
    ```
-   agent-notes work-item file \
-     --path <repo-path> \
-     --title "<sentence>" \
-     --body "<two paragraphs>" \
-     --type <existing-type> \
-     --status open \
-     --severity <low|medium|high|critical> \
-     --model-lineage <your-model-family> \
-     --json
-   ```
+    agent-notes work-item file \
+      --path <repo-path> \
+      --title "<sentence>" \
+      --body "<two paragraphs>" \
+      --type <existing-type> \
+      --status open \
+      --severity <low|medium|high|critical> \
+      --json
+    ```
 
-   **`--model-lineage` is required** (WI-062). Every work-item write is an
-   agent-authored event, and regista's cross-lineage review gate can never
-   clear an event whose author declared no model family — history cannot be
-   cured after the fact, so the CLI refuses the write with
-   `UNDECLARED_LINEAGE` rather than filing something un-reviewable. Declare
-   the family, not the exact build: `claude-opus`, `gpt-sol`, `glm`,
-   `kimi`. If your host sets `AGENT_NOTES_MODEL_LINEAGE` (process env or
-   `~/.config/agent-suite/suite.env`) you can omit the flag. Add
-   `--actor-id <your-session-id>` too when several agents work one repo, so
-   separation-of-duties at review time can tell you apart.
+    Identity is ambient v6 configuration, never a command-line override. Set a
+    canonical `AGENT_NOTES_ACTOR_ID` (or the suite fallback
+    `REGISTA_PRINCIPAL_ID`) and the regista producer variables in the process
+    environment or `~/.config/agent-suite/suite.env`. A reviewer that needs a
+    distinct lineage must run in a separately configured process with a
+    different `REGISTA_PRODUCER_MODEL_LINEAGE`.
 
    Parse the JSON; the returned `identifier` is the canonical handle
    (e.g. `WI-001`). Tell the user that identifier so they can

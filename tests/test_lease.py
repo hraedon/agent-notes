@@ -72,7 +72,6 @@ class TestClaim:
         claimed = WorkItemModel.claim_work_item(
             project_id=default_project.id,
             identifier="WI-LEASE-01",
-            actor_id="agent-a",
         )
         assert claimed["status"] == "claimed"
 
@@ -90,7 +89,7 @@ class TestClaim:
             )
             lease = cur.fetchone()
         assert lease is not None
-        assert lease["actor_id"] == "agent-a"
+        assert lease["actor_id"] == "agent:worker"
 
         # a claim op exists in op_log
         ops = _ops_for_entity(entity_id)
@@ -112,7 +111,6 @@ class TestClaim:
         WorkItemModel.claim_work_item(
             project_id=default_project.id,
             identifier="WI-LEASE-02",
-            actor_id="agent-a",
         )
 
         ops = _ops_for_entity(entity_id)
@@ -152,7 +150,6 @@ class TestHeartbeat:
         WorkItemModel.claim_work_item(
             project_id=default_project.id,
             identifier="WI-LEASE-03",
-            actor_id="agent-a",
             ttl_seconds=60,
         )
 
@@ -171,7 +168,6 @@ class TestHeartbeat:
         WorkItemModel.heartbeat_work_item(
             project_id=default_project.id,
             identifier="WI-LEASE-03",
-            actor_id="agent-a",
             ttl_seconds=120,
         )
 
@@ -219,13 +215,11 @@ class TestRelease:
         WorkItemModel.claim_work_item(
             project_id=default_project.id,
             identifier="WI-LEASE-04",
-            actor_id="agent-a",
         )
 
         released = WorkItemModel.release_work_item(
             project_id=default_project.id,
             identifier="WI-LEASE-04",
-            actor_id="agent-a",
         )
         assert released["status"] == "open"
 
@@ -279,13 +273,11 @@ class TestLeaseErrors:
         WorkItemModel.claim_work_item(
             project_id=default_project.id,
             identifier="WI-LEASE-05",
-            actor_id="agent-a",
         )
         with pytest.raises(ValueError):
             WorkItemModel.claim_work_item(
                 project_id=default_project.id,
                 identifier="WI-LEASE-05",
-                actor_id="agent-b",
             )
 
     def test_heartbeat_unclaimed_raises(self, default_project):
@@ -300,7 +292,6 @@ class TestLeaseErrors:
             WorkItemModel.heartbeat_work_item(
                 project_id=default_project.id,
                 identifier="WI-LEASE-06",
-                actor_id="agent-a",
             )
 
     def test_claim_non_open_raises(self, default_project):
@@ -316,7 +307,6 @@ class TestLeaseErrors:
             WorkItemModel.claim_work_item(
                 project_id=default_project.id,
                 identifier="WI-LEASE-07",
-                actor_id="agent-a",
             )
 
 
@@ -350,297 +340,21 @@ class TestLeaseChangeLog:
         WorkItemModel.claim_work_item(
             project_id=default_project.id,
             identifier="WI-LEASE-CL",
-            actor_id="agent-a",
             ttl_seconds=60,
         )
         WorkItemModel.heartbeat_work_item(
             project_id=default_project.id,
             identifier="WI-LEASE-CL",
-            actor_id="agent-a",
             ttl_seconds=120,
         )
         WorkItemModel.release_work_item(
             project_id=default_project.id,
             identifier="WI-LEASE-CL",
-            actor_id="agent-a",
         )
 
         events = {row["event"]: row for row in _change_log_for("WI-LEASE-CL")}
         assert {"claimed", "heartbeat", "released"} <= set(events)
         for event in ("claimed", "heartbeat", "released"):
-            assert events[event]["actor"] == "agent-a"
+            assert events[event]["actor"] == "agent:worker"
         assert events["claimed"]["payload"]["ttl_seconds"] == 60
         assert events["heartbeat"]["payload"]["ttl_seconds"] == 120
-
-
-class TestLineageGateWI068:
-    """WI-068: the native lease/delete verbs are lineage-gated like everything
-    else (commit 3d2552e gated only the regista lease verbs), the per-invocation
-    ``model_lineage`` override takes effect when the env declares nothing, and
-    ``delete`` stamps the actor on its tombstone op instead of committing it
-    anonymous."""
-
-    def test_lease_verbs_refuse_undeclared_and_accept_explicit_lineage(
-        self, default_project, monkeypatch
-    ):
-        from agent_notes.core.actor import UndeclaredLineageError
-
-        # File while the session lineage is still present.
-        WorkItemModel.file_work_item(
-            project_id=default_project.id,
-            identifier="WI-LIN-NAT-01",
-            title="Native lease gate",
-            status="open",
-            embedding=_vec768(),
-        )
-
-        # Env declares nothing: every lease verb refuses before writing.
-        monkeypatch.delenv("AGENT_NOTES_MODEL_LINEAGE", raising=False)
-        with pytest.raises(UndeclaredLineageError):
-            WorkItemModel.claim_work_item(
-                project_id=default_project.id,
-                identifier="WI-LIN-NAT-01",
-                actor_id="agent-a",
-                ttl_seconds=60,
-            )
-        # Nothing was written by the refused claim.
-        with _conn() as conn:
-            cur = conn.cursor(row_factory=dict_row)
-            cur.execute(
-                "SELECT 1 FROM work_item_leases l JOIN work_items w"
-                " ON w.entity_id = l.entity_id WHERE w.identifier = %s",
-                ("WI-LIN-NAT-01",),
-            )
-            assert cur.fetchone() is None
-
-        # The explicit per-invocation declaration takes effect over env absence
-        # for the whole lease lifecycle.
-        claimed = WorkItemModel.claim_work_item(
-            project_id=default_project.id,
-            identifier="WI-LIN-NAT-01",
-            actor_id="agent-a",
-            ttl_seconds=60,
-            model_lineage="claude-opus",
-        )
-        assert claimed["status"] == "claimed"
-        with pytest.raises(UndeclaredLineageError):
-            WorkItemModel.heartbeat_work_item(
-                project_id=default_project.id,
-                identifier="WI-LIN-NAT-01",
-                actor_id="agent-a",
-                ttl_seconds=60,
-            )
-        WorkItemModel.heartbeat_work_item(
-            project_id=default_project.id,
-            identifier="WI-LIN-NAT-01",
-            actor_id="agent-a",
-            ttl_seconds=60,
-            model_lineage="claude-opus",
-        )
-        with pytest.raises(UndeclaredLineageError):
-            WorkItemModel.release_work_item(
-                project_id=default_project.id,
-                identifier="WI-LIN-NAT-01",
-                actor_id="agent-a",
-            )
-        released = WorkItemModel.release_work_item(
-            project_id=default_project.id,
-            identifier="WI-LIN-NAT-01",
-            actor_id="agent-a",
-            model_lineage="claude-opus",
-        )
-        assert released["status"] == "open"
-
-    def test_delete_refuses_undeclared_and_stamps_actor_on_tombstone(
-        self, default_project, monkeypatch
-    ):
-        from agent_notes.core.actor import UndeclaredLineageError
-
-        wi = WorkItemModel.file_work_item(
-            project_id=default_project.id,
-            identifier="WI-LIN-DEL-01",
-            title="Delete gate + actor stamp",
-            status="open",
-            embedding=_vec768(),
-        )
-        entity_id = wi["entity_id"]
-
-        monkeypatch.delenv("AGENT_NOTES_MODEL_LINEAGE", raising=False)
-        with pytest.raises(UndeclaredLineageError):
-            WorkItemModel.delete_work_item(default_project.id, "WI-LIN-DEL-01")
-        # The refused delete wrote nothing: the item is still in the cache.
-        assert WorkItemModel.get_work_item(default_project.id, "WI-LIN-DEL-01") is not None
-
-        assert WorkItemModel.delete_work_item(
-            default_project.id,
-            "WI-LIN-DEL-01",
-            actor_id="deleter-agent",
-            model_lineage="claude-opus",
-        )
-        # The tombstone snapshot op carries the actor (pre-WI-068 it was NULL).
-        snapshots = [op for op in _ops_for_entity(entity_id) if op["op_type"] == "snapshot"]
-        assert snapshots, "delete must write the tombstone snapshot op"
-        assert snapshots[-1]["actor_id"] == "deleter-agent"
-        # ...and so does the change_log row.
-        deleted_rows = [r for r in _change_log_for("WI-LIN-DEL-01") if r["event"] == "deleted"]
-        assert deleted_rows and deleted_rows[-1]["actor"] == "deleter-agent"
-
-
-# ---------------------------------------------------------------------------
-# Lease-op attribution (WI-069)
-# ---------------------------------------------------------------------------
-
-
-class TestLeaseAttributionWI069:
-    """WI-069: the native lease-op payloads and their change_log rows record
-    the lineage the WI-068 gate checked, so the op-chain can say WHICH lineage
-    held a lease after the fact (the regista path already carries it in the
-    claim's ``actor_metadata``)."""
-
-    def test_lease_ops_and_change_log_stamp_lineage(self, default_project):
-        wi = WorkItemModel.file_work_item(
-            project_id=default_project.id,
-            identifier="WI-LEASE-ATTR-01",
-            title="Lease attribution",
-            status="open",
-            embedding=_vec768(),
-        )
-        entity_id = wi["entity_id"]
-
-        # No per-call declaration: the gate resolves the session env lineage
-        # (conftest sets claude-opus) — that resolved value must be stamped.
-        WorkItemModel.claim_work_item(
-            project_id=default_project.id,
-            identifier="WI-LEASE-ATTR-01",
-            actor_id="agent-a",
-            ttl_seconds=60,
-        )
-        WorkItemModel.heartbeat_work_item(
-            project_id=default_project.id,
-            identifier="WI-LEASE-ATTR-01",
-            actor_id="agent-a",
-            ttl_seconds=120,
-        )
-        WorkItemModel.release_work_item(
-            project_id=default_project.id,
-            identifier="WI-LEASE-ATTR-01",
-            actor_id="agent-a",
-        )
-
-        ops = {op["op_type"]: op for op in _ops_for_entity(entity_id)}
-        for op_type in ("claim", "heartbeat", "release"):
-            assert ops[op_type]["payload"].get("model_lineage") == "claude-opus", op_type
-
-        events = {row["event"]: row for row in _change_log_for("WI-LEASE-ATTR-01")}
-        for event in ("claimed", "heartbeat", "released"):
-            assert events[event]["payload"].get("model_lineage") == "claude-opus", event
-
-    def test_lease_ops_stamp_explicit_lineage_param(self, default_project, monkeypatch):
-        """WI-069: with no env declaration, the per-invocation ``model_lineage``
-        is what lands in the claim op payload and the claimed change_log row —
-        the stamp is the gate-resolved declaration, not a raw env echo."""
-        wi = WorkItemModel.file_work_item(
-            project_id=default_project.id,
-            identifier="WI-LEASE-ATTR-02",
-            title="Lease attribution (explicit param)",
-            status="open",
-            embedding=_vec768(),
-        )
-        entity_id = wi["entity_id"]
-
-        monkeypatch.delenv("AGENT_NOTES_MODEL_LINEAGE", raising=False)
-        WorkItemModel.claim_work_item(
-            project_id=default_project.id,
-            identifier="WI-LEASE-ATTR-02",
-            actor_id="agent-a",
-            ttl_seconds=60,
-            model_lineage="claude-opus",
-        )
-
-        ops = {op["op_type"]: op for op in _ops_for_entity(entity_id)}
-        assert ops["claim"]["payload"].get("model_lineage") == "claude-opus"
-        events = {row["event"]: row for row in _change_log_for("WI-LEASE-ATTR-02")}
-        assert events["claimed"]["payload"].get("model_lineage") == "claude-opus"
-
-    def test_default_invocation_stamps_env_resolved_actor(self, default_project, monkeypatch):
-        """WI-069 review (blocking finding 1): with no explicit ``actor_id`` —
-        the documented default; the CLI ``--actor-id`` is an *override* of the
-        env-wired identity — the op payloads, op actor columns, change_log
-        rows, and the lease row all carry the env-resolved actor. Before the
-        fix the raw None was stamped everywhere: payload ``actor_id: None``,
-        op column ``"null"`` (the signer key_id substitute), change_log
-        ``actor=None``, lease row ``"unknown"`` — half-attributed rows in the
-        exact class this ticket closes."""
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "env-lease-agent")
-        wi = WorkItemModel.file_work_item(
-            project_id=default_project.id,
-            identifier="WI-LEASE-ATTR-03",
-            title="Lease attribution (default identity)",
-            status="open",
-            embedding=_vec768(),
-        )
-        entity_id = wi["entity_id"]
-
-        WorkItemModel.claim_work_item(
-            project_id=default_project.id,
-            identifier="WI-LEASE-ATTR-03",
-            ttl_seconds=60,
-        )
-        # The lease row carries the resolved actor (was `actor_id or "unknown"`).
-        with _conn() as conn:
-            cur = conn.cursor(row_factory=dict_row)
-            cur.execute(
-                "SELECT actor_id FROM work_item_leases WHERE entity_id = %s",
-                (entity_id,),
-            )
-            lease = cur.fetchone()
-        assert lease is not None
-        assert lease["actor_id"] == "env-lease-agent"
-
-        WorkItemModel.heartbeat_work_item(
-            project_id=default_project.id,
-            identifier="WI-LEASE-ATTR-03",
-            ttl_seconds=60,
-        )
-        WorkItemModel.release_work_item(
-            project_id=default_project.id,
-            identifier="WI-LEASE-ATTR-03",
-        )
-
-        ops = {op["op_type"]: op for op in _ops_for_entity(entity_id)}
-        for op_type in ("claim", "heartbeat", "release"):
-            # Payload attribution (was None)...
-            assert ops[op_type]["payload"].get("actor_id") == "env-lease-agent", op_type
-            # ...and the op actor column (was the signer key_id "null").
-            assert ops[op_type]["actor_id"] == "env-lease-agent", op_type
-
-        events = {row["event"]: row for row in _change_log_for("WI-LEASE-ATTR-03")}
-        for event in ("claimed", "heartbeat", "released"):
-            assert events[event]["actor"] == "env-lease-agent", event
-            assert events[event]["payload"].get("actor_id") == "env-lease-agent", event
-
-    def test_per_call_lineage_wins_over_env_in_stamp(self, default_project):
-        """WI-069 review (NB-5a): the env declares a lineage (session conftest:
-        claude-opus) AND the call declares another — the stamp records the
-        per-call declaration, matching the gate's param-over-env precedence."""
-        wi = WorkItemModel.file_work_item(
-            project_id=default_project.id,
-            identifier="WI-LEASE-ATTR-04",
-            title="Lease attribution (precedence)",
-            status="open",
-            embedding=_vec768(),
-        )
-        entity_id = wi["entity_id"]
-
-        WorkItemModel.claim_work_item(
-            project_id=default_project.id,
-            identifier="WI-LEASE-ATTR-04",
-            actor_id="agent-a",
-            ttl_seconds=60,
-            model_lineage="claude-sonnet",
-        )
-
-        ops = {op["op_type"]: op for op in _ops_for_entity(entity_id)}
-        assert ops["claim"]["payload"].get("model_lineage") == "claude-sonnet"
-        events = {row["event"]: row for row in _change_log_for("WI-LEASE-ATTR-04")}
-        assert events["claimed"]["payload"].get("model_lineage") == "claude-sonnet"

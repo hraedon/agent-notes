@@ -8,15 +8,19 @@ from pathlib import Path
 
 import pytest
 from psycopg.rows import dict_row
-from regista.testing import InMemoryRegista
 
 from agent_notes.core import db as coredb
+from agent_notes.core.actor import Actor
 from agent_notes.core.db import _conn
 from agent_notes.core.face_factory import reset_face, set_face_for_test
 from agent_notes.core.regista_face import RegistaFace
 from agent_notes.core.work_item._common import mirror_regista_snapshot
 from agent_notes.core.work_item_model import WorkItemModel
-from tests.conftest import ephemeral_db  # noqa: F401
+from tests.conftest import (
+    _set_truthful_producer,
+    ephemeral_db,  # noqa: F401
+    provision_v6_regista,  # noqa: F401
+)
 
 pytestmark = pytest.mark.usefixtures("ephemeral_db")
 
@@ -33,22 +37,10 @@ def default_project():
 
 
 @pytest.fixture
-def hmac_key_path(tmp_path: Path):
-    path = tmp_path / "keys.json"
-    path.write_text(
-        json.dumps(
-            {
-                "keys": [
-                    {
-                        "key_id": "test-key-001",
-                        "secret": "dGhpcyBpcyBhIHRlc3Qgc2VjcmV0IGtleSBmb3Igc3Vic3RyYXRl",
-                        "status": "active",
-                    }
-                ]
-            }
-        )
-    )
-    return str(path)
+def v6_key_path(tmp_path: Path):
+    # provision_v6_regista writes the real v6 keyset here; no placeholder
+    # HMAC manifest is written (the HMAC era is over — see conftest).
+    return str(tmp_path / "v6_keys.json")
 
 
 def _vec768():
@@ -56,43 +48,40 @@ def _vec768():
 
 
 def _set_regista_env(dsn: str):
-    os.environ["AGENT_NOTES_REGISTA_DSN"] = dsn
+    os.environ["REGISTA_DSN"] = dsn
     os.environ["AGENT_NOTES_REGISTA_WRITES"] = "1"
-    os.environ["AGENT_NOTES_REGISTA_PROJECT"] = "test_project"
-    os.environ["AGENT_NOTES_REGISTA_HMAC_KEY_PATH"] = os.devnull
-    os.environ["AGENT_NOTES_ACTOR_ID"] = "test-agent"
-    # WI-062: agent-kind writes refuse without a declared lineage.
-    os.environ["AGENT_NOTES_MODEL_LINEAGE"] = "glm"
+    os.environ["AGENT_NOTES_PROJECT"] = "test_project"
+    os.environ["REGISTA_KEY_PATH"] = os.devnull
+    os.environ["AGENT_NOTES_ACTOR_ID"] = "agent:test-agent"
 
 
 def _clear_regista_env():
     for key in (
-        "AGENT_NOTES_REGISTA_DSN",
+        "REGISTA_DSN",
         "AGENT_NOTES_REGISTA_WRITES",
-        "AGENT_NOTES_REGISTA_PROJECT",
-        "AGENT_NOTES_REGISTA_HMAC_KEY_PATH",
+        "AGENT_NOTES_PROJECT",
+        "REGISTA_KEY_PATH",
         "AGENT_NOTES_ACTOR_ID",
-        # NOT AGENT_NOTES_MODEL_LINEAGE: conftest's hermetic fixture sets a
-        # session-wide default (WI-062) and this helper pops from os.environ
-        # directly, so removing it here would leak into every later test.
     ):
         os.environ.pop(key, None)
+    # This helper predates the canonical v6 ambient identity.  Clearing the
+    # legacy regista settings must not leave the process unable to author the
+    # following native-path test.
+    os.environ["AGENT_NOTES_ACTOR_ID"] = "agent:worker"
 
 
 class TestRegistaWriteThrough:
     def test_file_amend_start_close_review_round_trip(
-        self, default_project, hmac_key_path, monkeypatch
+        self, default_project, v6_key_path, monkeypatch
     ):
         # Plan 010 WI-3/WI-5: canonical lifecycle. file(open) → amend → start →
         # close(submit_for_review→in_review) → adversarial_pass → accept(done) →
         # reopen(open). The agent cannot reach `done` alone (Invariant G); it
         # requires the cross-lineage review gate.
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
-        monkeypatch.setenv("AGENT_NOTES_PRINCIPAL_ID", "test@example.com")
-        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
 
-        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        reg = provision_v6_regista(v6_key_path)
         face = RegistaFace(reg)
         reset_face()
         set_face_for_test(face)
@@ -148,33 +137,37 @@ class TestRegistaWriteThrough:
             # A different-lineage reviewer does the adversarial pass.
             from agent_notes.core.actor import Actor
 
+            _set_truthful_producer(monkeypatch, model="kimi-k2.5")
             reviewer = Actor(
-                actor_id="reviewer-kimi",
+                actor_id="agent:reviewer",
                 actor_kind="agent",
                 role="agent",
-                model_lineage="kimi",
             )
             face.transition_breadcrumb(
                 reviewer,
                 regista_id,
                 "adversarial_pass",
-                payload={"review_note": "LGTM — cross-lineage pass"},
+                payload={
+                    "review_note": "LGTM — cross-lineage pass",
+                },
             )
             assert face.get(regista_id).current_state == "in_human_review"
 
             # Final accept (relaxed gate: any actor may accept after the pass,
             # but must differ from the adversarial-pass identity).
+            _set_truthful_producer(monkeypatch, model="claude-opus-4.6")
             accepter = Actor(
-                actor_id="accepter-opus",
+                actor_id="agent:accepter",
                 actor_kind="agent",
                 role="agent",
-                model_lineage="claude-opus",
             )
             face.transition_breadcrumb(
                 accepter,
                 regista_id,
                 "accept",
-                payload={"review_note": "accepted"},
+                payload={
+                    "review_note": "accepted",
+                },
             )
             done = face.get(regista_id)
             assert done.current_state == "done"
@@ -220,14 +213,13 @@ class TestRegistaWriteThrough:
             reset_face()
             reg.close()
 
-    def test_agent_close_cannot_reach_done_alone(self, default_project, hmac_key_path, monkeypatch):
+    def test_agent_close_cannot_reach_done_alone(self, default_project, v6_key_path, monkeypatch):
         # Plan 010 WI-5 / Invariant G: an agent's close leaves the item in
         # in_review, NOT done. Reaching done requires the review gate.
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
-        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
 
-        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        reg = provision_v6_regista(v6_key_path)
         face = RegistaFace(reg)
         reset_face()
         set_face_for_test(face)
@@ -248,7 +240,7 @@ class TestRegistaWriteThrough:
             reg.close()
 
     def test_refile_with_stale_local_projection_does_not_duplicate(
-        self, default_project, hmac_key_path, monkeypatch
+        self, default_project, v6_key_path, monkeypatch
     ):
         # Plan 015 regression: the duplication bug. A caller's create-vs-update
         # decision is made against the LOCAL projection; when that projection is
@@ -257,10 +249,9 @@ class TestRegistaWriteThrough:
         # The idempotency guard must find the existing item by normalized
         # source_identifier and amend it in place — leaving regista with ONE item.
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
-        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
 
-        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        reg = provision_v6_regista(v6_key_path)
         face = RegistaFace(reg)
         reset_face()
         set_face_for_test(face)
@@ -304,16 +295,15 @@ class TestRegistaWriteThrough:
             reg.close()
 
     def test_claim_release_uses_regista_claims_not_lifecycle(
-        self, default_project, hmac_key_path, monkeypatch
+        self, default_project, v6_key_path, monkeypatch
     ):
         # Plan 010 WI-2/WI-5: claim/release are regista claims (a lease axis),
         # NOT lifecycle transitions. `claimed` is no longer a lifecycle state —
         # the status stays `open`; the lease is recorded in work_item_leases.
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
-        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")  # WI-062
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
 
-        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        reg = provision_v6_regista(v6_key_path)
         face = RegistaFace(reg)
         reset_face()
         set_face_for_test(face)
@@ -331,7 +321,6 @@ class TestRegistaWriteThrough:
             claimed = WorkItemModel.claim_work_item(
                 project_id=default_project.id,
                 identifier="WI-REG-02",
-                actor_id="legacy-actor",
                 ttl_seconds=300,
             )
             # Lifecycle does NOT move to 'claimed' — it stays 'open'.
@@ -348,7 +337,6 @@ class TestRegistaWriteThrough:
             released = WorkItemModel.release_work_item(
                 project_id=default_project.id,
                 identifier="WI-REG-02",
-                actor_id="legacy-actor",
             )
             # Lifecycle still 'open' (release does not move state either).
             assert released["status"] == "open"
@@ -361,14 +349,13 @@ class TestRegistaWriteThrough:
             reset_face()
             reg.close()
 
-    def test_heartbeat_uses_regista_claim(self, default_project, hmac_key_path, monkeypatch):
+    def test_heartbeat_uses_regista_claim(self, default_project, v6_key_path, monkeypatch):
         # Plan 010 WI-2/WI-5: heartbeat extends the regista claim; the local
         # lease row is a projection mirror of the authoritative claim.
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
-        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")  # WI-062
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
 
-        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        reg = provision_v6_regista(v6_key_path)
         face = RegistaFace(reg)
         reset_face()
         set_face_for_test(face)
@@ -392,7 +379,6 @@ class TestRegistaWriteThrough:
             WorkItemModel.heartbeat_work_item(
                 project_id=default_project.id,
                 identifier="WI-REG-03",
-                actor_id="legacy-actor",
                 ttl_seconds=600,
             )
 
@@ -407,22 +393,17 @@ class TestRegistaWriteThrough:
             reg.close()
 
 
-class TestClaimLineage:
-    """WI-253: the three claim face methods must propagate actor_metadata
-    (which carries model_lineage) onto their claim events, mirroring every
-    other face method. Pre-fix the claim_acquired / claim_heartbeat /
-    claim_released events drop actor_metadata — so model_lineage is None and
-    the WI-248 live benefit is not realized in the CLI path.
-    """
+class TestClaimProducer:
+    """Claim events carry the process-level v6 producer identity."""
 
     def test_claim_heartbeat_release_propagate_model_lineage(
-        self, default_project, hmac_key_path, monkeypatch
+        self, default_project, v6_key_path, monkeypatch
     ):
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
-        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "longcat")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
+        _set_truthful_producer(monkeypatch, model="longcat-flash-1")
 
-        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        reg = provision_v6_regista(v6_key_path)
         face = RegistaFace(reg)
         reset_face()
         set_face_for_test(face)
@@ -437,81 +418,30 @@ class TestClaimLineage:
             )
             regista_id = wi["regista_work_item_id"]
 
-            # claim → claim_acquired event must carry model_lineage
             WorkItemModel.claim_work_item(default_project.id, "WI-REG-LINEAGE")
             events = face.history(regista_id)
             acquired = [e for e in events if e.transition == "claim_acquired"]
             assert len(acquired) == 1
-            assert acquired[0].actor_metadata is not None
-            assert acquired[0].actor_metadata.get("model_lineage") == "longcat"
+            assert (
+                json.loads(acquired[0].canonical_envelope)["producer"]["model_lineage"] == "longcat"
+            )
 
-            # heartbeat → claim_heartbeat event must carry model_lineage
             WorkItemModel.heartbeat_work_item(default_project.id, "WI-REG-LINEAGE")
             events = face.history(regista_id)
             heartbeat = [e for e in events if e.transition == "claim_heartbeat"]
             assert len(heartbeat) == 1
-            assert heartbeat[0].actor_metadata is not None
-            assert heartbeat[0].actor_metadata.get("model_lineage") == "longcat"
+            assert (
+                json.loads(heartbeat[0].canonical_envelope)["producer"]["model_lineage"]
+                == "longcat"
+            )
 
-            # release → claim_released event must carry model_lineage
             WorkItemModel.release_work_item(default_project.id, "WI-REG-LINEAGE")
             events = face.history(regista_id)
             released = [e for e in events if e.transition == "claim_released"]
             assert len(released) == 1
-            assert released[0].actor_metadata is not None
-            assert released[0].actor_metadata.get("model_lineage") == "longcat"
-        finally:
-            reset_face()
-            reg.close()
-
-    def test_per_invocation_lineage_override_beats_env_on_regista_path(
-        self, default_project, hmac_key_path, monkeypatch
-    ):
-        """WI-068: ``--model-lineage`` takes effect on the REGISTA lease path.
-
-        The env path is pinned above; this pins the per-invocation override —
-        with a lineage set in the env, an explicit ``model_lineage`` must win
-        on claim / heartbeat / release, so the flag added in WI-068 is not a
-        native-path-only courtesy. The claim *identity* stays the env-resolved
-        actor (Plan 010 WI-2/WI-5) — only the declaration is overridable.
-        """
-        monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
-        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")
-
-        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
-        face = RegistaFace(reg)
-        reset_face()
-        set_face_for_test(face)
-
-        try:
-            wi = WorkItemModel.file_work_item(
-                project_id=default_project.id,
-                identifier="WI-REG-LIN-OVR",
-                title="Lineage override test",
-                status="open",
-                embedding=_vec768(),
+            assert (
+                json.loads(released[0].canonical_envelope)["producer"]["model_lineage"] == "longcat"
             )
-            regista_id = wi["regista_work_item_id"]
-
-            WorkItemModel.claim_work_item(
-                default_project.id, "WI-REG-LIN-OVR", model_lineage="kimi"
-            )
-            WorkItemModel.heartbeat_work_item(
-                default_project.id, "WI-REG-LIN-OVR", model_lineage="kimi"
-            )
-            WorkItemModel.release_work_item(
-                default_project.id, "WI-REG-LIN-OVR", model_lineage="kimi"
-            )
-
-            events = face.history(regista_id)
-            for transition in ("claim_acquired", "claim_heartbeat", "claim_released"):
-                matching = [e for e in events if e.transition == transition]
-                assert len(matching) == 1, transition
-                assert matching[0].actor_metadata is not None
-                assert matching[0].actor_metadata.get("model_lineage") == "kimi", transition
-                # Identity is still the env-resolved actor, not re-declared.
-                assert matching[0].actor_id == "test-agent"
         finally:
             reset_face()
             reg.close()
@@ -519,10 +449,9 @@ class TestClaimLineage:
 
 class TestMigrateToRegista:
     def test_migration_creates_regista_items_and_records_id(
-        self, default_project, hmac_key_path, monkeypatch
+        self, default_project, v6_key_path, monkeypatch
     ):
         monkeypatch.delenv("AGENT_NOTES_REGISTA_WRITES", raising=False)
-        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")  # WI-062
         reset_face()
 
         legacy = WorkItemModel.file_work_item(
@@ -535,18 +464,17 @@ class TestMigrateToRegista:
         )
         assert legacy.get("regista_work_item_id") is None
 
-        monkeypatch.setenv("AGENT_NOTES_REGISTA_DSN", "postgresql://unused")
-        monkeypatch.setenv("AGENT_NOTES_REGISTA_PROJECT", "test_project")
-        monkeypatch.setenv("AGENT_NOTES_REGISTA_HMAC_KEY_PATH", hmac_key_path)
+        monkeypatch.setenv("REGISTA_DSN", "postgresql://unused")
+        monkeypatch.setenv("AGENT_NOTES_PROJECT", "test_project")
+        monkeypatch.setenv("REGISTA_KEY_PATH", v6_key_path)
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
-        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")  # WI-062
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
 
         import regista as regista_module
 
         from agent_notes.scripts import migrate_to_regista
 
-        reg = InMemoryRegista(project="test_project", hmac_key_path=hmac_key_path)
+        reg = provision_v6_regista(v6_key_path, project="test_project")
 
         class _PatchedRegista:
             def __init__(self, dsn, project, key_path, *, require_ssl=False):
@@ -583,11 +511,8 @@ class TestMigrateToRegista:
             reset_face()
             _clear_regista_env()
 
-    def test_dry_run_does_not_create_regista_items(
-        self, default_project, hmac_key_path, monkeypatch
-    ):
+    def test_dry_run_does_not_create_regista_items(self, default_project, v6_key_path, monkeypatch):
         monkeypatch.delenv("AGENT_NOTES_REGISTA_WRITES", raising=False)
-        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")  # WI-062
         reset_face()
 
         WorkItemModel.file_work_item(
@@ -598,10 +523,9 @@ class TestMigrateToRegista:
             embedding=_vec768(),
         )
 
-        monkeypatch.setenv("AGENT_NOTES_REGISTA_DSN", "postgresql://unused")
-        monkeypatch.setenv("AGENT_NOTES_REGISTA_HMAC_KEY_PATH", hmac_key_path)
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
-        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")  # WI-062
+        monkeypatch.setenv("REGISTA_DSN", "postgresql://unused")
+        monkeypatch.setenv("REGISTA_KEY_PATH", v6_key_path)
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
 
         from agent_notes.scripts import migrate_to_regista
 
@@ -625,8 +549,7 @@ class TestLegacyPathUnchanged:
         _clear_regista_env()
         reset_face()
         monkeypatch.delenv("AGENT_NOTES_REGISTA_WRITES", raising=False)
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
-        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")  # WI-062
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
 
         wi = WorkItemModel.file_work_item(
             project_id=default_project.id,
@@ -645,3 +568,43 @@ class TestLegacyPathUnchanged:
 
         _clear_regista_env()
         reset_face()
+
+
+class TestNoImplicitProvisioning:
+    """The face never provisions as a side effect of a write.
+
+    Workflow registration and v6 epoch opening are provisioning operations
+    owned by the operator (``provision_v6_regista`` in tests, the bootstrap
+    in production). With ``ensure_workflow`` gone there is no auto-register
+    seam left at all: an unprovisioned face refuses writes with regista's
+    own admission errors and provably mutates nothing.
+    """
+
+    def test_face_does_not_register_the_workflow(self, monkeypatch):
+        from regista import RegistaError
+        from regista.testing import InMemoryRegista
+
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
+        reg = InMemoryRegista(project="test_project")
+        face = RegistaFace(reg)
+        actor = Actor(actor_id="agent:test-agent", actor_kind="agent")
+
+        with pytest.raises(RegistaError, match="not registered"):
+            face.create_breadcrumb(actor, title="unprovisioned")
+        # Nothing was implicitly registered on the refused path.
+        assert reg._workflows == {}
+
+    def test_face_does_not_open_the_v6_epoch(self, monkeypatch):
+        from regista import RegistaError, canonical_workflow_yaml
+        from regista.testing import InMemoryRegista
+
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
+        reg = InMemoryRegista(project="test_project")
+        reg.register_workflow(canonical_workflow_yaml())  # provisioning, done by the operator
+        face = RegistaFace(reg)
+        actor = Actor(actor_id="agent:test-agent", actor_kind="agent")
+
+        with pytest.raises(RegistaError, match="epoch"):
+            face.create_breadcrumb(actor, title="no epoch")
+        # No genesis event was implicitly written.
+        assert list(reg.read_events(limit=10)) == []

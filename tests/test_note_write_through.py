@@ -7,18 +7,16 @@ becoming a projection. The pgvector index rebuilds from the entities.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 from psycopg.rows import dict_row
-from regista.testing import InMemoryRegista
 
 from agent_notes.core import db as coredb
 from agent_notes.core.face_factory import reset_face, set_face_for_test
 from agent_notes.core.memory_model import add_memory, delete_memory, update_memory
 from agent_notes.core.regista_face import RegistaFace
-from tests.conftest import ephemeral_db  # noqa: F401
+from tests.conftest import ephemeral_db, provision_v6_regista  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures("ephemeral_db")
 
@@ -35,35 +33,20 @@ def default_project():
 
 
 @pytest.fixture
-def hmac_key_path(tmp_path: Path):
-    path = tmp_path / "keys.json"
-    path.write_text(
-        json.dumps(
-            {
-                "keys": [
-                    {
-                        "key_id": "test-key-001",
-                        "secret": "dGhpcyBpcyBhIHRlc3Qgc2VjcmV0IGtleSBmb3Igc3Vic3RyYXRl",
-                        "status": "active",
-                    }
-                ]
-            }
-        )
-    )
-    return str(path)
+def v6_key_path(tmp_path: Path):
+    # provision_v6_regista writes the real v6 keyset here (conftest also
+    # exports this fixture; kept local so the module is self-describing).
+    return str(tmp_path / "v6_keys.json")
 
 
 class TestNoteWriteThrough:
-    def test_filing_memory_produces_signed_entity(
-        self, default_project, hmac_key_path, monkeypatch
-    ):
+    def test_filing_memory_produces_signed_entity(self, default_project, v6_key_path, monkeypatch):
         """AC: filing a memory produces a signed entity in the store readable
         without agent-notes' code."""
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
-        monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
 
-        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        reg = provision_v6_regista(v6_key_path)
         face = RegistaFace(reg)
         reset_face()
         set_face_for_test(face)
@@ -100,12 +83,12 @@ class TestNoteWriteThrough:
             reset_face()
             reg.close()
 
-    def test_local_projection_mirrors_entity(self, default_project, hmac_key_path, monkeypatch):
+    def test_local_projection_mirrors_entity(self, default_project, v6_key_path, monkeypatch):
         """The local memories table is a projection of the signed entity."""
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
 
-        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        reg = provision_v6_regista(v6_key_path)
         face = RegistaFace(reg)
         reset_face()
         set_face_for_test(face)
@@ -139,13 +122,13 @@ class TestNoteWriteThrough:
             reg.close()
 
     def test_update_memory_appends_note_updated_event(
-        self, default_project, hmac_key_path, monkeypatch
+        self, default_project, v6_key_path, monkeypatch
     ):
         """Updating a memory appends a note_updated event to the entity log."""
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
 
-        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        reg = provision_v6_regista(v6_key_path)
         face = RegistaFace(reg)
         reset_face()
         set_face_for_test(face)
@@ -180,13 +163,13 @@ class TestNoteWriteThrough:
             reg.close()
 
     def test_delete_memory_appends_note_deleted_event(
-        self, default_project, hmac_key_path, monkeypatch
+        self, default_project, v6_key_path, monkeypatch
     ):
         """Deleting a memory appends a note_deleted event and flips active=false."""
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
 
-        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        reg = provision_v6_regista(v6_key_path)
         face = RegistaFace(reg)
         reset_face()
         set_face_for_test(face)
@@ -228,13 +211,13 @@ class TestNoteWriteThrough:
             reg.close()
 
     def test_supersede_appends_note_superseded_event(
-        self, default_project, hmac_key_path, monkeypatch
+        self, default_project, v6_key_path, monkeypatch
     ):
         """Filing a memory with the same name supersedes the old one."""
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
 
-        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        reg = provision_v6_regista(v6_key_path)
         face = RegistaFace(reg)
         reset_face()
         set_face_for_test(face)
@@ -272,12 +255,12 @@ class TestNoteWriteThrough:
             reset_face()
             reg.close()
 
-    def test_reflection_writes_as_note_entity(self, default_project, hmac_key_path, monkeypatch):
+    def test_reflection_writes_as_note_entity(self, default_project, v6_key_path, monkeypatch):
         """A reflection (memory_type='reflection') writes as a note entity."""
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
 
-        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        reg = provision_v6_regista(v6_key_path)
         face = RegistaFace(reg)
         reset_face()
         set_face_for_test(face)
@@ -301,12 +284,12 @@ class TestNoteWriteThrough:
             reset_face()
             reg.close()
 
-    def test_pgvector_rebuilds_from_entities(self, default_project, hmac_key_path, monkeypatch):
+    def test_pgvector_rebuilds_from_entities(self, default_project, v6_key_path, monkeypatch):
         """AC: the pgvector index rebuilds from the entities."""
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
 
-        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        reg = provision_v6_regista(v6_key_path)
         face = RegistaFace(reg)
         reset_face()
         set_face_for_test(face)
@@ -359,7 +342,7 @@ class TestLegacyPathUnchanged:
     def test_legacy_memory_path_still_works(self, default_project, monkeypatch):
         """Without the regista face, memories write locally (legacy path)."""
         monkeypatch.delenv("AGENT_NOTES_REGISTA_WRITES", raising=False)
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
         reset_face()
 
         try:
@@ -381,15 +364,13 @@ class TestMemoryTypeRoundTrip:
     """The fine-grained local memory_type round-trips through the note entity,
     not just the coarse note_subtype (review fix #2)."""
 
-    def test_fine_memory_type_stored_and_restored(
-        self, default_project, hmac_key_path, monkeypatch
-    ):
+    def test_fine_memory_type_stored_and_restored(self, default_project, v6_key_path, monkeypatch):
         """A fine memory_type ('decision') is stored in the payload alongside the
         coarse subtype and restored verbatim on rebuild (not collapsed)."""
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
 
-        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        reg = provision_v6_regista(v6_key_path)
         face = RegistaFace(reg)
         reset_face()
         set_face_for_test(face)
@@ -436,12 +417,12 @@ class TestMemoryTypeRoundTrip:
             reset_face()
             reg.close()
 
-    def test_reflection_subtype_round_trips(self, default_project, hmac_key_path, monkeypatch):
+    def test_reflection_subtype_round_trips(self, default_project, v6_key_path, monkeypatch):
         """A reflection stays 'reflection' across the round-trip."""
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
 
-        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        reg = provision_v6_regista(v6_key_path)
         face = RegistaFace(reg)
         reset_face()
         set_face_for_test(face)
@@ -488,11 +469,11 @@ class TestWikilinksOnRegistaPath:
     """The regista write path auto-creates [[wikilink]] relates_to links,
     matching the legacy local-only path (review fix #3)."""
 
-    def test_wikilinks_created_on_regista_path(self, default_project, hmac_key_path, monkeypatch):
+    def test_wikilinks_created_on_regista_path(self, default_project, v6_key_path, monkeypatch):
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
 
-        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        reg = provision_v6_regista(v6_key_path)
         face = RegistaFace(reg)
         reset_face()
         set_face_for_test(face)

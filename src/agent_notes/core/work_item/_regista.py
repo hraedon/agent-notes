@@ -36,8 +36,6 @@ def file_work_item(
     external_refs: dict | None,
     diagnostic_keys: dict | None,
     embedding: Any | None,
-    actor_id: str | None = None,
-    model_lineage: str | None = None,
 ) -> dict:
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
@@ -51,9 +49,7 @@ def file_work_item(
             identifier = cur.fetchone()[0]
 
     effective_title = title or identifier
-    actor = face_factory.actor_with_overrides(
-        actor_id, model_lineage, operation="work-item file"
-    )
+    actor = face_factory.write_actor()
     norm_sid = normalize_source_identifier(identifier)
 
     # Idempotency guard (Plan 015): regista is the SoT, but the create-vs-update
@@ -147,8 +143,6 @@ def update_work_item(
     external_refs: dict | None,
     diagnostic_keys: dict | None,
     embedding: Any | None,
-    actor_id: str | None = None,
-    model_lineage: str | None = None,
 ) -> dict:
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
@@ -166,9 +160,7 @@ def update_work_item(
         old_body = kernel.get_blob(conn, old["body_hash"]) or ""
         wid = old["regista_work_item_id"]
 
-    actor = face_factory.actor_with_overrides(
-        actor_id, model_lineage, operation="work-item update"
-    )
+    actor = face_factory.write_actor()
     custom_fields: dict[str, Any] = {}
     if title is not None:
         custom_fields["title"] = title or identifier
@@ -238,8 +230,6 @@ def close_work_item(
     face: Any,
     project_id: int,
     identifier: str,
-    actor_id: str | None = None,
-    model_lineage: str | None = None,
 ) -> dict:
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
@@ -251,9 +241,7 @@ def close_work_item(
         wid = old["regista_work_item_id"]
         state = old["status"]
 
-    actor = face_factory.actor_with_overrides(
-        actor_id, model_lineage, operation="work-item close"
-    )
+    actor = face_factory.write_actor()
     # Plan 010 WI-3: close → submit_for_review → in_review. The agent cannot
     # reach `done` unilaterally (Invariant G); work awaits a cross-lineage
     # review pass + accept. `closed` (legacy terminal) is treated as `done`.
@@ -311,10 +299,17 @@ def review_transition(
     identifier: str,
     transition_name: str,
     review_note: str,
-    actor_id: str | None,
-    model_lineage: str | None,
     same_lineage_acknowledged: bool,
 ) -> dict:
+    """Drive a review-gate transition on the regista path.
+
+    The reviewer is the running producer by design: the actor is the process's
+    configured canonical principal and the signed v6 envelope producer carries
+    the reviewer's model lineage. There is no per-call reviewer identity and no
+    payload lineage copy. A process whose producer lacks a model or canonical
+    lineage is refused here, before any write, with an actionable configuration
+    error.
+    """
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         old = _common.load_work_item_row(conn, project_id, identifier)
@@ -324,12 +319,10 @@ def review_transition(
             )
         wid = old["regista_work_item_id"]
 
-    actor = face_factory.actor_with_overrides(
-        actor_id,
-        model_lineage,
-        clear_principal=True,
-        operation=f"work-item review {transition_name}",
-    )
+    actor = face_factory.write_actor()
+    from agent_notes.core.producer import require_reviewer_model_lineage
+
+    require_reviewer_model_lineage()
     payload: dict[str, Any] = {"review_note": review_note}
     if same_lineage_acknowledged:
         payload["same_lineage_acknowledged"] = True
@@ -373,7 +366,6 @@ def claim_work_item(
     project_id: int,
     identifier: str,
     ttl_seconds: int,
-    model_lineage: str | None = None,
 ) -> dict:
     with _conn() as conn:
         _common.resolve_workspace_for_project(conn, project_id)
@@ -390,9 +382,9 @@ def claim_work_item(
     # The claim identity is the env-resolved actor: the caller-supplied
     # actor_id is a legacy native-path parameter and deliberately does NOT
     # re-identify a regista claim (Plan 010 WI-2/WI-5; pinned by
-    # test_claim_release_uses_regista_claims_not_lifecycle). Only the lineage
-    # declaration is threaded (WI-068), so --model-lineage works here too.
-    actor = face_factory.actor_with_overrides(None, model_lineage, operation="work-item claim")
+    # test_claim_release_uses_regista_claims_not_lifecycle). The ambient actor
+    # is the only identity accepted on the v6 path.
+    actor = face_factory.write_actor()
     # Plan 010 WI-2: lease is a regista claim, NOT a lifecycle state.
     # acquire_claim is the authoritative lease; the lifecycle does not move.
     claim = face.acquire_claim(actor, wid, ttl_seconds=ttl_seconds)
@@ -437,7 +429,6 @@ def release_work_item(
     face: Any,
     project_id: int,
     identifier: str,
-    model_lineage: str | None = None,
 ) -> dict:
     with _conn() as conn:
         _common.resolve_workspace_for_project(conn, project_id)
@@ -450,7 +441,7 @@ def release_work_item(
         entity_id = old["entity_id"]
 
     # Env-resolved claim identity, lineage-only threading — see claim above.
-    actor = face_factory.actor_with_overrides(None, model_lineage, operation="work-item release")
+    actor = face_factory.write_actor()
     # Plan 010 WI-2: release the regista claim; the lifecycle is untouched.
     face.release_claim(actor, wid)
     regista_work_item = face.get(wid)
@@ -485,7 +476,6 @@ def heartbeat_work_item(
     project_id: int,
     identifier: str,
     ttl_seconds: int,
-    model_lineage: str | None = None,
 ) -> dict:
     with _conn() as conn:
         old = _common.load_work_item_row(conn, project_id, identifier)
@@ -493,9 +483,7 @@ def heartbeat_work_item(
         wid = old["regista_work_item_id"]
 
     # Env-resolved claim identity, lineage-only threading — see claim above.
-    actor = face_factory.actor_with_overrides(
-        None, model_lineage, operation="work-item heartbeat"
-    )
+    actor = face_factory.write_actor()
     # Plan 010 WI-2: authoritative liveness is the regista claim heartbeat.
     claim = face.heartbeat_claim(actor, wid, ttl_seconds=ttl_seconds)
     expires_at = getattr(claim, "expires_at", None)

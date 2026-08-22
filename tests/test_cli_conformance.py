@@ -6,11 +6,10 @@ dependency. The published wheel exposes ``agent_suite_conformance``; the legacy
 These are agent-notes' component-side fixtures against its own CLI.
 
 Every case is hermetic: it strips the store configuration
-(``AGENT_NOTES_DSN`` / ``AGENT_NOTES_REGISTA_DSN`` / ``REGISTA_DSN``) so results
-depend on the contract, not on whether the test Postgres is up. agent-notes
-keeps its decision-52 exit-code taxonomy (2/3/4); the kit checks the contract
-invariants (stream purity, envelope shape, no tracebacks, usage=exit 2), which
-those codes satisfy.
+(``AGENT_NOTES_DSN`` / ``REGISTA_DSN``) so results depend on the contract, not
+on whether the test Postgres is up. agent-notes keeps its decision-52 exit-code
+taxonomy (2/3/4); the kit checks the contract invariants (stream purity,
+envelope shape, no tracebacks, usage=exit 2), which those codes satisfy.
 """
 
 from __future__ import annotations
@@ -38,7 +37,7 @@ _CLI = (sys.executable, "-m", "agent_notes.cli")
 
 # Strip any store configuration inherited from the environment (including the
 # CI testcontainer) so the cases below never depend on a reachable database.
-_HERMETIC_UNSET = ("AGENT_NOTES_DSN", "AGENT_NOTES_REGISTA_DSN", "REGISTA_DSN", "REGISTA_PROJECT")
+_HERMETIC_UNSET = ("AGENT_NOTES_DSN", "REGISTA_DSN", "AGENT_NOTES_PROJECT")
 
 
 def _assert_cases_declared(

@@ -18,7 +18,7 @@ def test_component_owned_plugin_bundles_exact_canonical_skills() -> None:
     payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
 
     assert payload["name"] == "agent-notes"
-    assert payload["version"] == "1.0.0"
+    assert payload["version"] == "1.1.0"
     assert payload["skills"] == "./skills/"
     assert "hooks" not in payload  # Codex discovers the default hooks/hooks.json
 

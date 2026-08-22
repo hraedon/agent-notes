@@ -51,58 +51,64 @@ One Postgres database (`agent_notes`), one Python package (`agent_notes`), one `
 - **`links` table accepts dangling rows**; filter at query time. `links_audit` reports orphans (Phase 6.3).
 - **DB is the only source of truth** (decision 39, Plan 003). Markdown projection was removed in Phase 8a. No files are written to disk by the servers.
 
-## Actor identity and declared lineage
+## Canonical v6 actor and producer identity
 
-Every work-item write is an *agent-authored event*. regista's cross-lineage
-review gate (`derive_authors` in `regista/_review_validators.py`) marks any
-event with `actor_kind="agent"` and no `model_lineage` as
-`agent_author_undeclared` — and **history cannot be cured**: declaring a lineage
-later does not fix an event already written, so one such event makes the item
-un-passable by any agent reviewer forever. WI-062.
+Every authored write resolves one canonical principal before it reaches
+regista. The precedence is `AGENT_NOTES_ACTOR_ID` over `REGISTA_PRINCIPAL_ID`,
+with both values using the normal process-env / per-user `suite.env` / system
+`suite.env` layering. Principal IDs must use regista's canonical grammar, for
+example `agent:worker`, `human:operator`, or `service:hooks`; missing or
+invalid identity fails closed. There are no per-command actor or model-lineage
+overrides.
 
-So the write path **fails closed** (`core/actor.py::require_declared_lineage`,
-enforced at `core/face_factory.py::actor_with_overrides` and, for the degrade
-path, `assert_declared_lineage`): filing/updating/closing/reviewing/claiming a
-work item without a resolvable lineage raises `UndeclaredLineageError` and the
-CLI renders it as an `UNDECLARED_LINEAGE` envelope (exit 3). Nothing is written.
+The signed v6 `producer` member belongs to regista and is resolved from the
+process environment: `REGISTA_PRODUCER_HARNESS`,
+`REGISTA_PRODUCER_HARNESS_VERSION`, and optional
+`REGISTA_PRODUCER_MODEL` / `REGISTA_PRODUCER_MODEL_LINEAGE`. Configure these in
+the operator's suite environment. **The reviewer of a verdict IS the running
+producer** — there is one identity source: `core/producer.py`
+(`require_reviewer_model_lineage`) validates the model and canonical lineage
+that regista signs in the envelope. agent-notes sends no reviewer-lineage copy
+in the payload; v6 rejects the obsolete `reviewer_claims` vehicle. A producer
+that declares no canonical model lineage can author ordinary writes but is
+refused — `ProducerConfigurationError`, before any write — from casting a
+review verdict; run an independently configured process (different model
+lineage, or a human) for an independent review.
+Optional signed action-delegation evidence is loaded
+from the configured `AGENT_NOTES_ACTION_DELEGATION_PATHS` files.
 
-Identity resolves through the standard suite layering —
-`process env > per-user suite.env > system suite.env > default` — for
-`AGENT_NOTES_ACTOR_ID`, `AGENT_NOTES_MODEL_LINEAGE`,
-`AGENT_NOTES_PRINCIPAL_KIND`, and `AGENT_NOTES_PRINCIPAL_DISPLAY_NAME`. Set the
-lineage once per host in `~/.config/agent-suite/suite.env`, or pass
-`--model-lineage` per command. Declare the model *family* (`claude-opus`,
-`gpt-sol`, `glm`, `kimi`), not the exact build — the gate compares
-families.
+The write path resolves the ambient actor through `core/actor.py::resolve_actor`
+and passes it through `core/regista_face.py`. The CLI renders configuration
+failures as a named error envelope; nothing is written. Memories and
+reflections use the same canonical actor, but remain non-workflow note entities
+and do not participate in the work-item review gate.
+
+**Canonical regista configuration:** `REGISTA_DSN`, `REGISTA_KEY_PATH`,
+`REGISTA_REQUIRE_SSL`, and `AGENT_NOTES_PROJECT` are the only accepted values
+for the regista DSN, key-set manifest, SSL requirement, and project. The
+`regista` block in `config.json` uses `dsn`, `key_path`, `require_ssl`, and
+`writes_enabled`. `AGENT_NOTES_REGISTA_WRITES` remains the tool-specific write
+gate. Configuration aliases are not supported; unknown names are ignored.
 
 **Checking the wiring: `agent-notes invariants probe`** (WI-071). This is the
 read-only probe the suite genesis gate consumes
 (`agent_suite.genesis_gate`, required check
 `agent_notes.session_identity_resolvable`). It answers one question about *this*
 environment — "would a work-item write issued right now carry a resolvable,
-valid identity?" — by resolving through `face_factory.actor_with_overrides`,
-the same entry point every authored write uses, and reporting what that call
-did. It writes nothing and opens no connection.
+valid identity?" — by resolving through `face_factory.write_actor`, the same
+entry point every authored write uses, and reporting what that call did. It
+writes nothing and opens no connection.
 
 ```bash
 agent-notes invariants probe          # human-readable
 agent-notes invariants probe --json   # the gate contract: one JSON doc, exit 0/1, (exit==0)==ok
 ```
 
-Failure modes are named in each check's `reason`: `lineage_undeclared`,
-`lineage_not_in_registry`, `lineage_registry_unavailable`,
-`lineage_registry_error`, `no_actor_resolvable`, `unexpected_actor_kind`,
-`identity_resolution_error`, `probe_error`. Two deliberate strictnesses, both
-argued in `core/invariant_probe.py`'s docstring: an **unavailable** regista
-lineage registry is a *failure*, not a degradation (an unproven claim must not
-report `pass` on a gate-feeding probe — and the gate already requires
-`regista.closed_lineage_registry`, so no honest gate opening is blocked); and a
-*whitespace-only* `AGENT_NOTES_ACTOR_ID` fails even though the write path
-tolerates it (an *empty* value is not the same thing — it falls through to the
-`agent-notes` default and passes). The probe takes no
-`--actor-id`/`--model-lineage` — its subject is the *ambient* session identity,
-so to test a different declaration set the env var the write path actually
-reads.
+Failure modes are named in each check's `reason`: `resolved`,
+`identity_not_configured`, `identity_invalid`, and `probe_error`. The probe
+takes no identity flags — its subject is the ambient session identity, so to
+test a different configuration set the suite environment the write path
+actually reads.
 
 Two deliberate exemptions: `actor_kind="system"` actors (the migration actor)
 carry no model and are never counted by the gate, and note-shaped entities

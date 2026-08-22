@@ -82,35 +82,30 @@ _CANDIDATE_HARNESS_TARGETS = ("codex",)
 _PRIVATE_HARNESS_TARGETS = ("hermes",)
 _HARNESS_TARGETS = _STABLE_HARNESS_TARGETS + _CANDIDATE_HARNESS_TARGETS + _PRIVATE_HARNESS_TARGETS
 
-# Canonical suite env vars to propagate, each with its legacy alias (Plan 017
-# WI-1.1). The canonical name is preferred (checked first) and is what gets
-# written into the harness config so the resolver reads it without a
-# deprecation warning. The legacy ``AGENT_NOTES_REGISTA_*`` alias is retained
-# as a deprecated fallback for one release; it is read only when the canonical
-# var is unset.
-_SUITE_ENV_VARS: list[tuple[str, str]] = [
-    ("REGISTA_DSN", "AGENT_NOTES_REGISTA_DSN"),
-    ("REGISTA_KEY_PATH", "AGENT_NOTES_REGISTA_HMAC_KEY_PATH"),
-    ("REGISTA_REQUIRE_SSL", "AGENT_NOTES_REGISTA_REQUIRE_SSL"),
+# Canonical suite env vars to propagate (Plan 017 WI-1.1).
+_SUITE_ENV_VARS: list[str] = [
+    "REGISTA_DSN",
+    "REGISTA_KEY_PATH",
+    "REGISTA_REQUIRE_SSL",
 ]
 # Tool-specific vars (not suite-shared) — keep their AGENT_NOTES_* names.
 _TOOL_ENV_VARS: list[str] = [
     "AGENT_NOTES_DSN",
     "AGENT_NOTES_REGISTA_WRITES",
-    "AGENT_NOTES_REGISTA_PROJECT",
+    "AGENT_NOTES_PROJECT",
 ]
-_PRINCIPAL_ENV = "AGENT_NOTES_PRINCIPAL_ID"
+_PRINCIPAL_ENV = "REGISTA_PRINCIPAL_ID"
 
 # opencode config-file field map: env-var name -> (section, key) where section
 # is "regista" or None (top-level). Boolean fields are coerced from the env
 # string so the config-file value is a real bool, not "1".
 _OPENCODE_FIELD_MAP: dict[str, tuple[str | None, str, bool]] = {
     "REGISTA_DSN": ("regista", "dsn", False),
-    "REGISTA_KEY_PATH": ("regista", "hmac_key_path", False),
+    "REGISTA_KEY_PATH": ("regista", "key_path", False),
     "REGISTA_REQUIRE_SSL": ("regista", "require_ssl", True),
     "AGENT_NOTES_REGISTA_WRITES": ("regista", "writes_enabled", True),
     "AGENT_NOTES_DSN": (None, "dsn", False),
-    # AGENT_NOTES_REGISTA_PROJECT has no config-file field (env-only).
+    # AGENT_NOTES_PROJECT has no config-file field (env-only).
 }
 
 _BOOL_TRUTHY = {"1", "true", "yes"}
@@ -571,16 +566,15 @@ def _unwire_codex_hooks(
 def _resolve_harness_env(user: str | None) -> dict[str, str]:
     """Build the ordered env-var -> value map to propagate into the harness.
 
-    Suite vars resolve canonical-first, legacy-alias fallback (the value is
-    written under the canonical name so the resolver reads it warning-free).
-    Tool-specific vars are taken verbatim. ``--user`` overrides the principal.
-    Empty values are dropped (an unset var is not propagated).
+    Canonical suite vars and tool-specific vars are taken verbatim. ``--user``
+    overrides the principal. Empty values are dropped (an unset var is not
+    propagated).
     """
     env: dict[str, str] = {}
-    for canonical, legacy in _SUITE_ENV_VARS:
-        val = os.environ.get(canonical) or os.environ.get(legacy)
+    for name in _SUITE_ENV_VARS:
+        val = os.environ.get(name)
         if val:
-            env[canonical] = val
+            env[name] = val
     for name in _TOOL_ENV_VARS:
         val = os.environ.get(name)
         if val:
@@ -1119,8 +1113,8 @@ def _install_harness_one(
 
     if user and harness == "opencode":
         warns.append(
-            "--user has no opencode config-file field yet (principal_id resolves "
-            "from git config); principal overlay skipped for opencode"
+            "--user has no opencode config-file field yet (canonical actor resolves "
+            "from suite.env); actor overlay skipped for opencode"
         )
 
     # --- config + env + plugin ---
@@ -1601,7 +1595,7 @@ def register_harness_parser(sub: argparse._SubParsersAction) -> None:
         help="Print planned actions; change nothing (exit 2)",
     )
     p.add_argument("--uninstall", action="store_true", help="Reverse a prior install-harness")
-    p.add_argument("--user", default=None, help="Per-user principal_id overlay")
+    p.add_argument("--user", default=None, help="Per-user canonical actor overlay")
     p.add_argument("--json", action="store_true", help="Emit JSON (always on for --dry-run)")
     # Hidden test flags (mirrors install-skills).
     p.add_argument("--source", default=None, help=argparse.SUPPRESS)

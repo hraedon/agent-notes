@@ -18,7 +18,8 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from regista.testing import InMemoryRegista
+from regista import canonical_workflow_yaml
+from regista.testing import make_v6_keyset, open_v6_epoch
 
 from agent_notes.core.actor import Actor
 from agent_notes.core.envelope import LocalKeySigner, verify_envelope
@@ -32,6 +33,7 @@ from agent_notes.core.outbox import (
     read_all,
 )
 from agent_notes.core.reconcile import reconcile
+from tests.conftest import provision_v6_regista, shape_valid_delegation
 
 _PROJECT = "ac_test"
 
@@ -51,14 +53,14 @@ def signer(tmp_path: Path) -> LocalKeySigner:
 
 @pytest.fixture
 def actor() -> Actor:
-    return Actor(actor_id="ac-test-agent", display_name="AC Test")
+    return Actor(actor_id="agent:ac-test-agent", actor_kind="agent", display_name="AC Test")
 
 
 @pytest.fixture
-def face() -> "RegistaFace":  # type: ignore[name-defined]  # noqa: F821
+def face(tmp_path: Path) -> "RegistaFace":  # type: ignore[name-defined]  # noqa: F821
     from agent_notes.core.regista_face import RegistaFace
 
-    return RegistaFace(InMemoryRegista())
+    return RegistaFace(provision_v6_regista(tmp_path / "v6_keys.json", project=_PROJECT))
 
 
 def _actor_dict(actor: Actor) -> dict:
@@ -66,7 +68,7 @@ def _actor_dict(actor: Actor) -> dict:
         "actor_id": actor.actor_id,
         "actor_kind": actor.actor_kind,
         "display_name": actor.display_name,
-        "on_behalf_of": actor.on_behalf_of,
+        "action_delegation_credentials": list(actor.action_delegation_credentials),
         "role": actor.role,
     }
 
@@ -505,16 +507,16 @@ class TestPositiveReconcile:
         assert face.get(wid).current_state == "done"
         assert count_ops(_PROJECT) == 0
 
-    def test_transition_replay_preserves_event_id_and_model_lineage(
+    def test_transition_replay_preserves_event_id_and_producer(
         self,
         outbox_env: Path,
         signer: LocalKeySigner,
         face,
     ) -> None:
         reviewer = Actor(
-            actor_id="reviewer",
+            actor_id="agent:reviewer",
+            actor_kind="agent",
             display_name="Reviewer",
-            model_lineage="claude-opus",
         )
         wid, _ = face.create_breadcrumb(reviewer, title="Transition target")
         event_id = uuid.uuid4()
@@ -534,7 +536,7 @@ class TestPositiveReconcile:
 
         queued = verify_envelope(read_all(_PROJECT)[0].envelope, signer.public_key())
         assert queued["args"]["event_id"] == str(event_id)
-        assert queued["args"]["actor"]["model_lineage"] == "claude-opus"
+        assert "model_lineage" not in queued["args"]["actor"]
 
         report = reconcile(_PROJECT, face=face, signer=signer)
         assert report.replayed == 1
@@ -542,7 +544,7 @@ class TestPositiveReconcile:
         assert len(events) == 1
         assert events[0].event_id == event_id
         assert events[0].payload["review_artifact_digest"] == "sha256:test"
-        assert events[0].actor_metadata["model_lineage"] == "claude-opus"
+        assert events[0].canonical_envelope is not None
 
 
 class TestRegistaReconciliationSurface:
@@ -744,6 +746,68 @@ class TestRegistaReconciliationSurface:
         assert report.conflict_details[0]["reason"] == "payload_mismatch"
         assert count_ops(_PROJECT) == 1
 
+    def test_delegated_op_against_undelegated_event_remains_conflicted(
+        self,
+        outbox_env: Path,
+        signer: LocalKeySigner,
+        actor: Actor,
+        face,
+    ) -> None:
+        """Authorization provenance binds the op, not just the event id.
+
+        The same transition (same event_id, sequence, actor, payload) is
+        queued as a delegated authorization and actually committed as a
+        direct one. That is not "already applied": the committed event
+        authorizes a different principal chain, and replaying the delegated
+        op on top of it would launder the authorization. Reconcile must
+        conflict with ``delegation_mismatch`` and preserve the op.
+        """
+        wid, _ = face.create_breadcrumb(actor, title="Delegation binding target")
+        event_id = uuid.uuid4()
+        next_event_seq = face.get(wid).next_event_seq
+        payload = {"review_artifact_digest": "sha256:delegated"}
+        delegated_actor = replace(
+            actor,
+            action_delegation_credentials=(
+                # Shape-valid but cryptographically inert: the reconcile-side
+                # hash comparison runs before any chain verification would.
+                shape_valid_delegation(subject_principal_id=actor.actor_id),
+            ),
+        )
+        outface = OutboxAwareFace(
+            face, project=_PROJECT, signer=signer, unreachable_probe=lambda: True
+        )
+        outface.transition_breadcrumb(
+            delegated_actor,
+            wid,
+            "start",
+            payload=payload,
+            event_id=event_id,
+            expected_event_seq=next_event_seq,
+        )
+
+        # The transition actually committed under direct authorization (no
+        # credentials) — same event identity, different authorization chain.
+        face.transition_breadcrumb(
+            actor,
+            wid,
+            "start",
+            payload=payload,
+            event_id=event_id,
+            expected_event_seq=next_event_seq,
+        )
+
+        report = reconcile(_PROJECT, face=face, signer=signer)
+        assert report.replayed == 0
+        assert report.conflicts == 1
+        assert report.conflict_details[0]["reason"] == "delegation_mismatch"
+        assert count_ops(_PROJECT) == 1
+        # Sanity: the expected-credentials side really did hash the queued
+        # document (the comparison was delegation-vs-none, not none-vs-none).
+        committed = [event for event in face.history(wid) if event.event_id == event_id][0]
+        envelope = json.loads(committed.canonical_envelope)
+        assert not envelope.get("authorization", {}).get("credentials")
+
 
 class TestReportOutput:
     def test_to_dict_is_json_serializable(
@@ -792,22 +856,12 @@ class TestE2EPostgres:
         actor: Actor,
         tmp_path: Path,
     ) -> None:
-        import json as _json
-
-        key_path = tmp_path / "hmac_keys.json"
-        key_path.write_text(
-            _json.dumps(
-                {
-                    "keys": [
-                        {
-                            "key_id": "test-key-001",
-                            "secret": "dGhpcyBpcyBhIHRlc3Qgc2VjcmV0IGtleSBmb3Igc3Vic3RyYXRl",
-                            "status": "active",
-                        }
-                    ]
-                }
-            )
+        keyset = make_v6_keyset(
+            tmp_path,
+            principals=("agent:ac-test-agent",),
+            filename="v6_keys.json",
         )
+        key_path = Path(keyset.path)
 
         # regista's migrations target Postgres 15, but agent-notes' ephemeral
         # testcontainer is pgvector/pgvector:pg17 (see tests/conftest.py), so
@@ -849,6 +903,13 @@ class TestE2EPostgres:
             except Exception as exc:
                 pytest.skip(f"cannot create regista project: {exc}")
 
+            open_v6_epoch(
+                reg,
+                keyset,
+                principals=("agent:ac-test-agent",),
+            )
+            reg.register_workflow(canonical_workflow_yaml())
+
             face = RegistaFace(reg)
             outface = OutboxAwareFace(
                 face,
@@ -886,12 +947,87 @@ class TestE2EPostgres:
                     pass
 
 
+class TestFindByIdentifierTransport:
+    """AC-1 guardrail for the idempotency lookup: an inability to look the
+    key up must NOT read as not-found — that translation is what duplicates
+    an existing item (the create path treats None as "mint a new one")."""
+
+    def test_unreachable_lookup_raises_not_returns_none(
+        self,
+        outbox_env: Path,
+        signer: LocalKeySigner,
+        actor: Actor,
+        face,
+    ) -> None:
+        outface = OutboxAwareFace(
+            face, project=_PROJECT, signer=signer, unreachable_probe=lambda: True
+        )
+
+        with pytest.raises(ConnectionRefusedError, match="cannot decide create-vs-update"):
+            outface.find_by_source_identifier("BC-500")
+
+    def test_transport_failure_mid_lookup_propagates_not_returns_none(
+        self,
+        outbox_env: Path,
+        signer: LocalKeySigner,
+        actor: Actor,
+        face,
+    ) -> None:
+        import psycopg
+
+        class FindDropsConnection:
+            def __init__(self, base) -> None:
+                self._base = base
+
+            def __getattr__(self, name):
+                return getattr(self._base, name)
+
+            def find_by_source_identifier(self, *args, **kwargs):
+                raise psycopg.OperationalError("simulated lookup transport failure")
+
+        outface = OutboxAwareFace(FindDropsConnection(face), project=_PROJECT, signer=signer)
+
+        with pytest.raises(psycopg.OperationalError):
+            outface.find_by_source_identifier("BC-500")
+
+    def test_no_duplicate_create_after_a_refused_lookup(
+        self,
+        outbox_env: Path,
+        signer: LocalKeySigner,
+        actor: Actor,
+        face,
+    ) -> None:
+        """End-to-end consequence: when the lookup cannot run, the create
+        never happens either — the item count cannot fork."""
+        wid, _ = face.create_breadcrumb(actor, title="Existing", source_identifier="BC-500")
+        outface = OutboxAwareFace(
+            face, project=_PROJECT, signer=signer, unreachable_probe=lambda: True
+        )
+
+        with pytest.raises(ConnectionRefusedError):
+            outface.find_by_source_identifier("BC-500")
+        # Nothing was enqueued or created by the refused guard.
+        assert outface.pending_count() == 0
+        assert len(face.list()) == 1
+
+    def test_completed_lookup_still_returns_none_for_a_genuine_miss(
+        self,
+        outbox_env: Path,
+        signer: LocalKeySigner,
+        actor: Actor,
+        face,
+    ) -> None:
+        outface = OutboxAwareFace(
+            face, project=_PROJECT, signer=signer, unreachable_probe=lambda: False
+        )
+        assert outface.find_by_source_identifier("never-filed") is None
+
+
 class _BusinessErrorFace:
     """A stand-in base face whose transition raises a regista business error."""
 
     def __init__(self, real_face) -> None:
         self._real = real_face
-        self.ensure_workflow = real_face.ensure_workflow
         self.close = real_face.close
         self.get = real_face.get
         self.list = real_face.list

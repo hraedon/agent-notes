@@ -275,14 +275,8 @@ def test_breadcrumb_file(default_project):
     assert data["breadcrumb"]["title"] == "CLI test BC"
 
 
-def test_file_without_lineage_emits_the_undeclared_lineage_envelope(default_project):
-    """WI-062: the refusal is a first-class CLI error, not a buried traceback.
-
-    The failure that motivated WI-062 was invisible because the real error was
-    swallowed / relabeled on its way out. This pins the whole surface: a named
-    ``UNDECLARED_LINEAGE`` code, the remedy inside the message, a non-zero exit,
-    and no traceback on stderr.
-    """
+def test_file_without_canonical_actor_emits_a_named_error(default_project):
+    """A write without ambient v6 identity fails before it reaches storage."""
     result = run_cli(
         "work-item",
         "file",
@@ -295,34 +289,43 @@ def test_file_without_lineage_emits_the_undeclared_lineage_envelope(default_proj
         "--title",
         "should not be filed",
         "--json",
-        strip_keys=("AGENT_NOTES_MODEL_LINEAGE",),
+        strip_keys=("AGENT_NOTES_ACTOR_ID", "REGISTA_PRINCIPAL_ID"),
         check=False,
     )
     assert result.returncode != 0
     data = json.loads(result.stdout)
     assert data["ok"] is False
-    assert data["error"]["code"] == "UNDECLARED_LINEAGE"
-    assert "AGENT_NOTES_MODEL_LINEAGE" in data["error"]["message"]
-    assert "--model-lineage" in data["error"]["message"]
+    assert data["error"]["code"] == "ACTOR_ID_NOT_CONFIGURED"
+    assert "AGENT_NOTES_ACTOR_ID" in data["error"]["message"]
     assert "Traceback" not in result.stderr
 
     # ...and the write really did not happen.
     got = _run(
-        "work-item", "get", "WI-NOLIN-01",
-        "--workspace", "default", "--project", "sf2", "--json",
+        "work-item",
+        "get",
+        "WI-NOLIN-01",
+        "--workspace",
+        "default",
+        "--project",
+        "sf2",
+        "--json",
         check=False,
     )
     assert got.returncode != 0
 
-    # With the lineage declared, the same command succeeds.
+    # With the actor declared, the same command succeeds.
     ok = run_cli(
-        "work-item", "file",
-        "--workspace", "default", "--project", "sf2",
-        "--identifier", "WI-NOLIN-02",
-        "--title", "filed with a declared lineage",
-        "--model-lineage", "glm",
+        "work-item",
+        "file",
+        "--workspace",
+        "default",
+        "--project",
+        "sf2",
+        "--identifier",
+        "WI-NOLIN-02",
+        "--title",
+        "filed with a declared lineage",
         "--json",
-        strip_keys=("AGENT_NOTES_MODEL_LINEAGE",),
         check=False,
     )
     assert ok.returncode == 0, ok.stderr
@@ -1359,69 +1362,17 @@ def test_cli_configures_structlog_to_stderr(capsys):
         structlog.reset_defaults()
 
 
-def test_lease_and_attest_parsers_accept_and_thread_model_lineage(monkeypatch, capsys):
-    """WI-068: claim / release / heartbeat / attest-gate accept --model-lineage
-    and thread it to the model layer.
-
-    Before this, the documented per-invocation lineage fallback was env-only on
-    these four subcommands: the flag existed on file/update/close/review but
-    argparse rejected it here, so an undeclared-env caller had no remedy the
-    refusal text promised.
-    """
+def test_write_parsers_reject_identity_override_flags():
+    """Identity is ambient v6 configuration, never a CLI override."""
     import argparse
 
     from agent_notes.cli import work_items as wi_cli
-    from agent_notes.core.work_item_model import WorkItemModel
 
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command")
     wi_cli.register_work_item_parsers(sub)
 
-    monkeypatch.setattr(wi_cli, "_resolve", lambda *a, **k: (1, 1, "ws", "proj"))
-
-    threaded: dict[str, str | None] = {}
-    row = {
-        "identifier": "WI-1",
-        "title": "t",
-        "kind": "task",
-        "status": "open",
-        "expires_at": "2026-01-01T00:00:00Z",
-        "heartbeat_count": 1,
-        "diagnostic_keys": {},
-    }
-
-    def _capture(name):
-        def _fake(*a, **kw):
-            threaded[name] = kw.get("model_lineage")
-            return dict(row)
-
-        return _fake
-
-    monkeypatch.setattr(WorkItemModel, "claim_work_item", _capture("claim"))
-    monkeypatch.setattr(WorkItemModel, "release_work_item", _capture("release"))
-    monkeypatch.setattr(WorkItemModel, "heartbeat_work_item", _capture("heartbeat"))
-    monkeypatch.setattr(WorkItemModel, "attest_gate_waiver", _capture("attest-gate"))
-    # WI-068 B1/NB2: the cross-project verbs and delete take the flags too.
-    monkeypatch.setattr(WorkItemModel, "request_work_item", _capture("request"))
-    monkeypatch.setattr(WorkItemModel, "wait_on_work_item", _capture("wait"))
-    monkeypatch.setattr(WorkItemModel, "add_cross_project_link", _capture("link-cross"))
-    monkeypatch.setattr(WorkItemModel, "delete_work_item", _capture("delete"))
-
-    invocations = [
-        ("claim", ["work-item", "claim", "WI-1"]),
-        ("release", ["work-item", "release", "WI-1"]),
-        ("heartbeat", ["work-item", "heartbeat", "WI-1"]),
-        ("attest-gate", ["work-item", "attest-gate", "WI-1", "--reason", "r"]),
-        ("request", ["work-item", "request", "target-proj", "--title", "t"]),
-        ("wait", ["work-item", "wait", "target-proj:WI-9"]),
-        ("link-cross", ["work-item", "link-cross", "WI-1", "target-proj:WI-9"]),
-        ("delete", ["work-item", "delete", "WI-1"]),
-    ]
-    for name, argv in invocations:
-        args = parser.parse_args([*argv, "--model-lineage", "glm", "--json"])
-        rc = args.func(args)
-        capsys.readouterr()  # drain the fake JSON output
-        assert rc == 0, name
-        assert threaded[name] == "glm", (
-            f"--model-lineage did not reach the model layer for {name!r}"
-        )
+    with pytest.raises(SystemExit):
+        parser.parse_args(["work-item", "file", "--title", "x", "--actor-id", "agent:worker"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["work-item", "file", "--title", "x", "--model-lineage", "glm"])

@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from agent_notes.cli.harness import _resolve_harness_env
 from agent_notes.core.config import config_path
 
 _CLI = [sys.executable, "-m", "agent_notes.cli"]
@@ -26,6 +27,7 @@ _SUITE_ENV = {
     "REGISTA_KEY_PATH": "/suite/key",
     "REGISTA_REQUIRE_SSL": "true",
     "AGENT_NOTES_DSN": "postgresql://native/x",
+    "AGENT_NOTES_PROJECT": "suite-project",
     "AGENT_NOTES_REGISTA_WRITES": "1",
 }
 
@@ -121,6 +123,20 @@ def test_build_test_env_preserves_discovery_pins(monkeypatch: pytest.MonkeyPatch
     assert override["AGENT_NOTES_CONFIG"] == "/hermetic/empty.json"
 
 
+def test_harness_resolves_only_canonical_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("REGISTA_DSN", "postgresql://canonical/x")
+    monkeypatch.setenv("AGENT_NOTES_PROJECT", "canonical-project")
+    monkeypatch.setenv("AGENT_NOTES_REGISTA_DSN", "postgresql://removed/x")
+    monkeypatch.setenv("AGENT_NOTES_REGISTA_PROJECT", "removed-project")
+
+    resolved = _resolve_harness_env(None)
+
+    assert resolved["REGISTA_DSN"] == "postgresql://canonical/x"
+    assert resolved["AGENT_NOTES_PROJECT"] == "canonical-project"
+    assert "AGENT_NOTES_REGISTA_DSN" not in resolved
+    assert "AGENT_NOTES_REGISTA_PROJECT" not in resolved
+
+
 # ---------------------------------------------------------------------------
 # claude target
 # ---------------------------------------------------------------------------
@@ -152,6 +168,7 @@ def test_claude_install_wires_env_and_skills():
         assert settings["env"]["REGISTA_DSN"] == "postgresql://suite/x"
         assert settings["env"]["REGISTA_KEY_PATH"] == "/suite/key"
         assert settings["env"]["AGENT_NOTES_DSN"] == "postgresql://native/x"
+        assert settings["env"]["AGENT_NOTES_PROJECT"] == "suite-project"
         # skills installed
         assert (td / ".claude" / "skills" / "demo" / "SKILL.md").is_file()
         # manifest written
@@ -324,7 +341,7 @@ def test_opencode_install_writes_config_file_and_plugin():
         # env -> agent-notes config file (opencode.json has no env block)
         cfg = json.loads(config_path(home=td).read_text())
         assert cfg["regista"]["dsn"] == "postgresql://suite/x"
-        assert cfg["regista"]["hmac_key_path"] == "/suite/key"
+        assert cfg["regista"]["key_path"] == "/suite/key"
         assert cfg["regista"]["require_ssl"] is True  # coerced to bool
         assert cfg["regista"]["writes_enabled"] is True
         assert cfg["dsn"] == "postgresql://native/x"
@@ -741,7 +758,7 @@ def test_file_path_source_fails_gracefully_not_traceback():
         assert len(miss) == 1
 
 
-def test_user_flag_sets_principal_id():
+def test_user_flag_sets_canonical_principal_id():
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         src = _make_skill_tree(td)
@@ -749,7 +766,7 @@ def test_user_flag_sets_principal_id():
             "install-harness",
             "claude",
             "--user",
-            "paul@hraedon.com",
+            "human:paul",
             "--source",
             str(src),
             "--home",
@@ -760,9 +777,9 @@ def test_user_flag_sets_principal_id():
         )
         assert result.returncode == 0
         data = json.loads(result.stdout)
-        assert data["user"] == "paul@hraedon.com"
+        assert data["user"] == "human:paul"
         settings = json.loads((td / ".claude" / "settings.json").read_text())
-        assert settings["env"]["AGENT_NOTES_PRINCIPAL_ID"] == "paul@hraedon.com"
+        assert settings["env"]["REGISTA_PRINCIPAL_ID"] == "human:paul"
 
 
 def test_dry_run_contract_shape():
@@ -906,11 +923,11 @@ def test_opencode_no_clobber_keeps_existing_different_value():
         # User value kept.
         assert cfg["regista"]["dsn"] == "postgresql://user-set/x"
         # Other keys written.
-        assert cfg["regista"]["hmac_key_path"] == "/suite/key"
+        assert cfg["regista"]["key_path"] == "/suite/key"
         # Clobbered key NOT tracked in manifest.
         man = json.loads((td / ".config" / "opencode" / ".agent-notes-harness.json").read_text())
         assert "regista.dsn" not in man["env_keys"]
-        assert "regista.hmac_key_path" in man["env_keys"]
+        assert "regista.key_path" in man["env_keys"]
 
 
 def test_user_flag_warns_for_opencode():
@@ -932,7 +949,7 @@ def test_user_flag_warns_for_opencode():
             check=False,
         )
         assert result.returncode == 0
-        assert "principal overlay skipped" in result.stderr
+        assert "actor overlay skipped" in result.stderr
 
 
 def test_no_env_vars_still_installs_skills_with_warning():

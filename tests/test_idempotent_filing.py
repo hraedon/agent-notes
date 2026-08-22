@@ -12,11 +12,13 @@ end-to-end ``file_work_item`` idempotency test is DB-backed.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
-from regista.testing import InMemoryRegista
 
 from agent_notes.core.actor import Actor
 from agent_notes.core.regista_face import RegistaFace, normalize_source_identifier
+from tests.conftest import provision_v6_regista
 
 
 class TestNormalizeSourceIdentifier:
@@ -48,14 +50,12 @@ class TestNormalizeSourceIdentifier:
 
 class TestFindBySourceIdentifier:
     @pytest.fixture
-    def face(self) -> RegistaFace:
-        face = RegistaFace(InMemoryRegista())
-        face.ensure_workflow()
-        return face
+    def face(self, tmp_path: Path) -> RegistaFace:
+        return RegistaFace(provision_v6_regista(tmp_path / "v6_keys.json"))
 
     @pytest.fixture
     def actor(self) -> Actor:
-        return Actor(actor_id="ac-test", display_name="Test")
+        return Actor(actor_id="agent:ac-test-agent", actor_kind="agent", display_name="Test")
 
     def test_finds_item_filed_under_other_format(self, face, actor):
         # Filed with the bare number; looked up with the BC- form.

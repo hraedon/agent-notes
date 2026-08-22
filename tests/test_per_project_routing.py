@@ -24,7 +24,7 @@ def _clean_faces():
 
 def _cfg(enabled=True, project="default_proj"):
     return SimpleNamespace(
-        enabled=enabled, project=project, dsn="x", hmac_key_path="k", require_ssl=False
+        enabled=enabled, project=project, dsn="x", key_path="k", require_ssl=False
     )
 
 

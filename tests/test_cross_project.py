@@ -680,19 +680,14 @@ class TestCrossProjectLineageGate:
             row = cur.fetchone()
         return row["actor_id"] if row else None
 
-    def test_request_stamps_explicit_actor_with_explicit_lineage(
-        self, default_project, monkeypatch
-    ):
-        """Env declares nothing; the per-invocation identity carries the op."""
-        monkeypatch.delenv("AGENT_NOTES_MODEL_LINEAGE", raising=False)
+    def test_request_stamps_ambient_actor(self, default_project):
+        """Cross-project requests use the canonical ambient actor."""
         req = WorkItemModel.request_work_item(
             project_id=default_project.id,
             target_project_slug="target",
             title="cross-project request",
-            actor_id="req-agent",
-            model_lineage="claude-opus",
         )
-        assert self._op_actor(req["entity_id"], "request") == "req-agent"
+        assert self._op_actor(req["entity_id"], "request") == "agent:worker"
 
     def test_request_resolves_env_actor_when_none_passed(self, default_project):
         """No explicit identity: the op carries the env-RESOLVED actor, not
@@ -711,35 +706,27 @@ class TestCrossProjectLineageGate:
         assert stamped is not None
         assert stamped == expected
 
-    def test_wait_stamps_resolved_actor(self, default_project, monkeypatch):
-        monkeypatch.delenv("AGENT_NOTES_MODEL_LINEAGE", raising=False)
+    def test_wait_stamps_resolved_actor(self, default_project):
         wait = WorkItemModel.wait_on_work_item(
             project_id=default_project.id,
             target_project_slug="target",
             target_identifier="WI-9",
-            actor_id="wait-agent",
-            model_lineage="claude-opus",
         )
-        assert self._op_actor(wait["entity_id"], "wait") == "wait-agent"
+        assert self._op_actor(wait["entity_id"], "wait") == "agent:worker"
 
-    def test_link_cross_stamps_resolved_actor(self, default_project, monkeypatch):
-        monkeypatch.delenv("AGENT_NOTES_MODEL_LINEAGE", raising=False)
+    def test_link_cross_stamps_resolved_actor(self, default_project):
         WorkItemModel.file_work_item(
             project_id=default_project.id,
             identifier="WI-LINKSRC",
             title="link source",
             status="open",
             embedding=_vec768(),
-            actor_id="link-agent",
-            model_lineage="claude-opus",
         )
         result = WorkItemModel.add_cross_project_link(
             from_project_id=default_project.id,
             from_identifier="WI-LINKSRC",
             to_project_slug="foreign-project",
             to_identifier="WI-9",
-            actor_id="link-agent",
-            model_lineage="claude-opus",
         )
         # add_cross_project_link's return has no entity_id; find the add_link op.
         from psycopg.rows import dict_row
@@ -755,33 +742,28 @@ class TestCrossProjectLineageGate:
             row = cur.fetchone()
         assert row is not None
         assert row["payload"]["from_identifier"] == result["from_identifier"] == "WI-LINKSRC"
-        assert row["actor_id"] == "link-agent"
+        assert row["actor_id"] == "agent:worker"
 
     def test_link_cross_change_log_row_carries_resolved_actor(
-        self, default_project, target_project, monkeypatch
+        self, default_project, target_project
     ):
         """WI-069: when the target project is local, the mirrored ``links``
         write's ``link_added`` change_log row is attributed to the
         lineage-gated actor — not NULL, even though the verb was already
         gated (WI-068 refused the write; this makes the audit row name who
         performed it)."""
-        monkeypatch.delenv("AGENT_NOTES_MODEL_LINEAGE", raising=False)
         WorkItemModel.file_work_item(
             project_id=default_project.id,
             identifier="WI-LINKSRC-CL",
             title="link source (change_log attribution)",
             status="open",
             embedding=_vec768(),
-            actor_id="link-agent",
-            model_lineage="claude-opus",
         )
         WorkItemModel.add_cross_project_link(
             from_project_id=default_project.id,
             from_identifier="WI-LINKSRC-CL",
             to_project_slug="target",  # local project → the links mirror fires
             to_identifier="WI-T1",
-            actor_id="link-agent",
-            model_lineage="claude-opus",
         )
 
         from psycopg.rows import dict_row
@@ -796,4 +778,4 @@ class TestCrossProjectLineageGate:
             )
             rows = cur.fetchall()
         assert rows, "the mirrored add_link must write a link_added change_log row"
-        assert all(r["actor"] == "link-agent" for r in rows)
+        assert all(r["actor"] == "agent:worker" for r in rows)

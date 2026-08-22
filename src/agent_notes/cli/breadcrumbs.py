@@ -28,7 +28,6 @@ from agent_notes.cli.common import (
     emit_error,
     report_resolution_failure,
 )
-from agent_notes.cli.work_items import _add_author_identity
 from agent_notes.core import config as reg_config
 from agent_notes.core import outbox
 from agent_notes.core.lifecycle import map_legacy_to_canonical as _map_status
@@ -76,8 +75,6 @@ def cmd_bc_file(args: argparse.Namespace) -> int:
             external_refs=external_refs,
             diagnostic_keys=diagnostic_keys,
             embedding=vec,
-            actor_id=getattr(args, "actor_id", None),
-            model_lineage=getattr(args, "model_lineage", None),
         )
     except ValueError as exc:
         return emit_error(
@@ -159,8 +156,6 @@ def cmd_bc_update(args: argparse.Namespace) -> int:
             project_id=proj_id,
             identifier=args.identifier,
             force=getattr(args, "force", False),
-            actor_id=getattr(args, "actor_id", None),
-            model_lineage=getattr(args, "model_lineage", None),
             **fields,
         )
     except ValueError as exc:
@@ -321,8 +316,6 @@ def cmd_bc_delete(args: argparse.Namespace) -> int:
     deleted = WorkItemModel.delete_work_item(
         proj_id,
         args.identifier,
-        actor_id=getattr(args, "actor_id", None),
-        model_lineage=getattr(args, "model_lineage", None),
     )
     if not deleted:
         return emit_error(
@@ -526,7 +519,6 @@ def cmd_bc_reconcile(args: argparse.Namespace) -> int:
         report_resolution_failure(args, code)
         return code
 
-    from agent_notes.core.actor import InvalidLineageError, UndeclaredLineageError
     from agent_notes.core.db import list_projects
     from agent_notes.core.git_reconcile import scan_git_for_resolutions
     from agent_notes.core.work_item_model import WorkItemModel
@@ -566,24 +558,8 @@ def cmd_bc_reconcile(args: argparse.Namespace) -> int:
                     status="closed",
                     external_refs=refs,
                     force=True,
-                    # WI-062: reconcile writes a real status transition, so it
-                    # is a real authored event and needs a declared lineage
-                    # like any other. Without these the only source would be
-                    # the env, and `/start` / `/end` invoke this unattended.
-                    actor_id=getattr(args, "actor_id", None),
-                    model_lineage=getattr(args, "model_lineage", None),
                 )
                 applied = True
-            except (UndeclaredLineageError, InvalidLineageError):
-                # WI-068: never fold the lineage refusal into a generic
-                # per-item error — burying it under a relabeled code is the
-                # exact failure mode the gate's RuntimeError choice exists to
-                # prevent (WI-062), and it is not a per-item condition anyway:
-                # every remaining item would refuse identically. Re-raise so
-                # ``_dispatch`` emits the canonical UNDECLARED_LINEAGE /
-                # INVALID_MODEL_LINEAGE envelope (exit 3) with the remedy text
-                # intact.
-                raise
             except Exception as exc:
                 # A work item in a state with no direct terminal transition
                 # (e.g. in_review, which must go through the review gate)
@@ -640,7 +616,6 @@ def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
     bc_file.add_argument("--severity", default="medium")
     bc_file.add_argument("--external-refs", default=None)
     bc_file.add_argument("--diagnostic-keys", default=None)
-    _add_author_identity(bc_file)
     _add_common(bc_file)
     bc_file.set_defaults(func=cmd_bc_file)
 
@@ -663,7 +638,6 @@ def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
         default=False,
         help="Bypass the transition pre-flight check (Plan 013 WI-5; admin/repair only)",
     )
-    _add_author_identity(bc_update)
     _add_common(bc_update)
     bc_update.set_defaults(func=cmd_bc_update)
 
@@ -691,7 +665,6 @@ def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
 
     bc_delete = bc_sub.add_parser("delete", help="Delete a breadcrumb (work item)")
     bc_delete.add_argument("identifier")
-    _add_author_identity(bc_delete)
     _add_common(bc_delete)
     bc_delete.set_defaults(func=cmd_bc_delete)
 
@@ -745,7 +718,6 @@ def register_breadcrumb_parsers(sub: argparse._SubParsersAction) -> None:
         default=400,
         help="Number of recent commits to scan (default: 400)",
     )
-    _add_author_identity(bc_reconcile)
     _add_common(bc_reconcile)
     bc_reconcile.set_defaults(func=cmd_bc_reconcile)
 

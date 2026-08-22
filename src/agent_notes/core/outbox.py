@@ -227,9 +227,8 @@ def _actor_to_dict(actor: Actor) -> dict:
         "actor_id": actor.actor_id,
         "actor_kind": actor.actor_kind,
         "display_name": actor.display_name,
-        "on_behalf_of": actor.on_behalf_of,
         "role": actor.role,
-        "model_lineage": actor.model_lineage,
+        "action_delegation_credentials": list(actor.action_delegation_credentials),
     }
 
 
@@ -238,9 +237,8 @@ def dict_to_actor(d: dict) -> Actor:
         actor_id=d["actor_id"],
         actor_kind=d.get("actor_kind", "agent"),
         display_name=d.get("display_name", ""),
-        on_behalf_of=d.get("on_behalf_of"),
         role=d.get("role", "agent"),
-        model_lineage=d.get("model_lineage"),
+        action_delegation_credentials=tuple(d.get("action_delegation_credentials", ())),
     )
 
 
@@ -269,14 +267,31 @@ class OutboxAwareFace:
         self._unreachable_probe = unreachable_probe
         self.last_op_outboxed: bool = False
 
-    def ensure_workflow(self) -> None:
-        self._base.ensure_workflow()
-
     def close(self) -> None:
         self._base.close()
 
     def get(self, work_item_id: Any) -> Any:
         return self._base.get(work_item_id)
+
+    def find_by_source_identifier(self, source_identifier: str | None) -> Any | None:
+        """Look up a source key, refusing to read an unreachable store as empty.
+
+        This is the idempotency guard for the create path: callers treat a
+        ``None`` return as "no such item" and mint a create. Translating an
+        inability to look the key up into not-found would therefore duplicate
+        an item that may well exist remotely (Plan 015's original bug, back
+        through the offline door). Both unreachable branches raise instead:
+        the transport error propagates so the caller fails (or queues the whole
+        operation) rather than forking the item. Only a completed lookup that
+        genuinely found nothing returns ``None``.
+        """
+
+        if self._is_unreachable():
+            raise ConnectionRefusedError(
+                "regista is unreachable; cannot decide create-vs-update for "
+                f"source_identifier={source_identifier!r} without duplicating it"
+            )
+        return self._base.find_by_source_identifier(source_identifier)
 
     def list(self, *, current_states: list[str] | None = None, page_size: int = 100) -> list[Any]:
         return self._base.list(current_states=current_states, page_size=page_size)

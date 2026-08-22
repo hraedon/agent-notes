@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from regista.testing import InMemoryRegista
 
 from agent_notes.cli.breadcrumbs import cmd_bc_export_index
 from agent_notes.cli.orient import cmd_orient
@@ -21,7 +20,7 @@ from agent_notes.core.envelope import LocalKeySigner
 from agent_notes.core.face_factory import reset_face, set_face_for_test
 from agent_notes.core.regista_face import RegistaFace
 from agent_notes.scripts.doctor import _check_regista_face
-from tests.conftest import ephemeral_db  # noqa: F401
+from tests.conftest import ephemeral_db, provision_v6_regista  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures("ephemeral_db")
 
@@ -41,11 +40,11 @@ def default_project():
 
 @pytest.fixture
 def regista_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    monkeypatch.setenv("AGENT_NOTES_REGISTA_DSN", "postgresql://unused")
-    monkeypatch.setenv("AGENT_NOTES_REGISTA_PROJECT", _REGPROJECT)
+    monkeypatch.setenv("REGISTA_DSN", "postgresql://unused")
+    monkeypatch.setenv("AGENT_NOTES_PROJECT", _REGPROJECT)
     monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-    monkeypatch.setenv("AGENT_NOTES_REGISTA_HMAC_KEY_PATH", os.devnull)
-    monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "p3-test-agent")
+    monkeypatch.setenv("REGISTA_KEY_PATH", os.devnull)
+    monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:p3-test-agent")
     outbox_dir = tmp_path / "outbox"
     monkeypatch.setenv("AGENT_NOTES_OUTBOX_DIR", str(outbox_dir))
     monkeypatch.setenv("AGENT_NOTES_SESSION", "p3-session")
@@ -59,12 +58,12 @@ def signer(tmp_path: Path) -> LocalKeySigner:
 
 @pytest.fixture
 def actor() -> Actor:
-    return Actor(actor_id="p3-test-agent", display_name="P3 Test")
+    return Actor(actor_id="agent:p3-test-agent", actor_kind="agent", display_name="P3 Test")
 
 
 @pytest.fixture
-def face() -> RegistaFace:
-    return RegistaFace(InMemoryRegista())
+def face(tmp_path: Path) -> RegistaFace:
+    return RegistaFace(provision_v6_regista(tmp_path / "v6_keys.json", project=_REGPROJECT))
 
 
 def _make_args(**kwargs: Any) -> argparse.Namespace:
@@ -177,7 +176,7 @@ class TestDoctorRegistaFace:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        monkeypatch.delenv("AGENT_NOTES_REGISTA_DSN", raising=False)
+        monkeypatch.delenv("REGISTA_DSN", raising=False)
         monkeypatch.delenv("AGENT_NOTES_REGISTA_WRITES", raising=False)
         ok, msg = _check_regista_face()
         assert ok is True

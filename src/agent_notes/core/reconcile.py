@@ -147,6 +147,29 @@ def _reconcile_committed_transition(
         key in actual_metadata and actual_metadata[key] == value
         for key, value in expected_metadata.items()
     )
+    import regista
+
+    expected_credentials = [
+        {
+            "credential_id": str(document.get("credential_id", "")),
+            "credential_hash": regista.action_delegation_hash(document),
+        }
+        for document in actor.action_delegation_credentials
+    ]
+    actual_credentials: list[dict[str, Any]] = []
+    canonical_envelope = getattr(event, "canonical_envelope", None)
+    if canonical_envelope is not None:
+        try:
+            envelope = json.loads(canonical_envelope)
+        except (TypeError, ValueError, UnicodeDecodeError):
+            envelope = None
+        if isinstance(envelope, dict):
+            authorization = envelope.get("authorization")
+            if isinstance(authorization, dict) and isinstance(
+                authorization.get("credentials"), list
+            ):
+                actual_credentials = authorization["credentials"]
+
     checks = (
         (getattr(event, "event_seq", None) == expected_seq, "event_seq_mismatch"),
         (getattr(event, "event_id", None) == event_id, "event_id_mismatch"),
@@ -158,10 +181,7 @@ def _reconcile_committed_transition(
         (getattr(event, "actor_id", None) == actor.actor_id, "actor_id_mismatch"),
         (getattr(event, "actor_kind", None) == actor.actor_kind, "actor_kind_mismatch"),
         (metadata_matches, "actor_metadata_mismatch"),
-        (
-            getattr(event, "on_behalf_of", None) == actor.on_behalf_of,
-            "delegation_mismatch",
-        ),
+        (actual_credentials == expected_credentials, "delegation_mismatch"),
         (payload_matches, "payload_mismatch"),
     )
     for matched, reason in checks:

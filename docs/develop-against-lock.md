@@ -19,7 +19,7 @@ make dev            # or: python scripts/dev-install.py
 ```
 
 installs `regista-hraedon==<SUITE.lock [spine].version>` from PyPI (today
-`0.5.5`), then `ruff` and `-e ".[test]"` (pytest, testcontainers, and the pinned
+`0.7.0`), then `ruff` and `-e ".[test]"` (pytest, testcontainers, and the pinned
 `agent-suite-conformance` kit). CI runs the **same** `scripts/dev-install.py` in
 both the Linux and Windows lanes, so "works on my machine" means "works in CI".
 
@@ -58,38 +58,48 @@ equivalent of `DEV_AGAINST=sibling` (develop against the local working tree).
 Reach for it deliberately when co-developing the spine; `make dev` is the
 default that composes against the shipped release.
 
-## Caution: regista must stay below 0.6 until the v6 port (WI-072)
+## V6 port state (WI-072)
 
-regista 0.6.0 refuses `on_behalf_of` inside a v6 epoch
-(`on_behalf_of_has_no_v6_field`) and refuses legacy writes on both sides of
-genesis. agent-notes still passes `on_behalf_of` in `src`, so a 0.6.x substrate
-does not fail at install time — it fails at *write* time, pointing at the epoch
-rather than at the dependency that moved.
+The legacy caution below is historical. The writer port now uses canonical
+principal IDs, regista's process-level producer configuration, and signed
+action-delegation evidence; it no longer sends legacy proxy-principal fields or
+per-call model identity overrides. Workflow registration and epoch opening are
+external provisioning operations.
 
-`pyproject.toml` therefore caps the spine at `regista-hraedon>=0.5.1,<0.6`. That
-cap binds the published metadata and the pip path (`scripts/dev-install.py`, and
-so CI). It does **not** bind `[tool.uv.sources]`: uv ignores version specifiers
-on path/editable sources, so `uv lock` will record whatever version `../regista`
-happens to be — silently, with `uv lock --check` still passing afterwards. So
-`DEV_AGAINST=sibling` and `make test` / `uv run` can put you on a v6 spine even
-with the cap in place.
+The regista configuration surface is also breaking: use `REGISTA_DSN`,
+`REGISTA_KEY_PATH`, `REGISTA_REQUIRE_SSL`, and `AGENT_NOTES_PROJECT`. The
+`config.json` `regista` block names the key-set field `key_path`; retired
+aliases are ignored. `AGENT_NOTES_REGISTA_WRITES` remains the write-mode gate.
 
-Three tripwires in `tests/test_develop_against_lock.py` make that loud instead of
-silent — they assert the cap is present, that `SUITE.lock [spine].version` is
-pre-v6, and that the committed `uv.lock` records a pre-v6 regista. If the
-`uv.lock` one fires, your sibling checkout has moved to v6: the only way to make
-`make test` / `uv run` healthy again is to point `../regista` at a 0.5.x revision
-and re-lock (`DEV_AGAINST` affects only `scripts/dev-install.py`'s pip install —
-the editable `[tool.uv.sources]` mapping always wins for uv, so
-`DEV_AGAINST=lock` gives you a healthy *pip* venv but does not fix the uv path).
+`pyproject.toml` targets the published post-port spine range
+(`regista-hraedon>=0.7.0,<0.8`). `SUITE.lock` pins the published 0.7.0 artifact,
+its `v0.7.0` merge SHA, envelope v6, and canonical workflow v3 together.
 
-One expected piece of churn: the first `uv lock`/`uv run` after this cap landed
-rewrites `uv.lock` (the lock is stale relative to the changed pyproject
-specifier) even on a healthy 0.5.x-sibling box — committing that re-lock is
-correct and the tripwire stays green.
+The editable `[tool.uv.sources]` mapping is a co-development hatch: uv may
+resolve the local sibling regardless of the published requirement. Treat that
+as sibling testing, not evidence that the release lock has advanced.
 
-Retire the cap and all three tripwires together as part of the v6 port ([D]
-phase) — not by muting them.
+<!-- Historical pre-port guard; retained as context for the lock transition. -->
+
+Before the port, regista 0.6.0 refused `on_behalf_of` inside a v6 epoch
+(`on_behalf_of_has_no_v6_field`) and refused legacy writes on both sides of
+genesis. The pre-port agent-notes writer still passed that field, so a 0.6.x
+substrate did not fail at install time — it failed at *write* time, pointing at
+the epoch rather than at the dependency that moved.
+
+The pre-port `pyproject.toml` therefore capped the spine at
+`regista-hraedon>=0.5.1,<0.6`. That cap bound the published metadata and the
+pip path (`scripts/dev-install.py`, and so CI), but did **not** bind
+`[tool.uv.sources]`: uv ignores version specifiers on path/editable sources.
+The v6 port removes that cap and targets the post-port range instead.
+
+The pre-port tripwires in `tests/test_develop_against_lock.py` made that drift
+loud instead of silent. They were retired with the cap as part of the v6 port;
+the remaining tests keep the resolver tied to the face-local lock.
+
+The current editable `uv.lock` records the sibling checkout's 0.7.0 metadata.
+That remains co-development state; the published artifact and exact git
+provenance are independently recorded in `SUITE.lock`.
 
 ## Enforcement
 

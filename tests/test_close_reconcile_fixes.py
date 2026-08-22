@@ -22,14 +22,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from regista.testing import InMemoryRegista
 
 from agent_notes.cli.breadcrumbs import cmd_bc_reconcile
 from agent_notes.core import db as coredb
 from agent_notes.core.face_factory import reset_face, set_face_for_test
 from agent_notes.core.regista_face import RegistaFace
 from agent_notes.core.work_item_model import WorkItemModel
-from tests.conftest import ephemeral_db  # noqa: F401
+from tests.conftest import ephemeral_db, provision_v6_regista  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures("ephemeral_db")
 
@@ -41,22 +40,9 @@ def default_project():
 
 
 @pytest.fixture
-def hmac_key_path(tmp_path: Path):
-    path = tmp_path / "keys.json"
-    path.write_text(
-        json.dumps(
-            {
-                "keys": [
-                    {
-                        "key_id": "test-key-001",
-                        "secret": "dGhpcyBpcyBhIHRlc3Qgc2VjcmV0IGtleSBmb3Igc3Vic3RyYXRl",
-                        "status": "active",
-                    }
-                ]
-            }
-        )
-    )
-    return str(path)
+def v6_key_path(tmp_path: Path):
+    # provision_v6_regista writes the real v6 keyset here.
+    return str(tmp_path / "v6_keys.json")
 
 
 def _vec768():
@@ -67,16 +53,14 @@ def _vec768():
 
 
 def test_force_close_on_regista_path_terminalizes_instead_of_fold_crash(
-    default_project, hmac_key_path, monkeypatch
+    default_project, v6_key_path, monkeypatch
 ):
     """A regista-synced item (no native op chain) force-closes through the
     workflow instead of raising fold_work_item-returned-None."""
     monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-    monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "author-agent")
-    monkeypatch.setenv("AGENT_NOTES_PRINCIPAL_ID", "author@example.com")
-    monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")
+    monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:author-agent")
 
-    reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+    reg = provision_v6_regista(v6_key_path)
     face = RegistaFace(reg)
     reset_face()
     set_face_for_test(face)
@@ -107,7 +91,6 @@ def test_force_close_on_regista_path_terminalizes_instead_of_fold_crash(
 def test_force_close_native_path_still_writes_legacy_terminal(default_project, monkeypatch):
     """The degrade (no-face) path is unchanged: force writes the terminal
     'closed' op directly (Plan 014 A(b))."""
-    monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")  # WI-062
     reset_face()
     WorkItemModel.file_work_item(
         project_id=default_project.id,
@@ -246,28 +229,27 @@ def test_mem_add_empty_body_returns_validation_error(capsys, monkeypatch):
 # ── Fix 4 (9ab81ab): review CLI catches RegistaError ─────────────────────
 
 
-def test_review_pass_cli_catches_regista_error(default_project, hmac_key_path, monkeypatch, capsys):
+def test_review_pass_cli_catches_regista_error(default_project, v6_key_path, monkeypatch, capsys):
     """When the review gate raises RegistaError, the CLI catches it and emits a
     VALIDATION_FAILED envelope instead of a traceback.
 
-    The trigger used to be an undeclared author lineage; WI-062 makes that
-    unwritable, so the trigger is now a same-lineage review without
-    ``--same-lineage-acknowledged`` — a rejection the gate still raises and the
-    CLI must still render cleanly.
+    The trigger is a same-lineage review without ``--same-lineage-acknowledged``
+    (the producer env configured by provisioning authored the item, and the
+    same producer reviews it) — a rejection the gate raises and the CLI must
+    render cleanly.
     """
     from agent_notes.cli.work_items import cmd_wi_review_pass
 
     monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-    monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "author-agent")
-    monkeypatch.setenv("AGENT_NOTES_PRINCIPAL_ID", "author@example.com")
-    monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "kimi")
+    monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:author-agent")
 
-    reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+    reg = provision_v6_regista(v6_key_path)
     face = RegistaFace(reg)
     reset_face()
     set_face_for_test(face)
     try:
-        # File and drive to in_review as a "kimi" author.
+        # File and drive to in_review (producer lineage: fable, from
+        # provisioning).
         WorkItemModel.file_work_item(
             project_id=default_project.id,
             identifier="RV-CLI-ERR",
@@ -285,8 +267,10 @@ def test_review_pass_cli_catches_regista_error(default_project, hmac_key_path, m
         )
         WorkItemModel.close_work_item(default_project.id, "RV-CLI-ERR")
 
-        # A kimi reviewer on a kimi-authored item without an ack is rejected.
-        # The CLI must catch it and return a VALIDATION_FAILED envelope.
+        # A same-lineage reviewer without an ack is rejected (the running
+        # producer also authored the item). The CLI must catch the rejection
+        # and return a VALIDATION_FAILED envelope.
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:reviewer")
         ns = argparse.Namespace(
             workspace=None,
             project=None,
@@ -294,8 +278,6 @@ def test_review_pass_cli_catches_regista_error(default_project, hmac_key_path, m
             json=True,
             identifier="RV-CLI-ERR",
             note="This should fail cleanly",
-            actor_id="reviewer-kimi",
-            model_lineage="kimi",
             same_lineage_acknowledged=False,
         )
         rc = cmd_wi_review_pass(ns)
@@ -314,51 +296,3 @@ def test_review_pass_cli_catches_regista_error(default_project, hmac_key_path, m
     finally:
         reset_face()
         reg.close()
-
-
-# ── WI-068: reconcile --apply must not relabel the lineage refusal ────────
-
-
-def test_reconcile_apply_surfaces_the_undeclared_lineage_envelope(monkeypatch, capsys):
-    """``UndeclaredLineageError`` inside the --apply loop is re-raised, so the
-    CLI emits the canonical UNDECLARED_LINEAGE envelope (exit 3, remedy text
-    intact) instead of the generic per-item error + EXIT_CONFLICT that buried
-    the original WI-062 failure."""
-    from agent_notes.cli import _dispatch
-    from agent_notes.core.actor import UndeclaredLineageError
-
-    monkeypatch.setattr(
-        "agent_notes.cli.breadcrumbs._resolve",
-        lambda *a, **k: (1, 1, "ws", "proj"),
-    )
-    monkeypatch.setattr(
-        "agent_notes.core.db.list_projects",
-        lambda workspace_id=None: [SimpleNamespace(id=1, repo_root="/projects/x")],
-    )
-    monkeypatch.setattr(
-        "agent_notes.core.work_item_model.WorkItemModel.query_work_items",
-        lambda **k: [{"identifier": "X-1", "status": "open", "external_refs": {}}],
-    )
-    monkeypatch.setattr(
-        "agent_notes.core.git_reconcile.scan_git_for_resolutions",
-        lambda root, ids, lookback=500, project_slug=None: {
-            "X-1": {"commit": "aaaaaaa", "subject": "resolve X-1"}
-        },
-    )
-
-    def _refuse(proj_id, identifier, **kw):
-        raise UndeclaredLineageError("agent-notes", "work-item update")
-
-    monkeypatch.setattr(
-        "agent_notes.core.work_item_model.WorkItemModel.update_work_item",
-        _refuse,
-    )
-
-    rc = _dispatch(cmd_bc_reconcile, _ns(apply=True))
-    assert rc == 3  # EXIT_NOT_CONFIGURED — the envelope's exit code, not EXIT_CONFLICT (4)
-    out = json.loads(capsys.readouterr().out)
-    assert out["ok"] is False
-    assert out["error"]["code"] == "UNDECLARED_LINEAGE"
-    # The remedy travels intact instead of being flattened into a per-item note.
-    assert "AGENT_NOTES_MODEL_LINEAGE" in out["error"]["message"]
-    assert "--model-lineage" in out["error"]["message"]

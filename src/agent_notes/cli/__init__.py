@@ -536,41 +536,22 @@ def _dispatch(func: Callable[[argparse.Namespace], int], args: argparse.Namespac
     error envelope with the actual remediation. Everything else re-raises
     unchanged.
 
-    ``UndeclaredLineageError`` (WI-062) gets the same treatment and for the same
-    reason: it is a configuration gap with a one-line remedy, and it must be the
-    *last* thing on the operator's terminal. It is caught here rather than in
-    each subcommand because the subcommands' ``except ValueError`` handlers
-    would relabel it ``NOT_FOUND`` / ``VALIDATION_FAILED`` — which is how the
-    original failure stayed invisible. ``InvalidLineageError`` (agent-suite
-    WI-072 step 2) is the same class of failure one notch later: the lineage is
-    declared but names no registry family.
+    Actor and delegation configuration failures get the same treatment: they
+    are configuration gaps, not not-found or validation results from the
+    business operation, and must remain named in the common error envelope.
     """
-    from agent_notes.core.actor import InvalidLineageError, UndeclaredLineageError
+    from agent_notes.core.actor import ActorConfigurationError, DelegationConfigurationError
 
     try:
         return func(args)
-    except UndeclaredLineageError as exc:
+    except (ActorConfigurationError, DelegationConfigurationError) as exc:
         from agent_notes.cli.common import emit_error
 
         return emit_error(
             exc.code,
             str(exc),
             use_json=bool(getattr(args, "json", False)),
-            detail={"actor_id": exc.actor_id, "operation": exc.operation or ""},
-            exit_code=EXIT_NOT_CONFIGURED,
-        )
-    except InvalidLineageError as exc:
-        from agent_notes.cli.common import emit_error
-
-        return emit_error(
-            exc.code,
-            str(exc),
-            use_json=bool(getattr(args, "json", False)),
-            detail={
-                "model_lineage": exc.lineage,
-                "allowed": exc.allowed,
-                "operation": exc.operation or "",
-            },
+            detail={"error_type": type(exc).__name__},
             exit_code=EXIT_NOT_CONFIGURED,
         )
     except RegistaError as exc:

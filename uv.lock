@@ -8,7 +8,7 @@ resolution-markers = [
 
 [[package]]
 name = "agent-notes-hraedon"
-version = "1.0.0"
+version = "1.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
@@ -32,6 +32,7 @@ test = [
     { name = "agent-suite-conformance" },
     { name = "build" },
     { name = "hatchling" },
+    { name = "packaging" },
     { name = "pytest" },
     { name = "testcontainers" },
 ]
@@ -46,6 +47,7 @@ requires-dist = [
     { name = "hatchling", marker = "extra == 'test'" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "numpy", specifier = ">=1.24" },
+    { name = "packaging", marker = "extra == 'test'", specifier = ">=24.0" },
     { name = "platformdirs", specifier = ">=4.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
     { name = "psycopg-pool", specifier = ">=3.2" },
@@ -411,34 +413,34 @@ wheels = [
 
 [package.optional-dependencies]
 cudart = [
-    { name = "nvidia-cuda-runtime" },
+    { name = "nvidia-cuda-runtime", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 cufft = [
-    { name = "nvidia-cufft" },
+    { name = "nvidia-cufft", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 cufile = [
-    { name = "nvidia-cufile" },
+    { name = "nvidia-cufile", marker = "sys_platform == 'linux'" },
 ]
 cupti = [
-    { name = "nvidia-cuda-cupti" },
+    { name = "nvidia-cuda-cupti", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 curand = [
-    { name = "nvidia-curand" },
+    { name = "nvidia-curand", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 cusolver = [
-    { name = "nvidia-cusolver" },
+    { name = "nvidia-cusolver", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 cusparse = [
-    { name = "nvidia-cusparse" },
+    { name = "nvidia-cusparse", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 nvjitlink = [
-    { name = "nvidia-nvjitlink" },
+    { name = "nvidia-nvjitlink", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 nvrtc = [
-    { name = "nvidia-cuda-nvrtc" },
+    { name = "nvidia-cuda-nvrtc", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 nvtx = [
-    { name = "nvidia-nvtx" },
+    { name = "nvidia-nvtx", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 
 [[package]]
@@ -1569,7 +1571,7 @@ wheels = [
 
 [[package]]
 name = "regista-hraedon"
-version = "0.5.4"
+version = "0.7.0"
 source = { editable = "../regista" }
 dependencies = [
     { name = "jsonschema" },
@@ -1585,7 +1587,6 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "agent-suite-conformance", marker = "python_full_version >= '3.12' and extra == 'dev'", specifier = "==1.0.0" },
-    { name = "asn1crypto", marker = "extra == 'timestamping'", specifier = ">=1.5" },
     { name = "azure-identity", marker = "extra == 'azure'", specifier = ">=1.16" },
     { name = "azure-keyvault-secrets", marker = "extra == 'azure'", specifier = ">=4.8" },
     { name = "cryptography", marker = "extra == 'encryption'", specifier = ">=42.0" },
@@ -1595,7 +1596,6 @@ requires-dist = [
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.100" },
     { name = "jsonschema", specifier = ">=4.21" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
-    { name = "opentimestamps", marker = "extra == 'anchoring'", specifier = ">=0.4" },
     { name = "prometheus-client", specifier = ">=0.20" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },
     { name = "psycopg-pool", specifier = ">=3.2,<4" },
@@ -1614,7 +1614,7 @@ requires-dist = [
     { name = "types-pyyaml", marker = "extra == 'dev'" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'sidecar'", specifier = ">=0.30" },
 ]
-provides-extras = ["dev", "sidecar", "ed25519", "encryption", "vendor-check", "timestamping", "anchoring", "vault", "azure", "windows"]
+provides-extras = ["dev", "sidecar", "ed25519", "encryption", "vendor-check", "vault", "azure", "windows"]
 
 [[package]]
 name = "requests"

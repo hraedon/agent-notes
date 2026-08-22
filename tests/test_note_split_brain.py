@@ -24,14 +24,13 @@ from unittest.mock import patch
 
 import pytest
 from psycopg.rows import dict_row
-from regista.testing import InMemoryRegista
 
 from agent_notes.core import db as coredb
 from agent_notes.core.face_factory import reset_face, set_face_for_test
 from agent_notes.core.memory_model import add_memory, delete_memory, update_memory
 from agent_notes.core.note_model import NoteProjectionError, rebuild_from_regista
 from agent_notes.core.regista_face import RegistaFace
-from tests.conftest import ephemeral_db  # noqa: F401
+from tests.conftest import ephemeral_db, provision_v6_regista  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures("ephemeral_db")
 
@@ -48,29 +47,16 @@ def default_project():
 
 
 @pytest.fixture
-def hmac_key_path(tmp_path: Path) -> str:
-    path = tmp_path / "keys.json"
-    path.write_text(
-        json.dumps(
-            {
-                "keys": [
-                    {
-                        "key_id": "test-key-001",
-                        "secret": "dGhpcyBpcyBhIHRlc3Qgc2VjcmV0IGtleSBmb3Igc3Vic3RyYXRl",
-                        "status": "active",
-                    }
-                ]
-            }
-        )
-    )
-    return str(path)
+def v6_key_path(tmp_path: Path) -> str:
+    # provision_v6_regista writes the real v6 keyset here (conftest also
+    # exports this fixture; kept local so the module is self-describing).
+    return str(tmp_path / "v6_keys.json")
 
 
-def _setup_face(hmac_key_path: str, monkeypatch: pytest.MonkeyPatch) -> RegistaFace:
+def _setup_face(v6_key_path: str, monkeypatch: pytest.MonkeyPatch) -> RegistaFace:
     monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-    monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
-    monkeypatch.setenv("AGENT_NOTES_MODEL_LINEAGE", "glm")
-    reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+    monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
+    reg = provision_v6_regista(v6_key_path)
     face = RegistaFace(reg)
     reset_face()
     set_face_for_test(face)
@@ -84,11 +70,11 @@ def _setup_face(hmac_key_path: str, monkeypatch: pytest.MonkeyPatch) -> RegistaF
 
 class TestAddMemorySplitBrain:
     def test_projection_failure_raises_note_projection_error(
-        self, default_project, hmac_key_path, monkeypatch
+        self, default_project, v6_key_path, monkeypatch
     ):
         """When the local projection write fails after the regista event
         commits, NoteProjectionError is raised (not a generic exception)."""
-        face = _setup_face(hmac_key_path, monkeypatch)
+        face = _setup_face(v6_key_path, monkeypatch)
         try:
             with patch(
                 "agent_notes.core.note_model._mirror_note_to_projection",
@@ -120,10 +106,10 @@ class TestAddMemorySplitBrain:
             reset_face()
             face.close()
 
-    def test_recovery_via_rebuild_from_regista(self, default_project, hmac_key_path, monkeypatch):
+    def test_recovery_via_rebuild_from_regista(self, default_project, v6_key_path, monkeypatch):
         """After a split-brain add, rebuild_from_regista recovers the local
         projection — the note reappears with the correct body."""
-        face = _setup_face(hmac_key_path, monkeypatch)
+        face = _setup_face(v6_key_path, monkeypatch)
         try:
             with patch(
                 "agent_notes.core.note_model._mirror_note_to_projection",
@@ -181,20 +167,20 @@ class TestAddMemorySplitBrain:
             face.close()
 
     def test_outboxed_op_does_not_raise_note_projection_error(
-        self, default_project, hmac_key_path, monkeypatch, tmp_path
+        self, default_project, v6_key_path, monkeypatch, tmp_path
     ):
         """When the op is outboxed (regista unreachable), a local projection
         failure is a plain exception — there is no committed regista event to
         report a split-brain for."""
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
         monkeypatch.setenv("AGENT_NOTES_OUTBOX_DIR", str(tmp_path / "outbox"))
         monkeypatch.setenv("AGENT_NOTES_SESSION", uuid.uuid4().hex)
 
         from agent_notes.core.envelope import LocalKeySigner
         from agent_notes.core.outbox import OutboxAwareFace
 
-        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        reg = provision_v6_regista(v6_key_path)
         base_face = RegistaFace(reg)
         outface = OutboxAwareFace(
             base_face,
@@ -232,11 +218,11 @@ class TestAddMemorySplitBrain:
 
 class TestUpdateMemorySplitBrain:
     def test_update_projection_failure_raises_note_projection_error(
-        self, default_project, hmac_key_path, monkeypatch
+        self, default_project, v6_key_path, monkeypatch
     ):
         """A local projection failure during update (after the regista
         note_updated event commits) raises NoteProjectionError."""
-        face = _setup_face(hmac_key_path, monkeypatch)
+        face = _setup_face(v6_key_path, monkeypatch)
         try:
             mem = add_memory(
                 workspace_id=default_project.workspace_id,
@@ -273,10 +259,10 @@ class TestUpdateMemorySplitBrain:
             reset_face()
             face.close()
 
-    def test_update_recovery_via_rebuild(self, default_project, hmac_key_path, monkeypatch):
+    def test_update_recovery_via_rebuild(self, default_project, v6_key_path, monkeypatch):
         """After a split-brain update, rebuild_from_regista applies the
         note_updated event and the local projection reflects the new body."""
-        face = _setup_face(hmac_key_path, monkeypatch)
+        face = _setup_face(v6_key_path, monkeypatch)
         try:
             mem = add_memory(
                 workspace_id=default_project.workspace_id,
@@ -339,11 +325,11 @@ class TestUpdateMemorySplitBrain:
 
 class TestDeleteMemorySplitBrain:
     def test_delete_projection_failure_raises_note_projection_error(
-        self, default_project, hmac_key_path, monkeypatch
+        self, default_project, v6_key_path, monkeypatch
     ):
         """A local projection failure during delete (after the regista
         note_deleted event commits) raises NoteProjectionError."""
-        face = _setup_face(hmac_key_path, monkeypatch)
+        face = _setup_face(v6_key_path, monkeypatch)
         try:
             mem = add_memory(
                 workspace_id=default_project.workspace_id,
@@ -378,10 +364,10 @@ class TestDeleteMemorySplitBrain:
             reset_face()
             face.close()
 
-    def test_delete_recovery_via_rebuild(self, default_project, hmac_key_path, monkeypatch):
+    def test_delete_recovery_via_rebuild(self, default_project, v6_key_path, monkeypatch):
         """After a split-brain delete, rebuild_from_regista applies the
         note_deleted event and the local row is marked inactive."""
-        face = _setup_face(hmac_key_path, monkeypatch)
+        face = _setup_face(v6_key_path, monkeypatch)
         try:
             mem = add_memory(
                 workspace_id=default_project.workspace_id,
@@ -443,7 +429,7 @@ class TestDeleteMemorySplitBrain:
 
 class TestCliNeverReportsCleanSuccess:
     def test_mem_add_projection_failure_returns_nonzero(
-        self, default_project, hmac_key_path, monkeypatch, capsys
+        self, default_project, v6_key_path, monkeypatch, capsys
     ):
         """cmd_mem_add returns a nonzero exit code and a PROJECTION_FAILED
         envelope when the local projection write fails after the regista
@@ -452,7 +438,7 @@ class TestCliNeverReportsCleanSuccess:
 
         from agent_notes.cli.memory import cmd_mem_add
 
-        _setup_face(hmac_key_path, monkeypatch)
+        _setup_face(v6_key_path, monkeypatch)
         try:
             with (
                 patch(
@@ -499,7 +485,7 @@ class TestCliNeverReportsCleanSuccess:
 
 class TestCliEndToEndRecovery:
     def test_split_brain_then_cli_rebuild_restores_row(
-        self, default_project, hmac_key_path, monkeypatch, capsys
+        self, default_project, v6_key_path, monkeypatch, capsys
     ):
         """After an injected split-brain on add, running the CLI
         ``memory rebuild-from-regista`` command restores the memory row.
@@ -511,7 +497,7 @@ class TestCliEndToEndRecovery:
 
         from agent_notes.cli.memory import cmd_mem_add, cmd_mem_rebuild
 
-        face = _setup_face(hmac_key_path, monkeypatch)
+        face = _setup_face(v6_key_path, monkeypatch)
         try:
             # 1. Inject a split-brain: regista commits, local projection fails.
             with (
@@ -594,12 +580,12 @@ class TestCliEndToEndRecovery:
 
 class TestSupersedeSplitBrain:
     def test_supersede_failure_reports_both_entity_ids(
-        self, default_project, hmac_key_path, monkeypatch
+        self, default_project, v6_key_path, monkeypatch
     ):
         """When a note supersedes an existing one and the local projection
         fails after both regista appends commit, NoteProjectionError carries
         the new entity_id and mentions the superseded entity_id."""
-        face = _setup_face(hmac_key_path, monkeypatch)
+        face = _setup_face(v6_key_path, monkeypatch)
         try:
             # File the first note successfully.
             first = add_memory(
@@ -645,11 +631,11 @@ class TestSupersedeSplitBrain:
             face.close()
 
     def test_supersede_split_brain_rebuild_recovers(
-        self, default_project, hmac_key_path, monkeypatch
+        self, default_project, v6_key_path, monkeypatch
     ):
         """After a supersede split-brain, rebuild_from_regista restores the
         correct state: the new note is active, the old note is inactive."""
-        face = _setup_face(hmac_key_path, monkeypatch)
+        face = _setup_face(v6_key_path, monkeypatch)
         try:
             first = add_memory(
                 workspace_id=default_project.workspace_id,
@@ -715,13 +701,13 @@ class TestSupersedeSplitBrain:
 
 class TestProjectionDriftCheck:
     def test_no_drift_when_projection_is_consistent(
-        self, default_project, hmac_key_path, monkeypatch
+        self, default_project, v6_key_path, monkeypatch
     ):
         """When the local projection is consistent with regista, the drift
         check reports zero drifted entities."""
         from agent_notes.core.note_model import check_projection_drift
 
-        face = _setup_face(hmac_key_path, monkeypatch)
+        face = _setup_face(v6_key_path, monkeypatch)
         try:
             add_memory(
                 workspace_id=default_project.workspace_id,
@@ -740,14 +726,14 @@ class TestProjectionDriftCheck:
             face.close()
 
     def test_drift_detected_after_hard_crash_missing_row(
-        self, default_project, hmac_key_path, monkeypatch
+        self, default_project, v6_key_path, monkeypatch
     ):
         """Simulates a hard crash on add: the regista event commits but the
         local row is deleted (as if the process died before the local commit).
         The drift check detects the missing entity."""
         from agent_notes.core.note_model import check_projection_drift
 
-        face = _setup_face(hmac_key_path, monkeypatch)
+        face = _setup_face(v6_key_path, monkeypatch)
         try:
             mem = add_memory(
                 workspace_id=default_project.workspace_id,
@@ -776,13 +762,13 @@ class TestProjectionDriftCheck:
             reset_face()
             face.close()
 
-    def test_drift_detects_stale_update(self, default_project, hmac_key_path, monkeypatch):
+    def test_drift_detects_stale_update(self, default_project, v6_key_path, monkeypatch):
         """Simulates a hard crash on update: the regista note_updated event
         commits but the local row still has the old body. The drift check
         reports a stale entity with a body mismatch reason."""
         from agent_notes.core.note_model import check_projection_drift
 
-        face = _setup_face(hmac_key_path, monkeypatch)
+        face = _setup_face(v6_key_path, monkeypatch)
         try:
             mem = add_memory(
                 workspace_id=default_project.workspace_id,
@@ -822,13 +808,13 @@ class TestProjectionDriftCheck:
             reset_face()
             face.close()
 
-    def test_drift_detects_stale_delete(self, default_project, hmac_key_path, monkeypatch):
+    def test_drift_detects_stale_delete(self, default_project, v6_key_path, monkeypatch):
         """Simulates a hard crash on delete: the regista note_deleted event
         commits but the local row is still active. The drift check reports a
         stale entity with an active mismatch reason."""
         from agent_notes.core.note_model import check_projection_drift
 
-        face = _setup_face(hmac_key_path, monkeypatch)
+        face = _setup_face(v6_key_path, monkeypatch)
         try:
             mem = add_memory(
                 workspace_id=default_project.workspace_id,
@@ -867,7 +853,7 @@ class TestProjectionDriftCheck:
             face.close()
 
     def test_cli_check_drift_exits_nonzero_on_drift(
-        self, default_project, hmac_key_path, monkeypatch, capsys
+        self, default_project, v6_key_path, monkeypatch, capsys
     ):
         """The CLI 'memory check-drift' command exits nonzero (EXIT_CONFLICT)
         when drift exists, while still emitting structured JSON."""
@@ -875,7 +861,7 @@ class TestProjectionDriftCheck:
 
         from agent_notes.cli.memory import cmd_mem_check_drift
 
-        face = _setup_face(hmac_key_path, monkeypatch)
+        face = _setup_face(v6_key_path, monkeypatch)
         try:
             mem = add_memory(
                 workspace_id=default_project.workspace_id,
@@ -916,14 +902,14 @@ class TestProjectionDriftCheck:
             face.close()
 
     def test_cli_check_drift_exits_zero_when_clean(
-        self, default_project, hmac_key_path, monkeypatch, capsys
+        self, default_project, v6_key_path, monkeypatch, capsys
     ):
         """The CLI 'memory check-drift' command exits 0 when no drift exists."""
         import argparse
 
         from agent_notes.cli.memory import cmd_mem_check_drift
 
-        face = _setup_face(hmac_key_path, monkeypatch)
+        face = _setup_face(v6_key_path, monkeypatch)
         try:
             add_memory(
                 workspace_id=default_project.workspace_id,

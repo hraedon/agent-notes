@@ -24,9 +24,13 @@ When reviewing an agent-notes work item, use the CLI to read the item, inspect t
 - Discover the queue: `agent-notes work-item review list --path <repo-path> --json`
 - Read the item: `agent-notes work-item get <id> --path <repo-path> --with-body --json`
 - Inspect commits: `git log --oneline -10`, `git diff <base>..<head>`
-- Record the review: `agent-notes work-item review pass|request-changes|reject <id> --path <repo-path> --note "..." --actor-id <your-id> --model-lineage minimax --json`
+- Record the review after configuring the process-level canonical actor and
+  producer lineage: `agent-notes work-item review pass|request-changes|reject <id> --path <repo-path> --note "..." --json`
 
-Use `--actor-id adversarial-reviewer-minimax-m3` and `--model-lineage minimax` so the cross-lineage gate can distinguish you from the author. If you share a lineage with the author, add `--same-lineage-acknowledged` and justify it in the note.
+Use `AGENT_NOTES_ACTOR_ID=agent:reviewer-minimax` and
+`REGISTA_PRODUCER_MODEL_LINEAGE=minimax` in the process environment so the
+cross-lineage gate can distinguish you from the author. If you share a lineage
+with the author, add `--same-lineage-acknowledged` and justify it in the note.
 
 Focus on:
 - Logical errors, off-by-one mistakes, and incorrect algorithms
