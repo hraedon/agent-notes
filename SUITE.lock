@@ -19,7 +19,7 @@
 
 [component]
 name = "agent-notes"
-version = "1.0.0"
+version = "1.1.0"
 
 [spine]
 name = "regista"
@@ -28,24 +28,23 @@ distribution = "regista-hraedon"
 repo = "hraedon/regista"
 # The released PyPI version this agent-notes release develops + tests against.
 # Must equal agent-suite/SUITE.lock [components.regista].version.
-version = "0.5.5"
+version = "0.7.0"
 # The git SHA of regista this agent-notes release was tested against == the
-# umbrella's [components.regista].revision (the v0.5.5 tag).
+# umbrella's [components.regista].revision (the v0.7.0 tag).
 # Resolve the local sibling with: git -C ../regista checkout <sha>
-sha = "375f1a1b4b808d4693493a8e98e7bfbe4bb0d278"
-describe = "v0.5.5"
+sha = "a1caf95b3ff6029192804f0ca773ce890d4f3401"
+describe = "v0.7.0"
 # Mirrors the range declared in pyproject.toml (the published bounds); the
-# exact version to develop against is `version` above, not this range. The <0.6
-# upper cap is the WI-072 v6 guard (regista 0.6.0 refuses on_behalf_of in a v6
-# epoch); it lifts when the v6 port lands.
-pyproject_floor = "regista-hraedon>=0.5.1,<0.6"
+# exact version to develop against is `version` above, not this range.
+pyproject_floor = "regista-hraedon>=0.7.0,<0.8"
 
 [envelope]
 # Regista event-envelope + canonical-workflow versions the face writes.
 # (Sourced from regista's own version surface; recorded here so a mismatch is
 # detectable without standing up the full interop CI.)
-envelope_version = "v5"
-canonical_workflow = "v2"
+# v6: the ported face writes v6 canonical envelopes only.
+envelope_version = "v6"
+canonical_workflow = "v3"
 
 [embedding]
 # Pre-cache target so a work install does no model-download egress on first run

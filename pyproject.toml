@@ -1,7 +1,8 @@
 [project]
 name = "agent-notes-hraedon"
-version = "1.0.0"
+version = "1.1.0"
 description = "Unified pgvector-backed CLI for agent notes (breadcrumbs, memories, reflections) shared across the sf2 constellation"
+readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "psycopg[binary]>=3.1",
@@ -13,28 +14,16 @@ dependencies = [
     "uvicorn>=0.20",
     "cryptography>=42.0",
     "platformdirs>=4.0",
-    # Upper cap <0.6 (WI-072): regista 0.6.0 refuses `on_behalf_of` inside a v6
-    # epoch (`on_behalf_of_has_no_v6_field`) and refuses legacy writes on both
-    # sides of genesis. agent-notes still passes `on_behalf_of` in src (core/
-    # regista_face.py, actor.py, outbox.py, reconcile.py, face_factory.py), so
-    # resolving to 0.6.0 breaks writes at run time with confusing errors.
-    #
-    # NOTE — this cap binds the *published* metadata and the pip install path
-    # (scripts/dev-install.py, which is what CI uses). It does NOT bind the
-    # `[tool.uv.sources]` editable ../regista mapping below: uv ignores version
-    # specifiers on path/editable sources, so `uv lock` will happily record
-    # whatever version the sibling checkout happens to be — silently, with
-    # `uv lock --check` still passing. That hole is covered by the belt-and-
-    # braces tripwires in tests/test_develop_against_lock.py, which assert the
-    # locked/pinned regista stays <0.6. Remove the cap and those tripwires
-    # together as part of the v6 port ([D] phase), not before.
-    "regista-hraedon>=0.5.1,<0.6",
+    "regista-hraedon>=0.7.0,<0.8",
 ]
 
 [project.optional-dependencies]
 test = [
     "pytest>=8.0",
     "testcontainers[postgres]>=4.0",
+    # SUITE.lock ↔ pyproject version-coherence test (tests/test_develop_against_lock.py)
+    # needs real specifier semantics, not ad-hoc string parsing.
+    "packaging>=24.0",
     # CLI contract v1 conformance kit (Plan 018 WI-2), a normal pinned version
     # dependency (Plan 019 B1). Previously a git+SHA direct reference installed
     # by a separate CI step — which PyPI forbids in uploaded metadata; now a

@@ -9,13 +9,11 @@ cleared after a successful reconcile).
 
 from __future__ import annotations
 
-import json
 import uuid
 from pathlib import Path
 
 import pytest
 from psycopg.rows import dict_row
-from regista.testing import InMemoryRegista
 
 from agent_notes.core import db as coredb
 from agent_notes.core.actor import Actor
@@ -25,7 +23,7 @@ from agent_notes.core.memory_model import add_memory
 from agent_notes.core.outbox import OutboxAwareFace, count_ops, read_all
 from agent_notes.core.reconcile import reconcile
 from agent_notes.core.regista_face import RegistaFace
-from tests.conftest import ephemeral_db  # noqa: F401
+from tests.conftest import ephemeral_db, provision_v6_regista  # noqa: F401
 
 _PROJECT = "note_ac"
 
@@ -45,34 +43,22 @@ def signer(tmp_path: Path) -> LocalKeySigner:
 
 @pytest.fixture
 def actor() -> Actor:
-    return Actor(actor_id="note-ac-agent", display_name="Note AC")
+    return Actor(actor_id="agent:note-ac-agent", actor_kind="agent", display_name="Note AC")
 
 
 @pytest.fixture
-def hmac_key_path(tmp_path: Path) -> str:
-    path = tmp_path / "keys.json"
-    path.write_text(
-        json.dumps(
-            {
-                "keys": [
-                    {
-                        "key_id": "test-key-001",
-                        "secret": "dGhpcyBpcyBhIHRlc3Qgc2VjcmV0IGtleSBmb3Igc3Vic3RyYXRl",
-                        "status": "active",
-                    }
-                ]
-            }
-        )
-    )
-    return str(path)
+def v6_key_path(tmp_path: Path) -> str:
+    # provision_v6_regista writes the real v6 keyset here (conftest also
+    # exports this fixture; kept local so the module is self-describing).
+    return str(tmp_path / "v6_keys.json")
 
 
 class TestNoteOutboxCapture:
     """Face-level (no Postgres): an unreachable append_note captures to the
     outbox and never surfaces failure to the caller."""
 
-    def test_offline_append_enqueues(self, outbox_env, signer, actor, hmac_key_path) -> None:
-        face = RegistaFace(InMemoryRegista(hmac_key_path=hmac_key_path))
+    def test_offline_append_enqueues(self, outbox_env, signer, actor, v6_key_path) -> None:
+        face = RegistaFace(provision_v6_regista(v6_key_path, project=_PROJECT))
         outface = OutboxAwareFace(
             face, project=_PROJECT, signer=signer, unreachable_probe=lambda: True
         )
@@ -94,10 +80,8 @@ class TestNoteOutboxCapture:
         assert payload["args"]["transition"] == "note_filed"
         assert payload["args"]["payload"] == {"name": "x", "body": "b"}
 
-    def test_live_append_sets_outboxed_false(
-        self, outbox_env, signer, actor, hmac_key_path
-    ) -> None:
-        face = RegistaFace(InMemoryRegista(hmac_key_path=hmac_key_path))
+    def test_live_append_sets_outboxed_false(self, outbox_env, signer, actor, v6_key_path) -> None:
+        face = RegistaFace(provision_v6_regista(v6_key_path, project=_PROJECT))
         outface = OutboxAwareFace(
             face, project=_PROJECT, signer=signer, unreachable_probe=lambda: False
         )
@@ -111,8 +95,8 @@ class TestNoteReconcileReplay:
     """An offline append captured to the outbox is replayed into regista on
     reconcile against a reachable face."""
 
-    def test_replay_creates_note_event(self, outbox_env, signer, actor, hmac_key_path) -> None:
-        face = RegistaFace(InMemoryRegista(hmac_key_path=hmac_key_path))
+    def test_replay_creates_note_event(self, outbox_env, signer, actor, v6_key_path) -> None:
+        face = RegistaFace(provision_v6_regista(v6_key_path, project=_PROJECT))
         outface = OutboxAwareFace(
             face, project=_PROJECT, signer=signer, unreachable_probe=lambda: True
         )
@@ -135,8 +119,8 @@ class TestNoteReconcileReplay:
         assert events[0].transition == "note_filed"
         assert events[0].payload["name"] == "replay-me"
 
-    def test_replay_then_update_in_order(self, outbox_env, signer, actor, hmac_key_path) -> None:
-        face = RegistaFace(InMemoryRegista(hmac_key_path=hmac_key_path))
+    def test_replay_then_update_in_order(self, outbox_env, signer, actor, v6_key_path) -> None:
+        face = RegistaFace(provision_v6_regista(v6_key_path, project=_PROJECT))
         outface = OutboxAwareFace(
             face, project=_PROJECT, signer=signer, unreachable_probe=lambda: True
         )
@@ -167,12 +151,12 @@ class TestNoteOutboxEndToEnd:
         )
 
     def test_offline_add_then_reconcile(
-        self, default_project, hmac_key_path, signer, outbox_env, monkeypatch
+        self, default_project, v6_key_path, signer, outbox_env, monkeypatch
     ) -> None:
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "test-agent")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:test-agent")
 
-        reg = InMemoryRegista(hmac_key_path=hmac_key_path)
+        reg = provision_v6_regista(v6_key_path, project=_PROJECT)
         face = RegistaFace(reg)
         outface = OutboxAwareFace(
             face, project=_PROJECT, signer=signer, unreachable_probe=lambda: True

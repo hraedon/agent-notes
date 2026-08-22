@@ -6,9 +6,6 @@ Usage:
     REGISTA_KEY_PATH=/path/to/keys.json \
     python -m agent_notes.scripts.migrate_to_regista [--project <slug>] [--apply]
 
-(Legacy AGENT_NOTES_REGISTA_DSN / _HMAC_KEY_PATH aliases still work but warn;
-see Plan 017 WI-1.1.)
-
 Dry-run by default. With --apply, creates a regista breadcrumb work-item (now on
 the canonical v2 lifecycle) for each local row and records the
 regista_work_item_id back on the local row. Legacy breadcrumb statuses map onto
@@ -154,15 +151,13 @@ def _run_migration(project_slug: str | None, apply: bool) -> int:
     cfg = regista_config()
     if not cfg.dsn:
         print(
-            "No regista DSN found. Set REGISTA_DSN (canonical, Plan 017 WI-1.1) "
-            "or the legacy AGENT_NOTES_REGISTA_DSN alias; cannot migrate.",
+            "No regista DSN found. Set REGISTA_DSN (Plan 017 WI-1.1); cannot migrate.",
             file=sys.stderr,
         )
         return 2
-    if not cfg.hmac_key_path:
+    if not cfg.key_path:
         print(
-            "No signing key found. Set REGISTA_KEY_PATH (canonical, Plan 017 WI-1.1) "
-            "or the legacy AGENT_NOTES_REGISTA_HMAC_KEY_PATH alias; cannot migrate.",
+            "No signing key found. Set REGISTA_KEY_PATH (Plan 017 WI-1.1); cannot migrate.",
             file=sys.stderr,
         )
         return 2
@@ -175,7 +170,7 @@ def _run_migration(project_slug: str | None, apply: bool) -> int:
             regista.Regista(
                 cfg.dsn,
                 cfg.project,
-                cfg.hmac_key_path,
+                cfg.key_path,
                 require_ssl=cfg.require_ssl,
             )
         )

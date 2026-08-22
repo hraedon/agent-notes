@@ -8,7 +8,7 @@ Consolidates and supersedes the standalone `breadcrumb-mcp` and `memory-mcp` pro
 
 - **Plan 004** (MCP→CLI flattening): Phases 9a–9d complete. CLI is the primary sync surface; skills installed across Claude Code and opencode; MCP servers removed.
 - **Plan 007** (lifecycle enforcement spine): Piece 0 (error contract), Piece 1 (`init` + `orient` + Claude Code `SessionStart` hook), and Piece 2 (opencode plugin with `experimental.chat.system.transform` orientation + `experimental.session.compacting` reconciliation) complete. Both harnesses now enforce the lifecycle spine.
-- **Plan 008** (work-log coordination kernel): **P0–P4 complete; Tier A shipped.** The op-CRDT kernel (`op_log`, `work_items` cache, `content_blobs`, verifier), status lattice, merge/reconcile, cross-project derived index (registry, export/ingest, reverse-edge map), cross-project trigger loop, local lease table, and claim/heartbeat/release CLI are all shipped. **Tier A degrade contract is the default safe mode** — `doctor` reports `coordinator-absent / local-lease`; the `breadcrumb → work-item` migration has been executed and verified (cache rebuild from op-log matches). The **regista coordinator integration is an optional, not-yet-attached L3 layer** (Tier B) — the tool works correctly without it; it adds only race-free multi-writer claims at concurrent scale. The `requeue_expired` daemon timer is also Tier B.
+- **Plan 008** (work-log coordination kernel): **P0–P4 complete; Tier A shipped.** The op-CRDT kernel (`op_log`, `work_items` cache, `content_blobs`, verifier), status lattice, merge/reconcile, cross-project derived index (registry, export/ingest, reverse-edge map), cross-project trigger loop, local lease table, and claim/heartbeat/release CLI are all shipped. **Tier A degrade contract is the default safe mode** — `doctor` reports `coordinator-absent / local-lease`; the `breadcrumb → work-item` migration has been executed and verified (cache rebuild from op-log matches). The regista face is an optional write-through authority for projects that have been externally provisioned with the canonical workflow and v6 epoch. The `requeue_expired` daemon timer is also Tier B.
 
 ## Quickstart
 
@@ -18,6 +18,16 @@ uv venv && uv pip install -e ".[test]"
 
 # Configure
 export AGENT_NOTES_DSN="postgresql://user:pass@host:5432/agent_notes"
+export AGENT_NOTES_ACTOR_ID="agent:operator"
+export REGISTA_PRODUCER_HARNESS="your-harness"
+export REGISTA_PRODUCER_HARNESS_VERSION="your-harness-version"
+
+# Optional regista write-through face (canonical suite contract)
+export REGISTA_DSN="postgresql://user:pass@host:5432/regista"
+export REGISTA_KEY_PATH="$HOME/.config/regista/keys.json"
+export REGISTA_REQUIRE_SSL="true"
+export AGENT_NOTES_PROJECT="project-slug"
+export AGENT_NOTES_REGISTA_WRITES="1"
 
 # Create schema
 agent-notes-setup
@@ -31,6 +41,14 @@ agent-notes work-item file --title "Found a bug" --type bug --status open
 # Add a memory
 agent-notes memory add --name "postgres-tuning" --body "..." --type note
 ```
+
+Regista configuration is intentionally breaking and canonical: use only
+`REGISTA_DSN`, `REGISTA_KEY_PATH`, `REGISTA_REQUIRE_SSL`, and
+`AGENT_NOTES_PROJECT` for those four values. The optional
+`~/.config/agent-notes/config.json` fallback uses a `regista` block with
+`dsn`, `key_path`, `require_ssl`, and `writes_enabled`; unknown or retired
+names are ignored. `AGENT_NOTES_REGISTA_WRITES` remains the tool-specific write
+gate.
 
 ### CLI surface
 
@@ -74,17 +92,17 @@ agent-notes work-item get <id> [--with-body] [--json]
 agent-notes work-item find [--status ...] [--type ...] [--text ...] [--path PATH] [--json]
 agent-notes work-item ready [--path PATH] [--json]
 agent-notes work-item claimable [--path PATH] [--json]
-agent-notes work-item claim <id> [--actor-id ...] [--ttl 300] [--json]
-agent-notes work-item release <id> [--actor-id ...] [--json]
-agent-notes work-item heartbeat <id> [--actor-id ...] [--ttl 300] [--json]
+agent-notes work-item claim <id> [--ttl 300] [--json]
+agent-notes work-item release <id> [--json]
+agent-notes work-item heartbeat <id> [--ttl 300] [--json]
 agent-notes work-item requeue-expired [--json]
 agent-notes work-item close <id> [--path PATH] [--json]
 agent-notes work-item attest-gate <id> --reason <txt> [--path PATH] [--json]
 agent-notes work-item review list [--path PATH] [--json]
-agent-notes work-item review pass    <id> --note <txt> [--actor-id ...] [--model-lineage ...] [--same-lineage-acknowledged] [--json]
-agent-notes work-item review accept  <id> --note <txt> [--actor-id ...] [--model-lineage ...] [--json]
-agent-notes work-item review reject  <id> --note <txt> [--actor-id ...] [--model-lineage ...] [--json]
-agent-notes work-item review request-changes <id> --note <txt> [--actor-id ...] [--json]
+agent-notes work-item review pass    <id> --note <txt> [--same-lineage-acknowledged] [--json]
+agent-notes work-item review accept  <id> --note <txt> [--json]
+agent-notes work-item review reject  <id> --note <txt> [--json]
+agent-notes work-item review request-changes <id> --note <txt> [--json]
 
 
 agent-notes changes since <timestamp-or-id> [--json]

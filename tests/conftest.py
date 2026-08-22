@@ -18,11 +18,113 @@ from pathlib import Path
 import docker.errors
 import psycopg
 import pytest
+from regista import canonical_workflow_yaml
+from regista.testing import InMemoryRegista, make_v6_keyset, open_v6_epoch
 from testcontainers.postgres import PostgresContainer
 
 from agent_notes.core import db as coredb
 
 SCHEMA_DIR = Path(__file__).resolve().parents[1] / "schema"
+
+# The producer identity regista resolves from the process environment. Tests
+# (and regista's own test helpers, e.g. ``set_v6_producer_env`` inside
+# ``open_v6_epoch``) mutate these variables directly in ``os.environ`` —
+# deliberately outside ``monkeypatch`` — so without a per-test restore a
+# producer configured in one test silently signs every later test's events.
+_PRODUCER_ENV_KEYS = (
+    "REGISTA_PRODUCER_HARNESS",
+    "REGISTA_PRODUCER_HARNESS_VERSION",
+    "REGISTA_PRODUCER_MODEL",
+    "REGISTA_PRODUCER_MODEL_LINEAGE",
+)
+
+# Keep the test-only v6 identity vocabulary explicit.  Production code must not
+# open an epoch or register a workflow as a side effect of constructing a face;
+# tests that need an ordinary v6 writer provision the throwaway project through
+# this helper instead.
+V6_TEST_PRINCIPALS: tuple[str, ...] = (
+    "agent:worker",
+    "agent:test-agent",
+    "agent:author-agent",
+    "agent:reviewer",
+    "agent:accepter",
+    "agent:env-linker",
+    "agent:env-remover",
+    "agent:env-lease-agent",
+    "agent:p3-test-agent",
+    "agent:note-ac-agent",
+    "agent:ac-test-agent",
+    "agent:a",
+    "agent:b",
+    "agent:deleter-agent",
+    "human:operator",
+    "human:reviewer",
+    "service:hooks",
+    "service:agent-notes-migration",
+)
+
+
+def shape_valid_delegation(*, subject_principal_id: str) -> dict:
+    """A structurally parseable action-delegation document.
+
+    The signature is inert zeros — ``parse_action_delegation`` checks shape,
+    not cryptography; the chain is verified by regista at write time. This is
+    for refusal-path tests only (checks that run before any verification,
+    like the terminal-subject match or the reconciliation credential-hash
+    comparison), never for a write that must be accepted as delegated.
+    """
+
+    import base64
+    import uuid as _uuid
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    fmt = "%Y-%m-%dT%H:%M:%S.%fZ"
+    return {
+        "type": "regista.action-delegation",
+        "version": 1,
+        "credential_id": str(_uuid.uuid4()),
+        "trust_domain_id": str(_uuid.uuid4()),
+        "issuer_principal_id": "human:operator",
+        "subject_principal_id": subject_principal_id,
+        "issuer_key_id": "pk_test",
+        "issuer_key_binding_event_hash": "sha256:" + "ab" * 32,
+        "parent_credential_hash": None,
+        "scope": {
+            "project_instance_ids": [str(_uuid.uuid4())],
+            "entity_kinds": ["work_item"],
+            "workflow_names": ["canonical"],
+            "transitions": ["amend"],
+        },
+        "not_before": (now - timedelta(hours=1)).strftime(fmt),
+        "not_after": (now + timedelta(hours=1)).strftime(fmt),
+        "max_uses": None,
+        "delegation_allowed": False,
+        "signature": {
+            "scheme_id": "ed25519",
+            "value": base64.b64encode(b"\x00" * 64).decode("ascii"),
+        },
+    }
+
+
+def provision_v6_regista(key_path: str | Path, *, project: str = "test_project") -> InMemoryRegista:
+    """Return a throwaway, fully admitted v6 in-memory regista instance.
+
+    The helper intentionally lives in the consumer test suite.  It keeps the
+    production ``RegistaFace`` honest: workflow registration and genesis are
+    external provisioning operations, never an implicit write-path side effect.
+    """
+
+    path = Path(key_path)
+    keyset = make_v6_keyset(
+        path.parent,
+        principals=V6_TEST_PRINCIPALS,
+        filename=path.name,
+    )
+    instance = InMemoryRegista(project=project, hmac_key_path=keyset.path)
+    open_v6_epoch(instance, keyset, principals=V6_TEST_PRINCIPALS)
+    instance.register_workflow(canonical_workflow_yaml())
+    return instance
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -49,21 +151,18 @@ def _hermetic_config(tmp_path_factory):
         "AGENT_NOTES_CONFIG",
         "AGENT_SUITE_CONFIG",
         "AGENT_SUITE_SYSTEM_CONFIG",
-        # Legacy aliases (one-release back-compat, Plan 017 WI-1.1) ...
-        "AGENT_NOTES_REGISTA_DSN",
-        "AGENT_NOTES_REGISTA_HMAC_KEY_PATH",
-        "AGENT_NOTES_REGISTA_PROJECT",
-        "AGENT_NOTES_REGISTA_REQUIRE_SSL",
+        # Clear the canonical suite vars and the tool-specific write gate so a
+        # host environment cannot enable regista for every test.
         "AGENT_NOTES_REGISTA_WRITES",
-        # ... and the canonical suite env vars the resolver prefers. Without
-        # clearing these, a host with REGISTA_DSN set enables regista for every
-        # test (the alias clearing above is a no-op when the canonical var is
-        # present), routing test writes to the production spine.
         "REGISTA_DSN",
         "REGISTA_KEY_PATH",
         "REGISTA_REQUIRE_SSL",
-        # Principal_id (Plan 017 WI-4.2) — clear so tests control their own.
-        "AGENT_NOTES_PRINCIPAL_ID",
+        "REGISTA_PRODUCER_HARNESS",
+        "REGISTA_PRODUCER_HARNESS_VERSION",
+        "REGISTA_PRODUCER_MODEL",
+        "REGISTA_PRODUCER_MODEL_LINEAGE",
+        # Canonical actor identity (v6) — clear so tests control their own.
+        "AGENT_NOTES_ACTOR_ID",
         "REGISTA_PRINCIPAL_ID",
         # Project slug (WI-029 sweep) — the per-user suite.env overlay exports
         # AGENT_NOTES_PROJECT on bootstrapped hosts; inherited into the test
@@ -72,25 +171,15 @@ def _hermetic_config(tmp_path_factory):
         "AGENT_NOTES_PROJECT",
     )
     saved = {k: os.environ.get(k) for k in keys}
-    saved["AGENT_NOTES_MODEL_LINEAGE"] = os.environ.get("AGENT_NOTES_MODEL_LINEAGE")
+    saved["AGENT_NOTES_ACTOR_ID"] = os.environ.get("AGENT_NOTES_ACTOR_ID")
     os.environ["AGENT_NOTES_CONFIG"] = str(cfg)
     os.environ["AGENT_SUITE_CONFIG"] = str(suite_cfg)
     os.environ["AGENT_SUITE_SYSTEM_CONFIG"] = str(suite_cfg)
     for k in keys[3:]:
         os.environ.pop(k, None)
-    # WI-062: agent-kind work-item writes now refuse without a declared model
-    # lineage, so the test session stands in for a correctly-wired host (which
-    # sets this in suite.env). Tests that exercise the *refusal* delete it
-    # explicitly — see tests/test_actor_lineage.py and
-    # test_review_transition.py::test_undeclared_author_is_refused_at_file_time.
-    # A session default rather than a per-test one keeps the ~60 write-path
-    # tests about what they are actually testing.
-    # This must be a family from regista's canonical registry, not a made-up
-    # token: regista WI-285 closed the lineage vocabulary and refuses anything
-    # else at ingress with INVALID_MODEL_LINEAGE, so a stand-in like
-    # "test-lineage" now fails every write-path test rather than standing in
-    # for a wired host. See agent-suite WI-072 for the lock-advance ordering.
-    os.environ["AGENT_NOTES_MODEL_LINEAGE"] = "claude-opus"
+    # All ordinary write-path tests run as one canonical fixture actor. Tests
+    # that exercise the refusal path delete this value explicitly.
+    os.environ["AGENT_NOTES_ACTOR_ID"] = "agent:worker"
     try:
         yield
     finally:
@@ -108,6 +197,94 @@ def _apply_schema(dsn: str) -> None:
         with psycopg.connect(dsn) as conn:
             with conn.transaction():
                 conn.execute(sql)
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_producer_env():
+    """Snapshot/restore the process producer identity around every test.
+
+    ``provision_v6_regista`` → ``open_v6_epoch`` → ``set_v6_producer_env``
+    writes ``REGISTA_PRODUCER_*`` straight into ``os.environ`` (only filling
+    absent variables), so the first provisioning test would otherwise pin the
+    producer for the whole session and make later tests depend on execution
+    order. Restoring per test keeps each test's producer claims its own.
+    """
+
+    saved = {key: os.environ.get(key) for key in _PRODUCER_ENV_KEYS}
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+@pytest.fixture
+def v6_key_path(tmp_path: Path) -> str:
+    """Path for a throwaway v6 keyset (no file written here).
+
+    The HMAC-era placeholder manifest is gone: ``provision_v6_regista`` (or
+    ``make_v6_keyset``) writes the real keyset at this path, so pre-writing a
+    stand-in file would only be overwritten — and would mislabel a v6 keyset
+    as an HMAC key manifest.
+    """
+
+    return str(tmp_path / "v6_keys.json")
+
+
+@pytest.fixture
+def producer_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
+    """Set a truthful producer (model and lineage as a consistent pair).
+
+    Every fixture that moves the producer lineage must move the paired model
+    with it: the producer block signs both, and a ``REGISTA_PRODUCER_MODEL``
+    from one family next to a ``REGISTA_PRODUCER_MODEL_LINEAGE`` from another
+    is a false identity claim the test would then commit to the event log.
+    Tests override via ``_set_truthful_producer`` on the returned patcher.
+    """
+
+    _set_truthful_producer(monkeypatch, model=TEST_PRODUCER_MODEL, lineage=TEST_PRODUCER_LINEAGE)
+    return monkeypatch
+
+
+# The default fixture producer: one model, one lineage, mutually consistent
+# (mirrors regista's own test identity: harness claude-code / model
+# claude-fable-5 / lineage fable).
+TEST_PRODUCER_MODEL = "claude-fable-5"
+TEST_PRODUCER_LINEAGE = "fable"
+
+# Truthful (model, lineage) pairs a test may switch the producer between.
+TRUTHFUL_PRODUCER_PAIRS: dict[str, str] = {
+    "claude-fable-5": "fable",
+    "kimi-k2.5": "kimi",
+    "glm-5.3": "glm",
+    "claude-opus-4.6": "claude-opus",
+    "longcat-flash-1": "longcat",
+}
+
+
+def _set_truthful_producer(
+    monkeypatch: pytest.MonkeyPatch, *, model: str, lineage: str | None = None
+) -> None:
+    """Point the process producer at a consistent (model, lineage) pair.
+
+    ``lineage=None`` looks the pair up from the model so callers cannot drift
+    the two apart. Harness identity always stays set (the v6 writer refuses
+    without it).
+    """
+
+    if lineage is None:
+        lineage = TRUTHFUL_PRODUCER_PAIRS.get(model)
+        if lineage is None:
+            raise ValueError(f"no truthful lineage pairing declared for model {model!r}")
+    if TRUTHFUL_PRODUCER_PAIRS.get(model) != lineage:
+        raise ValueError(f"untruthful producer pair: model {model!r} is not a {lineage!r} model")
+    monkeypatch.setenv("REGISTA_PRODUCER_HARNESS", "claude-code")
+    monkeypatch.setenv("REGISTA_PRODUCER_HARNESS_VERSION", "test-harness/1")
+    monkeypatch.setenv("REGISTA_PRODUCER_MODEL", model)
+    monkeypatch.setenv("REGISTA_PRODUCER_MODEL_LINEAGE", lineage)
 
 
 @pytest.fixture(scope="session")

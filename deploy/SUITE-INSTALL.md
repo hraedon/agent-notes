@@ -45,6 +45,23 @@ The two suite secrets and the recommended pattern:
 | regista DSN (incl. password) | `REGISTA_DSN` | `env:REGISTA_DSN_VALUE` or `vault:secret/agent-suite/regista#dsn` |
 | signing key-set manifest | `REGISTA_KEY_PATH` | a file path (default), or `vault:secret/agent-suite/regista#keys` |
 
+If a launcher cannot provide environment variables, the optional
+`~/.config/agent-notes/config.json` fallback uses the following `regista`
+shape (the write gate is still tool-specific):
+
+```json
+{
+  "regista": {
+    "dsn": "postgresql://user:pass@host/db",
+    "key_path": "/path/to/keys.json",
+    "require_ssl": true,
+    "writes_enabled": true
+  }
+}
+```
+
+The configuration surface is canonical and breaking; unknown names are ignored.
+
 **Key-set manifest vs key material.** regista's key-set JSON is a *manifest*
 (key ids, roles, statuses); each entry may carry its secret inline **or** point
 at the backend via a per-key `secret_ref`. The custody best practice is to keep

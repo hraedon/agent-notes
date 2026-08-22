@@ -38,7 +38,7 @@ from agent_notes.core.regista_face import RegistaFace, normalize_source_identifi
 
 TERMINAL = {"done", "closed"}
 DEDUP_ACTOR = Actor(
-    actor_id="agent-notes-dedup",
+    actor_id="service:agent-notes-dedup",
     actor_kind="system",
     role="system",
     display_name="agent-notes dedup repair (Plan 015)",
@@ -132,8 +132,7 @@ def main() -> int:
     dsn = regista_config().dsn
     if not dsn:
         print(
-            "No regista DSN found. Set REGISTA_DSN (canonical, Plan 017 WI-1.1) "
-            "or the legacy AGENT_NOTES_REGISTA_DSN alias.",
+            "No regista DSN found. Set REGISTA_DSN (Plan 017 WI-1.1).",
             file=sys.stderr,
         )
         return 2
@@ -167,7 +166,7 @@ def main() -> int:
     from agent_notes.core.config import regista_config
 
     cfg = regista_config()
-    reg = regista.Regista(cfg.dsn, args.project, cfg.hmac_key_path, require_ssl=cfg.require_ssl)
+    reg = regista.Regista(cfg.dsn, args.project, cfg.key_path, require_ssl=cfg.require_ssl)
     face = RegistaFace(reg)
     done = 0
     try:

@@ -33,27 +33,31 @@ The gate enforces two identity checks:
 
 1. **Separation of duties** — your `actor_id` must differ from every
    actor who worked the item (no self-review).
-2. **Cross-lineage** — if you are an agent, your `model_lineage` must be
-   declared and distinct from the authors' lineages. Set it via:
+2. **Cross-lineage** — if you are an agent, the process-level producer
+   `REGISTA_PRODUCER_MODEL_LINEAGE` must be declared and distinct from the
+   authors' lineages. Configure it in the process environment or suite.env:
 
    ```
-   --actor-id <your-distinct-id> --model-lineage <your-lineage>
+   AGENT_NOTES_ACTOR_ID=agent:reviewer \
+   REGISTA_PRODUCER_MODEL_LINEAGE=<your-lineage> \
+   agent-notes work-item review pass ...
    ```
 
-   Lineage values are regista's closed registry families — the family,
-   never a versioned build or harness name: `kimi`, `glm`, `nemotron`,
-   `minimax`, `deepseek`, `qwen`, `claude-opus`, `claude-sonnet`, `fable`,
-   `gpt-sol`, `human`. If you share a lineage with an author, the gate
-   allows the review only with `--same-lineage-acknowledged` (the note must
-   justify why same-lineage review is acceptable here).
+   Lineage values are regista's closed registry families — the family, never a
+   versioned build or harness name: `kimi`, `glm`, `nemotron`, `minimax`,
+   `deepseek`, `qwen`, `claude-opus`, `claude-sonnet`, `fable`, `gpt-sol`.
+   If you share a lineage with an author, the gate allows the review only with
+   `--same-lineage-acknowledged` (the note must justify why same-lineage review
+   is acceptable here). There are no `--actor-id` or `--model-lineage`
+   command-line overrides.
 
    Both identity checks gate the *positive* verdicts (`pass`, `accept`).
    Under canonical workflow v3 (regista WI-284), `request-changes` is
    `finding_only`: any actor — including one whose independence is
    unprovable — may record a negative finding, provided the note is
    substantive. No independence claim is made or required for it. (A
-   deployment still on canonical v2 gates `request-changes` on
-   independence too; declare your lineage either way.)
+    deployment still on canonical v2 gates `request-changes` on
+    independence too; configure your producer lineage either way.)
 
 ## Step 1: Discover what's awaiting review
 
@@ -100,8 +104,6 @@ The work is sound; advance it to the final accept gate:
 agent-notes work-item review pass <identifier> \
   --path <repo-path> \
   --note "<your findings: what you checked, what you found, why it's sound>" \
-  --actor-id <your-id> \
-  --model-lineage <your-lineage> \
   --json
 ```
 
@@ -116,8 +118,6 @@ The work needs revision:
 agent-notes work-item review request-changes <identifier> \
   --path <repo-path> \
   --note "<specific issues to address>" \
-  --actor-id <your-id> \
-  --model-lineage <your-lineage> \
   --json
 ```
 
@@ -132,8 +132,6 @@ After a prior adversarial pass, finalize the work (requires regista):
 agent-notes work-item review accept <identifier> \
   --path <repo-path> \
   --note "<acceptance rationale>" \
-  --actor-id <your-id> \
-  --model-lineage <your-lineage> \
   --json
 ```
 
@@ -149,8 +147,6 @@ The work is fundamentally flawed and should not proceed:
 agent-notes work-item review reject <identifier> \
   --path <repo-path> \
   --note "<rejection rationale>" \
-  --actor-id <your-id> \
-  --model-lineage <your-lineage> \
   --json
 ```
 
@@ -159,8 +155,8 @@ agent-notes work-item review reject <identifier> \
 If the gate rejects your transition, the error explains why:
 
 - **"review_note is required"** — you forgot `--note`.
-- **"reviewer must differ from every actor"** — your `--actor-id`
-  matches an author. Use a distinct ID.
+- **"reviewer must differ from every actor"** — your configured canonical
+  `AGENT_NOTES_ACTOR_ID` matches an author. Use a distinct principal.
 - **"model lineage is not confirmed distinct"** — your lineage collides
   with an author. Either use a different lineage or pass
   `--same-lineage-acknowledged` with a justification in the note.

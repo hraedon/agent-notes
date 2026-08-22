@@ -93,8 +93,6 @@ class WorkItemModel:
         diagnostic_keys: dict | None = None,
         embedding: Any | None = None,
         frontmatter_version: int = 1,
-        actor_id: str | None = None,
-        model_lineage: str | None = None,
     ) -> dict:
         face = face_factory.get_face()
         if face is not None:
@@ -110,8 +108,6 @@ class WorkItemModel:
                 external_refs,
                 diagnostic_keys,
                 embedding,
-                actor_id=actor_id,
-                model_lineage=model_lineage,
             )
         return _native.file_work_item(
             project_id,
@@ -125,8 +121,6 @@ class WorkItemModel:
             diagnostic_keys,
             embedding,
             frontmatter_version,
-            actor_id,
-            model_lineage=model_lineage,
         )
 
     @classmethod
@@ -143,8 +137,6 @@ class WorkItemModel:
         diagnostic_keys: dict | None = None,
         embedding: Any | None = None,
         frontmatter_version: int | None = None,
-        actor_id: str | None = None,
-        model_lineage: str | None = None,
         force: bool = False,
     ) -> dict:
         face = face_factory.get_face()
@@ -161,8 +153,6 @@ class WorkItemModel:
                 external_refs,
                 diagnostic_keys,
                 embedding,
-                actor_id=actor_id,
-                model_lineage=model_lineage,
             )
         with _native._conn() as conn:
             result = _native.update_work_item(
@@ -178,8 +168,6 @@ class WorkItemModel:
                 diagnostic_keys,
                 embedding,
                 frontmatter_version,
-                actor_id,
-                model_lineage=model_lineage,
                 force=force,
             )
             conn.commit()
@@ -191,7 +179,6 @@ class WorkItemModel:
         project_id: int,
         identifier: str,
         status: str,
-        actor_id: str | None = None,
         force: bool = False,
     ) -> dict:
         """Dedicated status transition (writes a set_status op).
@@ -204,7 +191,6 @@ class WorkItemModel:
             project_id=project_id,
             identifier=identifier,
             status=status,
-            actor_id=actor_id,
             force=force,
         )
 
@@ -213,8 +199,6 @@ class WorkItemModel:
         cls,
         project_id: int,
         identifier: str,
-        actor_id: str | None = None,
-        model_lineage: str | None = None,
         force: bool = False,
     ) -> dict:
         """Close a work item.
@@ -244,23 +228,17 @@ class WorkItemModel:
                     project_id=project_id,
                     identifier=identifier,
                     status="done",
-                    actor_id=actor_id,
-                    model_lineage=model_lineage,
                     force=True,
                 )
             return _regista.close_work_item(
                 face,
                 project_id,
                 identifier,
-                actor_id=actor_id,
-                model_lineage=model_lineage,
             )
         if force:
             return _native.close_work_item_force(
                 project_id,
                 identifier,
-                actor_id,
-                model_lineage=model_lineage,
             )
         old = cls.get_work_item(project_id, identifier)
         if old is None:
@@ -269,8 +247,6 @@ class WorkItemModel:
             project_id,
             identifier,
             old,
-            actor_id,
-            model_lineage=model_lineage,
         )
 
     @classmethod
@@ -279,8 +255,6 @@ class WorkItemModel:
         project_id: int,
         identifier: str,
         reason: str,
-        actor_id: str | None = None,
-        model_lineage: str | None = None,
     ) -> dict:
         """Record that the review gate was retroactively waived (Plan 014 WI-4).
 
@@ -297,16 +271,18 @@ class WorkItemModel:
         op-log only — regista-path items (projection-only, no ops) are
         gate-verified by construction and have nothing to attest.
         """
-        return _native.attest_gate_waiver(
-            project_id, identifier, reason, actor_id, model_lineage=model_lineage
-        )
+        return _native.attest_gate_waiver(project_id, identifier, reason)
 
     # ------------------------------------------------------------------
     # Review-gate transitions (adversarial_pass / accept / reject /
     # request_changes).  These carry a mandatory review_note payload that
-    # regista's cross-lineage validators require.  On the native (degrade)
-    # path the note is stored in diagnostic_keys for provenance; the gate
-    # itself cannot run off-regista (accept is blocked by Plan 014 WI-2).
+    # regista's cross-lineage validators require.  The reviewer is the
+    # running producer (see ``core/producer.py``): the ambient actor signs
+    # the event and the producer block in that signed envelope carries its
+    # canonical model lineage — there is no per-call identity or payload copy.
+    # On the native (degrade) path the note is stored in diagnostic_keys
+    # for provenance; the gate itself cannot run off-regista (accept is
+    # blocked by Plan 014 WI-2).
     # ------------------------------------------------------------------
 
     @classmethod
@@ -316,8 +292,6 @@ class WorkItemModel:
         identifier: str,
         transition_name: str,
         review_note: str,
-        actor_id: str | None = None,
-        model_lineage: str | None = None,
         same_lineage_acknowledged: bool = False,
     ) -> dict:
         """Drive a review-gate transition with a review_note payload.
@@ -333,8 +307,6 @@ class WorkItemModel:
         ``accept`` is blocked (Plan 014 WI-2) because the gate cannot run
         off-regista.
 
-        ``actor_id`` and ``model_lineage`` override the env-resolved identity
-        so a subagent can declare its own lineage without env-var mutation.
         ``same_lineage_acknowledged`` passes through to the regista validator
         for the explicit same-lineage-review case.
         """
@@ -354,8 +326,6 @@ class WorkItemModel:
                 identifier,
                 transition_name,
                 review_note,
-                actor_id,
-                model_lineage,
                 same_lineage_acknowledged,
             )
         return _native.review_transition(
@@ -363,8 +333,6 @@ class WorkItemModel:
             identifier,
             transition_name,
             review_note,
-            actor_id,
-            model_lineage,
         )
 
     # ------------------------------------------------------------------
@@ -380,8 +348,6 @@ class WorkItemModel:
         cls,
         project_id: int,
         identifier: str,
-        actor_id: str | None = None,
-        model_lineage: str | None = None,
     ) -> bool:
         """Soft-delete via snapshot op with tombstone. Removes from cache."""
         if face_factory.get_face() is not None:
@@ -390,14 +356,10 @@ class WorkItemModel:
                 return _queries.delete_work_item_regista(
                     project_id,
                     identifier,
-                    actor_id=actor_id,
-                    model_lineage=model_lineage,
                 )
         return _native.delete_work_item(
             project_id,
             identifier,
-            actor_id=actor_id,
-            model_lineage=model_lineage,
         )
 
     @classmethod
@@ -482,9 +444,7 @@ class WorkItemModel:
         cls,
         project_id: int,
         identifier: str,
-        actor_id: str | None = None,
         ttl_seconds: int = 300,
-        model_lineage: str | None = None,
     ) -> dict:
         """Claim a work item (Plan 010 WI-2 — lease as a regista claim).
 
@@ -501,19 +461,14 @@ class WorkItemModel:
                 project_id,
                 identifier,
                 ttl_seconds,
-                model_lineage=model_lineage,
             )
-        return _native.claim_work_item(
-            project_id, identifier, actor_id, ttl_seconds, model_lineage=model_lineage
-        )
+        return _native.claim_work_item(project_id, identifier, ttl_seconds)
 
     @classmethod
     def release_work_item(
         cls,
         project_id: int,
         identifier: str,
-        actor_id: str | None = None,
-        model_lineage: str | None = None,
     ) -> dict:
         """Release a claimed work item (Plan 010 WI-2 — lease as a regista claim).
 
@@ -526,20 +481,15 @@ class WorkItemModel:
                 face,
                 project_id,
                 identifier,
-                model_lineage=model_lineage,
             )
-        return _native.release_work_item(
-            project_id, identifier, actor_id, model_lineage=model_lineage
-        )
+        return _native.release_work_item(project_id, identifier)
 
     @classmethod
     def heartbeat_work_item(
         cls,
         project_id: int,
         identifier: str,
-        actor_id: str | None = None,
         ttl_seconds: int = 300,
-        model_lineage: str | None = None,
     ) -> dict:
         """Heartbeat a claimed work item to extend its lease (Plan 010 WI-2).
 
@@ -553,11 +503,8 @@ class WorkItemModel:
                 project_id,
                 identifier,
                 ttl_seconds,
-                model_lineage=model_lineage,
             )
-        return _native.heartbeat_work_item(
-            project_id, identifier, actor_id, ttl_seconds, model_lineage=model_lineage
-        )
+        return _native.heartbeat_work_item(project_id, identifier, ttl_seconds)
 
     # ------------------------------------------------------------------
     # Cross-project support (P3)
@@ -571,8 +518,6 @@ class WorkItemModel:
         title: str,
         body: str = "",
         kind: str = "task",
-        actor_id: str | None = None,
-        model_lineage: str | None = None,
     ) -> dict:
         return _cross_project.request_work_item(
             project_id,
@@ -580,8 +525,6 @@ class WorkItemModel:
             title,
             body,
             kind,
-            actor_id,
-            model_lineage=model_lineage,
         )
 
     @classmethod
@@ -590,15 +533,11 @@ class WorkItemModel:
         project_id: int,
         target_project_slug: str,
         target_identifier: str,
-        actor_id: str | None = None,
-        model_lineage: str | None = None,
     ) -> dict:
         return _cross_project.wait_on_work_item(
             project_id,
             target_project_slug,
             target_identifier,
-            actor_id,
-            model_lineage=model_lineage,
         )
 
     @classmethod
@@ -609,8 +548,6 @@ class WorkItemModel:
         to_project_slug: str,
         to_identifier: str,
         relationship: str = "blocks",
-        actor_id: str | None = None,
-        model_lineage: str | None = None,
     ) -> dict:
         return _cross_project.add_cross_project_link(
             from_project_id,
@@ -618,8 +555,6 @@ class WorkItemModel:
             to_project_slug,
             to_identifier,
             relationship,
-            actor_id,
-            model_lineage=model_lineage,
         )
 
     @staticmethod

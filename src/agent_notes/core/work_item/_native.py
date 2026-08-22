@@ -48,11 +48,8 @@ def file_work_item(
     diagnostic_keys: dict | None,
     embedding: Any | None,
     frontmatter_version: int,
-    actor_id: str | None,
-    model_lineage: str | None = None,
 ) -> dict:
-    # WI-062: refuse before any op is written, not after.
-    face_factory.assert_declared_lineage(actor_id, model_lineage, operation="work-item file")
+    actor_id = face_factory.write_actor().actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         _common.validate_vocab(conn, workspace_id, "wi_kind", kind)
@@ -80,7 +77,6 @@ def file_work_item(
             "diagnostic_keys": diagnostic_keys or {},
             "embedding": embedding,
             "frontmatter_version": frontmatter_version,
-            "model_lineage": model_lineage,
         }
 
         # The entity_id is the hash of the create op itself.
@@ -141,8 +137,6 @@ def update_work_item(
     diagnostic_keys: dict | None = None,
     embedding: Any | None = None,
     frontmatter_version: int | None = None,
-    actor_id: str | None = None,
-    model_lineage: str | None = None,
     force: bool = False,
 ) -> dict:
     """Apply field / status changes to a work item on the caller's transaction.
@@ -151,7 +145,7 @@ def update_work_item(
     (WI-020): it writes ops, folds the cache, and writes the change_log row but
     never commits — the caller owns the transaction boundary.
     """
-    face_factory.assert_declared_lineage(actor_id, model_lineage, operation="work-item update")
+    actor_id = face_factory.write_actor().actor_id
     workspace_id = _common.resolve_workspace_for_project(conn, project_id)
     cur = conn.cursor(row_factory=dict_row)
     cur.execute(
@@ -195,9 +189,6 @@ def update_work_item(
         payload["embedding"] = embedding
     if frontmatter_version is not None and frontmatter_version != old.get("frontmatter_version"):
         payload["frontmatter_version"] = frontmatter_version
-    if model_lineage is not None:
-        payload["model_lineage"] = model_lineage
-
     # If status changed, write a separate set_status op.
     status_changed = False
     if status is not None and status != old["status"]:
@@ -309,8 +300,6 @@ def close_work_item_native_deferred(
     project_id: int,
     identifier: str,
     old: dict,
-    actor_id: str | None,
-    model_lineage: str | None = None,
 ) -> dict:
     """Native (degrade) close that defers to ``in_review`` (Plan 014 A(b)).
 
@@ -345,16 +334,12 @@ def close_work_item_native_deferred(
                 project_id=project_id,
                 identifier=identifier,
                 status="in_progress",
-                actor_id=actor_id,
-                model_lineage=model_lineage,
             )
         result = update_work_item(
             conn,
             project_id=project_id,
             identifier=identifier,
             status="in_review",
-            actor_id=actor_id,
-            model_lineage=model_lineage,
         )
         conn.commit()
     return result
@@ -363,11 +348,9 @@ def close_work_item_native_deferred(
 def close_work_item_force(
     project_id: int,
     identifier: str,
-    actor_id: str | None,
-    model_lineage: str | None = None,
 ) -> dict:
     """Native force-close: writes the legacy terminal ``close`` op (admin/repair)."""
-    face_factory.assert_declared_lineage(actor_id, model_lineage, operation="work-item close")
+    actor_id = face_factory.write_actor().actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)
@@ -381,8 +364,6 @@ def close_work_item_force(
 
         entity_id = old["entity_id"]
         force_close_payload: dict = {"reason": "manual_close"}
-        if model_lineage is not None:
-            force_close_payload["model_lineage"] = model_lineage
         op = kernel.commit_op(
             conn,
             entity_id=entity_id,
@@ -422,8 +403,6 @@ def attest_gate_waiver(
     project_id: int,
     identifier: str,
     reason: str,
-    actor_id: str | None,
-    model_lineage: str | None = None,
 ) -> dict:
     """Record that the review gate was retroactively waived (Plan 014 WI-4)."""
     from datetime import datetime, timezone
@@ -453,15 +432,7 @@ def attest_gate_waiver(
                 "it is gate-verified by construction and needs no attestation."
             )
 
-        actor = (
-            face_factory.actor_with_overrides(
-                actor_id, model_lineage, clear_principal=True, operation="attest-gate-waiver"
-            )
-            if actor_id
-            else face_factory.actor_with_overrides(
-                None, model_lineage, operation="attest-gate-waiver"
-            )
-        )
+        actor = face_factory.write_actor()
         attestation = {
             "status": "waived",
             "reason": reason,
@@ -513,8 +484,6 @@ def review_transition(
     identifier: str,
     transition_name: str,
     review_note: str,
-    actor_id: str | None,
-    model_lineage: str | None,
 ) -> dict:
     """Native (degrade) review transition — stores note, defers gate.
 
@@ -528,9 +497,7 @@ def review_transition(
     """
     from datetime import datetime, timezone
 
-    face_factory.assert_declared_lineage(
-        actor_id, model_lineage, operation=f"work-item review {transition_name}"
-    )
+    actor = face_factory.write_actor()
     target_status = _REVIEW_TRANSITION_TO_STATUS[transition_name]
 
     with _conn() as conn:
@@ -571,7 +538,7 @@ def review_transition(
             op_type="set_status",
             payload=status_payload,
             parent_op_ids=[entity_id],
-            actor_id=actor_id,
+            actor_id=actor.actor_id,
         )
         kernel.emit_event(
             conn,
@@ -595,8 +562,7 @@ def review_transition(
             {
                 "transition": transition_name,
                 "note": review_note,
-                "actor_id": actor_id,
-                "model_lineage": model_lineage,
+                "actor_id": actor.actor_id,
                 "at": datetime.now(timezone.utc).isoformat(),
             }
         )
@@ -608,7 +574,7 @@ def review_transition(
             op_type="set_field",
             payload={"diagnostic_keys": merged_diag},
             parent_op_ids=[entity_id],
-            actor_id=actor_id,
+            actor_id=actor.actor_id,
         )
 
         # Fold into cache.
@@ -629,7 +595,7 @@ def review_transition(
                 "review_transition": transition_name,
                 "review_note": review_note,
             },
-            actor=actor_id,
+            actor=actor.actor_id,
         )
 
         conn.commit()
@@ -639,26 +605,9 @@ def review_transition(
 def claim_work_item(
     project_id: int,
     identifier: str,
-    actor_id: str | None,
     ttl_seconds: int,
-    model_lineage: str | None = None,
 ) -> dict:
-    # WI-068: the lease verbs write ops (claim + set_status) with the caller's
-    # actor_id, so they are agent-authored writes like any other — gate them
-    # exactly as the regista lease path does (3d2552e gated that side only).
-    # WI-069: keep the gate's resolved actor so the op payload and change_log
-    # row record the lineage the gate actually checked (param over env), not
-    # just the raw parameter. Attribution only — refusal behavior is unchanged.
-    # WI-069 review (blocking 1): an explicit actor_id keeps the caller's
-    # identity (Plan 010 semantics unchanged); with none given, stamp the
-    # env-resolved actor everywhere instead of None / signer "null" / lease
-    # "unknown" — matching the regista twin, which stamps actor.actor_id on
-    # its op mirror, change_log row, and lease row.
-    resolved = face_factory.actor_with_overrides(
-        actor_id, model_lineage, operation="work-item claim"
-    )
-    lineage = resolved.model_lineage
-    stamped_actor = actor_id if actor_id is not None else resolved.actor_id
+    stamped_actor = face_factory.write_actor().actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)
@@ -694,7 +643,6 @@ def claim_work_item(
             payload={
                 "actor_id": stamped_actor,
                 "ttl_seconds": ttl_seconds,
-                "model_lineage": lineage,
             },
             parent_op_ids=[entity_id],
             actor_id=stamped_actor,
@@ -751,7 +699,6 @@ def claim_work_item(
             payload={
                 "actor_id": stamped_actor,
                 "ttl_seconds": ttl_seconds,
-                "model_lineage": lineage,
             },
             actor=stamped_actor,
         )
@@ -763,16 +710,8 @@ def claim_work_item(
 def release_work_item(
     project_id: int,
     identifier: str,
-    actor_id: str | None,
-    model_lineage: str | None = None,
 ) -> dict:
-    # WI-068: same gate as claim — release writes a release op + set_status.
-    # WI-069: stamp the resolved lineage + resolved actor (see claim above).
-    resolved = face_factory.actor_with_overrides(
-        actor_id, model_lineage, operation="work-item release"
-    )
-    lineage = resolved.model_lineage
-    stamped_actor = actor_id if actor_id is not None else resolved.actor_id
+    stamped_actor = face_factory.write_actor().actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)
@@ -792,7 +731,7 @@ def release_work_item(
             entity_id=entity_id,
             entity_type=ENTITY_TYPE,
             op_type="release",
-            payload={"actor_id": stamped_actor, "model_lineage": lineage},
+            payload={"actor_id": stamped_actor},
             parent_op_ids=[entity_id],
             actor_id=stamped_actor,
         )
@@ -836,7 +775,7 @@ def release_work_item(
             project_id=project_id,
             identifier=identifier,
             event="released",
-            payload={"actor_id": stamped_actor, "model_lineage": lineage},
+            payload={"actor_id": stamped_actor},
             actor=stamped_actor,
         )
 
@@ -847,17 +786,9 @@ def release_work_item(
 def heartbeat_work_item(
     project_id: int,
     identifier: str,
-    actor_id: str | None,
     ttl_seconds: int,
-    model_lineage: str | None = None,
 ) -> dict:
-    # WI-068: same gate as claim — heartbeat writes a heartbeat op.
-    # WI-069: stamp the resolved lineage + resolved actor (see claim above).
-    resolved = face_factory.actor_with_overrides(
-        actor_id, model_lineage, operation="work-item heartbeat"
-    )
-    lineage = resolved.model_lineage
-    stamped_actor = actor_id if actor_id is not None else resolved.actor_id
+    stamped_actor = face_factory.write_actor().actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)
@@ -893,7 +824,6 @@ def heartbeat_work_item(
             payload={
                 "actor_id": stamped_actor,
                 "ttl_seconds": ttl_seconds,
-                "model_lineage": lineage,
             },
             parent_op_ids=[entity_id],
             actor_id=stamped_actor,
@@ -923,7 +853,6 @@ def heartbeat_work_item(
             payload={
                 "actor_id": stamped_actor,
                 "ttl_seconds": ttl_seconds,
-                "model_lineage": lineage,
             },
             actor=stamped_actor,
         )
@@ -935,13 +864,9 @@ def heartbeat_work_item(
 def delete_work_item(
     project_id: int,
     identifier: str,
-    actor_id: str | None = None,
-    model_lineage: str | None = None,
 ) -> bool:
     """Native soft-delete via snapshot op with tombstone. Removes from cache."""
-    # WI-068: the tombstone snapshot is an authored op like any other — gate it,
-    # and (below) stamp the actor on the op instead of committing it anonymous.
-    face_factory.assert_declared_lineage(actor_id, model_lineage, operation="work-item delete")
+    actor_id = face_factory.write_actor().actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)

@@ -169,23 +169,15 @@ def test_init_refuses_against_a_real_regista_with_no_schema(
     regista schemas at all), exactly the artifact-host state: init must refuse
     and name the provision command, not register a workspace-breaking project.
     """
-    keys = tmp_path / "keys.json"
-    keys.write_text(
-        json.dumps(
-            {
-                "keys": [
-                    {
-                        "key_id": "test-key-001",
-                        "secret": "dGhpcyBpcyBhIHRlc3Qgc2VjcmV0IGtleSBmb3Igc3Vic3RyYXRl",
-                        "status": "active",
-                    }
-                ]
-            }
-        )
-    )
+    # A real v6 keyset (not a placeholder HMAC manifest): the Regista
+    # constructor must be able to load keys for the face it will never get to
+    # use — init is expected to refuse before any write.
+    from regista.testing import make_v6_keyset
+
+    keyset = make_v6_keyset(tmp_path, principals=("agent:worker",), filename="v6_keys.json")
     monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
     monkeypatch.setenv("REGISTA_DSN", ephemeral_db)
-    monkeypatch.setenv("REGISTA_KEY_PATH", str(keys))
+    monkeypatch.setenv("REGISTA_KEY_PATH", keyset.path)
     face_factory.reset_face()
     try:
         rc = cli.cmd_init(str(_repo))

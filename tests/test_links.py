@@ -134,7 +134,7 @@ class TestLinkActorAttribution:
     def test_add_link_stamps_env_resolved_actor(self, pg, link_ws, link_proj, monkeypatch):
         """No explicit actor: the row carries the env-resolved default actor,
         not NULL (the anonymous audit row this closes)."""
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "env-linker")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:env-linker")
         lnk.add_link(
             from_kind="bc",
             from_workspace=link_ws.id,
@@ -148,7 +148,7 @@ class TestLinkActorAttribution:
         )
         rows = self._rows(link_ws, "bc", "link_added", "ATTR-ADD-A")
         assert rows, "add_link must write a link_added change_log row"
-        assert rows[0].actor == "env-linker"
+        assert rows[0].actor == "agent:env-linker"
 
     def test_add_link_stamps_explicit_actor(self, pg, link_ws, link_proj):
         lnk.add_link(
@@ -200,11 +200,11 @@ class TestLinkActorAttribution:
             relationship="blocks",
         )
         lnk.add_link(**kwargs, actor="someone-else")
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "env-remover")
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:env-remover")
         assert lnk.remove_link(**kwargs)
         rows = self._rows(link_ws, "bc", "link_removed", "ATTR-REME-A")
         assert rows, "remove_link must write a link_removed change_log row"
-        assert rows[0].actor == "env-remover"
+        assert rows[0].actor == "agent:env-remover"
 
 
 class TestTraceGraph:

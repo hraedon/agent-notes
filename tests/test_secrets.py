@@ -267,7 +267,7 @@ def test_doctor_secrets_check_fails_for_missing_file_manifest(monkeypatch, tmp_p
 
     class _Cfg:
         dsn = None
-        hmac_key_path = f"file:{missing}"
+        key_path = f"file:{missing}"
 
     ok, msg = _check_secrets_backend(_Cfg())
     assert ok is False

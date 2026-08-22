@@ -27,8 +27,6 @@ def request_work_item(
     title: str,
     body: str = "",
     kind: str = "task",
-    actor_id: str | None = None,
-    model_lineage: str | None = None,
 ) -> dict:
     """Request a new work item in a target project (cross-project, P3).
 
@@ -37,12 +35,7 @@ def request_work_item(
     request. The request is signed evidence; the target project owns the
     created item.
     """
-    # WI-068 (B1): a request op is an agent-authored work-item write like any
-    # other — resolve (and lineage-gate) the actor before touching the DB, and
-    # commit the op with the resolved actor instead of a NULL / raw override.
-    actor = face_factory.actor_with_overrides(
-        actor_id, model_lineage, operation="work-item request"
-    )
+    actor = face_factory.write_actor()
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         _common.validate_vocab(conn, workspace_id, "wi_kind", kind)
@@ -120,8 +113,6 @@ def wait_on_work_item(
     project_id: int,
     target_project_slug: str,
     target_identifier: str,
-    actor_id: str | None = None,
-    model_lineage: str | None = None,
 ) -> dict:
     """Register a wait on a target project's work item (cross-project, P3).
 
@@ -129,9 +120,7 @@ def wait_on_work_item(
     session is blocked until the target item resolves. The wake system
     will resume the session when the target closes.
     """
-    # WI-068 (B1): gate + resolve before any write, commit with the resolved
-    # actor (see request_work_item above).
-    actor = face_factory.actor_with_overrides(actor_id, model_lineage, operation="work-item wait")
+    actor = face_factory.write_actor()
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
 
@@ -209,8 +198,6 @@ def add_cross_project_link(
     to_project_slug: str,
     to_identifier: str,
     relationship: str = "blocks",
-    actor_id: str | None = None,
-    model_lineage: str | None = None,
 ) -> dict:
     """Add a cross-project link (P3).
 
@@ -221,11 +208,7 @@ def add_cross_project_link(
     The ``cross_project_links`` table stores the target by slug so it
     survives across DB instances.
     """
-    # WI-068 (B1): gate + resolve before any write — the link tables and the
-    # add_link op are all authored writes (see request_work_item above).
-    actor = face_factory.actor_with_overrides(
-        actor_id, model_lineage, operation="work-item link-cross"
-    )
+    actor = face_factory.write_actor()
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, from_project_id)
 

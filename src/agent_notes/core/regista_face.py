@@ -19,7 +19,11 @@ import re
 import uuid
 from typing import Any, Protocol
 
-from agent_notes.core.actor import Actor
+from agent_notes.core.actor import (
+    Actor,
+    DelegationConfigurationError,
+    validate_actor,
+)
 
 # Breadcrumb source identifiers reach regista in two historical formats: the bare
 # file `number` ("050") and the local-projection identifier ("BC-050"). They
@@ -54,7 +58,6 @@ class _RegistaLike(Protocol):
     def create_work_item(self, *args: Any, **kwargs: Any) -> Any: ...
     def transition(self, *args: Any, **kwargs: Any) -> Any: ...
     def append_event(self, *args: Any, **kwargs: Any) -> Any: ...
-    def register_workflow(self, yaml_content: str) -> Any: ...
     def get_work_item(self, *args: Any, **kwargs: Any) -> Any: ...
     def query_work_items(self, **kwargs: Any) -> Any: ...
     def read_events(self, **kwargs: Any) -> Any: ...
@@ -65,42 +68,51 @@ class _RegistaLike(Protocol):
     def close(self) -> None: ...
 
 
-def _crack(actor: Actor) -> dict:
-    return dict(
-        actor_id=actor.actor_id,
-        actor_kind=actor.actor_kind,
-        actor_metadata=actor.actor_metadata(),
-        on_behalf_of=actor.on_behalf_of,
-    )
-
-
 def packaged_workflow_yaml() -> str:
-    # The canonical workflow is shipped from regista (the authoritative store),
-    # so both faces register the exact same bytes — no per-face drift (Plan 010).
+    """Return the authoritative workflow bytes for external provisioning."""
+
     import regista
 
     return regista.canonical_workflow_yaml()
 
 
+def _crack(actor: Actor) -> dict:
+    validate_actor(actor)
+    credentials = actor.action_delegation_credentials
+    if credentials:
+        import regista
+
+        # Parse each document at the trusted configuration edge. The regista
+        # writer repeats this validation and verifies the complete chain; this
+        # early check ensures malformed evidence is never queued by outbox.
+        parsed = [regista.parse_action_delegation(document) for document in credentials]
+        if parsed[-1].subject_principal_id != actor.actor_id:
+            raise DelegationConfigurationError(
+                f"the terminal action-delegation subject does not match actor_id {actor.actor_id!r}"
+            )
+    return dict(
+        actor_id=actor.actor_id,
+        actor_kind=actor.actor_kind,
+        actor_metadata=actor.actor_metadata(),
+        action_delegation_credentials=credentials,
+    )
+
+
 class RegistaFace:
-    """The agent/CLI face of regista. Construct with a ``Regista`` or
-    ``InMemoryRegista``; registers the canonical workflow on first use."""
+    """The agent/CLI face of regista.
+
+    Workflow registration and v6 epoch opening are provisioning operations.
+    This consumer never performs either implicitly; the caller must provision
+    the project before ordinary writes.
+    """
 
     def __init__(self, regista: _RegistaLike) -> None:
         self._reg = regista
-        self._registered = False
-
-    def ensure_workflow(self) -> None:
-        if self._registered:
-            return
-        self._reg.register_workflow(packaged_workflow_yaml())
-        self._registered = True
 
     def close(self) -> None:
         self._reg.close()
 
     def _ac(self, actor: Actor) -> dict:
-        self.ensure_workflow()
         return _crack(actor)
 
     def create_breadcrumb(
@@ -133,6 +145,7 @@ class RegistaFace:
             actor_kind=ac["actor_kind"],
             actor_metadata=ac["actor_metadata"],
             custom_fields=custom,
+            action_delegation_credentials=ac["action_delegation_credentials"],
         )
         return work_item.work_item_id, work_item.current_state
 
@@ -173,7 +186,7 @@ class RegistaFace:
             actor_metadata=ac["actor_metadata"],
             payload=payload,
             custom_fields=custom or None,
-            on_behalf_of=ac["on_behalf_of"],
+            action_delegation_credentials=ac["action_delegation_credentials"],
         )
         self._last_event = event
         return self._read_state(work_item_id) or amend_state
@@ -199,7 +212,7 @@ class RegistaFace:
             payload=payload,
             custom_fields=custom_fields,
             event_id=event_id,
-            on_behalf_of=ac["on_behalf_of"],
+            action_delegation_credentials=ac["action_delegation_credentials"],
             expected_event_seq=expected_event_seq,
         )
         self._last_event = event
@@ -218,7 +231,7 @@ class RegistaFace:
             actor_metadata=ac["actor_metadata"],
             transition="comment",
             payload={"body": body},
-            on_behalf_of=ac["on_behalf_of"],
+            action_delegation_credentials=ac["action_delegation_credentials"],
         )
 
     def get(self, work_item_id: Any) -> Any:
@@ -314,12 +327,16 @@ class RegistaFace:
             actor_metadata=ac["actor_metadata"],
             transition=transition,
             payload=payload,
-            on_behalf_of=ac["on_behalf_of"],
+            action_delegation_credentials=ac["action_delegation_credentials"],
             entity_kind=self.NOTE_ENTITY_KIND,
         )
 
     def read_note_events(self, entity_id: Any) -> list[Any]:
-        return list(self._reg.read_events(work_item_id=entity_id, limit=10_000))
+        return [
+            event
+            for event in self._reg.read_events(work_item_id=entity_id, limit=10_000)
+            if getattr(event, "entity_kind", "work_item") == self.NOTE_ENTITY_KIND
+        ]
 
     def list_note_entities(self) -> list[Any]:
         """List all note entities by scanning events with entity_kind='note'.

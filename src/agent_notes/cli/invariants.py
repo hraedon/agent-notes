@@ -86,17 +86,17 @@ def register_invariants_parsers(sub: argparse._SubParsersAction) -> None:
         help="Measure whether a work-item write issued now would carry a resolvable identity",
         description=(
             "Read-only probe of this environment's work-item write identity. "
-            "Resolves the actor and model lineage through the same entry point "
-            "every authored write uses and reports whether a write issued right "
-            "now would carry a resolvable, valid identity. Writes nothing."
+            "Resolves the actor through the same entry point every authored write "
+            "uses and reports whether a write issued right now would carry a "
+            "resolvable, valid identity. Producer identity is owned by regista. "
+            "Writes nothing."
         ),
     )
     # Deliberately no --path/--workspace/--project (`_add_common`): the subject
     # is the process's session identity, which is project-independent, and
     # resolving a project would touch the database — this command must not.
-    # Deliberately no --actor-id/--model-lineage either; see
-    # core/invariant_probe.py for why the probe measures only the ambient
-    # environment.
+    # Deliberately no identity override flags; the probe measures only the
+    # ambient environment.
     probe.add_argument(
         "--json",
         action="store_true",

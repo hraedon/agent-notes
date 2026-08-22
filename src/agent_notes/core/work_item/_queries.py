@@ -289,8 +289,6 @@ def claimable_work_items(
 def delete_work_item_regista(
     project_id: int,
     identifier: str,
-    actor_id: str | None = None,
-    model_lineage: str | None = None,
 ) -> bool:
     """Regista-path delete: drops local cache + leases; regista retains the item."""
     with _conn() as conn:
@@ -303,11 +301,7 @@ def delete_work_item_regista(
         old = cur.fetchone()
         if old is None:
             return False
-        # WI-068: resolve (and lineage-gate) the actor before any row is
-        # touched, so an undeclared lineage refuses the delete outright.
-        actor = face_factory.actor_with_overrides(
-            actor_id, model_lineage, operation="work-item delete"
-        )
+        actor = face_factory.write_actor()
         cur.execute(
             "DELETE FROM work_item_leases WHERE entity_id = %s",
             (old["entity_id"],),

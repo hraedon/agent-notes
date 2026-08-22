@@ -246,10 +246,9 @@ class TestActorSerialization:
         from agent_notes.core.actor import Actor
 
         actor = Actor(
-            actor_id="test-agent",
+            actor_id="agent:test-agent",
             actor_kind="agent",
             display_name="Test Agent",
-            on_behalf_of={"principal_id": "user@example.com"},
             role="agent",
         )
         d = outbox._actor_to_dict(actor)
@@ -257,5 +256,5 @@ class TestActorSerialization:
         assert restored.actor_id == actor.actor_id
         assert restored.actor_kind == actor.actor_kind
         assert restored.display_name == actor.display_name
-        assert restored.on_behalf_of == actor.on_behalf_of
+        assert restored.action_delegation_credentials == actor.action_delegation_credentials
         assert restored.role == actor.role

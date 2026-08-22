@@ -189,6 +189,8 @@ class TestSearchAllNotes:
     def test_basic_search(self, pg, search_ws, search_proj, seeded_data) -> None:
         rows = search_all_notes(
             query_vec=_fake_embed("connection pooling database"),
+            workspace_ids=[search_ws.id],
+            project_ids=[search_proj.id],
         )
         identifiers = {r["identifier"] for r in rows}
         assert "WI-SEARCH-001" in identifiers or "db-pooling-memory" in identifiers
@@ -196,6 +198,8 @@ class TestSearchAllNotes:
     def test_search_returns_multiple_kinds(self, pg, search_ws, search_proj, seeded_data) -> None:
         rows = search_all_notes(
             query_vec=_fake_embed("embedding"),
+            workspace_ids=[search_ws.id],
+            project_ids=[search_proj.id],
         )
         kinds = {r["kind"] for r in rows}
         assert "work_item" in kinds or "memory" in kinds
@@ -204,7 +208,10 @@ class TestSearchAllNotes:
         rows = search_all_notes(
             query_vec=_fake_embed("connection"),
             kinds=["work_item"],
+            workspace_ids=[search_ws.id],
+            project_ids=[search_proj.id],
         )
+        assert rows
         for r in rows:
             assert r["kind"] == "work_item"
 
@@ -212,7 +219,10 @@ class TestSearchAllNotes:
         rows = search_all_notes(
             query_vec=_fake_embed("pooling"),
             kinds=["memory"],
+            workspace_ids=[search_ws.id],
+            project_ids=[search_proj.id],
         )
+        assert rows
         for r in rows:
             assert r["kind"] == "memory"
 

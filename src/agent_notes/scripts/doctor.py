@@ -696,7 +696,7 @@ def _probe_codex_agent_notes_plugin() -> tuple[str, str]:
         try:
             expected_version = importlib.metadata.version("agent-notes-hraedon")
         except importlib.metadata.PackageNotFoundError:
-            expected_version = "1.0.0"
+            expected_version = "1.1.0"
         versions = {entry.get("version") for entry in enabled}
         if versions != {expected_version}:
             return (
@@ -727,11 +727,11 @@ def _check_secrets_backend(cfg: reg_config.RegistaConfig) -> tuple[bool | None, 
     refs: list[tuple[str, str]] = []
     if cfg.dsn and suite_secrets.is_backend_ref(cfg.dsn):
         refs.append(("REGISTA_DSN", cfg.dsn))
-    if cfg.hmac_key_path and suite_secrets.is_backend_ref(cfg.hmac_key_path):
+    if cfg.key_path and suite_secrets.is_backend_ref(cfg.key_path):
         # Only remote refs (env/vault/azure) materialize a temp file; a file:
         # ref is read directly. is_backend_ref covers both, which is fine — we
         # resolve either way to confirm reachability.
-        refs.append(("REGISTA_KEY_PATH", cfg.hmac_key_path))
+        refs.append(("REGISTA_KEY_PATH", cfg.key_path))
     if not refs:
         return None, "no backend refs configured (plaintext/file path)"
 

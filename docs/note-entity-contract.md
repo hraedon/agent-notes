@@ -28,7 +28,7 @@ work-items (see Split Decision below).
 | `name` | `str` | Human-readable identifier (memory name or reflection slug). |
 | `attributes` | `dict` | Free-form JSONB metadata (e.g., `gaps_filed_as` for reflections). |
 | `links` | `list[dict]` | Typed links to work items, files, or other notes. Each link: `{target_kind, target_id, relationship}`. |
-| `provenance` | (event-level) | Author actor (`actor_id`, `actor_kind`, `actor_metadata`), session (`on_behalf_of`). Carried by the signed event, not the payload. |
+| `provenance` | (event-level) | Canonical author actor (`actor_id`, `actor_kind`, `actor_metadata`), regista producer, and optional signed action-delegation authorization. Carried by the signed event, not the payload. |
 
 ## Event lifecycle
 

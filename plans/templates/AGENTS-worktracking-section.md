@@ -22,27 +22,24 @@ this project's regista schema automatically (you never set the schema).
 # File an issue
 agent-notes breadcrumb file --path . --title "<short title>" \
     --type <kind> [--severity low|medium|high|critical] [--body "<details>"] \
-    --model-lineage <your-model-family>
+    --json
 
 # Find / show / update
 agent-notes breadcrumb find  --path . [--status open] [--type bug] [--text "<q>"]
 agent-notes breadcrumb get   --path . <WI-id>
 agent-notes breadcrumb update --path . <WI-id> [--status <state>] [--title ...] [--body ...] \
-    --model-lineage <your-model-family>
+    --json
 ```
 
 - **`--type` (kind):** todo, observation, decision, risk, task, bug, feature,
   improvement, question, experiment, spike, refactor, docs, ci, job.
 - **`--severity`:** low, medium, high, critical.
-- **`--model-lineage` is mandatory for every write** (agent-notes WI-062).
-  A work-item event authored by an agent that declares no model family can
-  never clear regista's cross-lineage review gate, and history cannot be cured
-  afterwards — so the CLI refuses the write with `UNDECLARED_LINEAGE` instead
-  of filing something un-reviewable. Declare the *family*, not the build:
-  `claude-opus`, `gpt-sol`, `glm`, `kimi`. Hosts can set it once as
-  `AGENT_NOTES_MODEL_LINEAGE` in the environment or in
-  `~/.config/agent-suite/suite.env` and omit the flag. Add `--actor-id
-  <session-id>` as well when several agents share a repo.
+- **Identity is ambient v6 configuration, not a command-line override.** Set a
+  canonical `AGENT_NOTES_ACTOR_ID` (or `REGISTA_PRINCIPAL_ID`) plus the
+  `REGISTA_PRODUCER_*` settings in the process environment or
+  `~/.config/agent-suite/suite.env`. Reviewers needing a distinct lineage must
+  use a separately configured process; the producer lineage is carried in the
+  signed v6 review claims.
 
 **Lifecycle (canonical workflow):**
 `open → in_progress → (blocked | deferred) → in_review → in_human_review → done`.
