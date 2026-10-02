@@ -77,6 +77,15 @@ jobs:
           AGENT_NOTES_FORBIDDEN_IDENTIFIERS: ${{ secrets.AGENT_NOTES_FORBIDDEN_IDENTIFIERS }}
         run: python3 scripts/check_committed_identifiers.py
 
+      # Everything the push or PR publishes, not just the tip tree: every commit's
+      # message, author/committer identity, and added or changed files. The range
+      # comes from the event (needs the fetch-depth: 0 checkout above).
+      - name: Published-range identifier gate
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        env:
+          AGENT_NOTES_FORBIDDEN_IDENTIFIERS: ${{ secrets.AGENT_NOTES_FORBIDDEN_IDENTIFIERS }}
+        run: python3 scripts/check_committed_identifiers.py --ci-range
+
   # Plan 003 WI-5.1 — prove agent-notes imports and unit tests pass on native
   # Windows. Postgres-dependent tests (testcontainers) skip cleanly when Docker
   # is unavailable; unit tests (config, outbox, secrets, lifecycle, etc.) run
