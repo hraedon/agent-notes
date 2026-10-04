@@ -1,5 +1,12 @@
 # agent-notes
 
+> **Frozen 2026-10-04 — maintenance only.** This project still works and stays
+> in use where it is already wired in, but it gets security and break-fix
+> changes only: no new features and no new plans. Active development on
+> delegated agent work has moved to a successor control plane that doesn't
+> depend on this suite. The core library, regista, ships one final reduced
+> 0.8.0 release and then parks too.
+
 Pgvector-backed memory layer for agent harnesses: breadcrumbs (issue tracker), memories (cross-session facts), and reflections (session retrospectives) — shared across Claude Code, opencode, and any harness that can shell to a CLI.
 
 Consolidates and supersedes the standalone `breadcrumb-mcp` and `memory-mcp` projects. Originally built as an MCP omnibus server; Plan 004 stripped MCP in favor of a CLI + skills + NOTIFY-bridge shape. See `plans/004-flatten-cli-and-async-bridge.md` for the rationale and `plans/001-architecture-and-implementation.md` for the original architecture / peer-review history.
