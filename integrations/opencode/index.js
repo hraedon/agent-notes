@@ -1,20 +1,41 @@
-import { spawn } from "node:child_process";
-
 /**
- * agent-notes opencode plugin — enforces lifecycle hooks (Plan 007 Piece 2).
+ * agent-notes opencode plugin — enforces lifecycle hooks, OpenCode 2
+ * (the V1 implementation did not survive the deliberate V2 plugin API
+ * break; git history has it).
  *
  * Installation:
  *   1. Ensure `agent-notes` is installed and on PATH
  *   2. Set `AGENT_NOTES_DSN` environment variable
- *   3. Add to opencode.json:
- *        "plugin": ["/projects/agent-notes/integrations/opencode/index.js"]
+ *   3. Add to opencode.json — the package DIRECTORY, not the file. OpenCode 2
+ *      resolves a directory plugin's entrypoint as `index.js` at the package
+ *      root and ignores `main`/`exports` entirely (verified against 2.0.1):
+ *        "plugins": ["/projects/agent-notes/integrations/opencode"]
  *
- * Hooks:
- *   - `experimental.chat.system.transform` — injects `agent-notes orient` into
- *     the system prompt on every session start.
- *   - `experimental.session.compacting` — appends a reconciliation prompt to
- *     the compaction context (the opencode equivalent of `/end`).
+ * V2 hooks used (see opencode.ai/v2/docs/build/plugins):
+ *   - `ctx.session.hook("context", …)` — injects `agent-notes orient`
+ *     output into the system prompt on the FIRST model request of every
+ *     session, replacing V1's `experimental.chat.system.transform`
+ *     (which did not see per-session directories up front; V2 hooks
+ *     carry `sessionID`, so the session's real directory is resolved
+ *     via `ctx.session.get`).
+ *   - `ctx.session.hook("compaction", …)` — appends the regista sync
+ *     block and reconciliation checklist to the compaction request's
+ *     system parts (replacing V1's `experimental.session.compacting`
+ *     `output.context` append), so they steer the summary the same way.
+ *
+ * Logging: V1 used `ctx.client.app.log`; the V2 context has no app.log,
+ * so diagnosable output goes to stderr (console), which lands in the
+ * opencode server log.
+ *
+ * NOTE: this file deliberately does NOT `import { Plugin } from
+ * "@opencode/plugin"`. `Plugin.define` is the identity function (a
+ * types-only helper), and file-path plugins have no node_modules to
+ * resolve the bare specifier from — "Cannot find module
+ * '@opencode/plugin'" kills the load. A plain default-exported
+ * `{ id, setup }` object is the definition `Plugin.define` returns.
  */
+
+import { spawn } from "node:child_process";
 
 const ORIENT_TIMEOUT_MS = parseInt(
   process.env.AGENT_NOTES_ORIENT_TIMEOUT_MS ?? "15000",
@@ -25,12 +46,14 @@ const RECONCILE_TIMEOUT_MS = parseInt(
   10
 );
 
-function invokeAgentNotes(args, client, timeoutMs = ORIENT_TIMEOUT_MS) {
+const log = (...args) => console.error("[agent-notes]", ...args);
+
+function invokeAgentNotes(args, timeoutMs = ORIENT_TIMEOUT_MS) {
   return new Promise((resolve) => {
     const proc = spawn("agent-notes", args, {
       stdio: ["pipe", "pipe", "pipe"],
       env: process.env,
-      timeout: ORIENT_TIMEOUT_MS,
+      timeout: timeoutMs,
     });
 
     let stdout = "";
@@ -44,12 +67,7 @@ function invokeAgentNotes(args, client, timeoutMs = ORIENT_TIMEOUT_MS) {
     });
 
     proc.on("error", (err) => {
-      const msg = `[agent-notes] spawn error: ${err.message}`;
-      if (client?.app?.log) {
-        client.app.log(msg);
-      } else {
-        console.error(msg);
-      }
+      log(`spawn error: ${err.message}`);
       resolve({ status: "error", error: err.message });
     });
 
@@ -67,12 +85,7 @@ function invokeAgentNotes(args, client, timeoutMs = ORIENT_TIMEOUT_MS) {
         }
       }
       if (exitCode !== 0 && data === null) {
-        const msg = `[agent-notes] failed (exit ${exitCode}): ${stderr.trim().slice(0, 200)}`;
-        if (client?.app?.log) {
-          client.app.log(msg);
-        } else {
-          console.error(msg);
-        }
+        log(`failed (exit ${exitCode}): ${stderr.trim().slice(0, 200)}`);
       }
       resolve({ status: exitCode === 0 ? "ok" : "exit", code: exitCode, data, stderr: stderr.trim() });
     });
@@ -112,7 +125,7 @@ function formatOrientPayload(payload) {
   return lines.join("\n");
 }
 
-async function buildRegistaSyncBlock(client) {
+async function buildRegistaSyncBlock() {
   // dossier-006 §6: Stop/PreCompact must reconcile and loudly report pending
   // ops. Reconcile is best-effort — if regista is unreachable it replays nothing
   // and the ops stay in the outbox; we then surface the stale count loudly.
@@ -122,7 +135,6 @@ async function buildRegistaSyncBlock(client) {
   try {
     const rec = await invokeAgentNotes(
       ["outbox", "reconcile", "--json"],
-      client,
       RECONCILE_TIMEOUT_MS
     );
     // Reconcile exits non-zero on conflicts/rejected but still prints a JSON
@@ -149,7 +161,7 @@ async function buildRegistaSyncBlock(client) {
   let totalPending = 0;
   let detail = "";
   try {
-    const status = await invokeAgentNotes(["outbox", "status", "--json"], client);
+    const status = await invokeAgentNotes(["outbox", "status", "--json"]);
     if (status.data && Array.isArray(status.data.projects)) {
       for (const p of status.data.projects) {
         totalPending += p.pending ?? 0;
@@ -179,58 +191,65 @@ async function buildRegistaSyncBlock(client) {
   return lines.join("\n");
 }
 
-export default async function agentNotesPlugin(ctx) {
-  const sessionDirs = new Map();
+export default {
+  id: "agent-notes",
+  async setup(ctx) {
+    // Sessions already oriented this plugin lifetime. Bounded like the
+    // agent-wake activity set: a session can end without a deletion
+    // event reaching this instance, so an unbounded Set would leak for
+    // the server lifetime.
+    const oriented = new Set();
+    const MAX_ORIENTED = 512;
 
-  return {
-    event: async ({ event }) => {
-      if (event?.type === "session.created" && event.properties?.info?.directory) {
-        const sessionID = event.properties.sessionID;
-        const dir = event.properties.info.directory;
-        sessionDirs.set(sessionID, dir);
-        ctx.client?.app?.log?.(
-          `[agent-notes] session ${sessionID} → dir ${dir}`
+    const contextHook = await ctx.session.hook("context", async (event) => {
+      // Orientation is a session-START behavior: inject once per
+      // session, on its first model request. (V1's system.transform
+      // re-injected on every call; doing so in the V2 context hook —
+      // which runs per agent-loop request — would spam every turn.)
+      if (oriented.has(event.sessionID)) return;
+
+      // Resolve the SESSION's directory, not the plugin instance's: one
+      // server serves sessions in many directories, so orientation must
+      // follow the session. (`ctx.location` is also absent from pre-2.0
+      // builds, where reading it threw and killed every session.)
+      let dir;
+      try {
+        const info = await ctx.session.get({ sessionID: event.sessionID });
+        if (info && typeof info.location?.directory === "string") {
+          dir = info.location.directory;
+        }
+      } catch (e) {
+        log(
+          `session.get failed for ${event.sessionID} (${e?.message ?? e})`
         );
       }
-    },
 
-    "experimental.chat.system.transform": async (input, output) => {
-      const sessionID = input.sessionID;
-      const dir = sessionDirs.get(sessionID);
       if (!dir) {
-        ctx.client?.app?.log?.(
-          `[agent-notes] no directory for session ${sessionID}; skipping orientation`
-        );
+        log(`no directory for session ${event.sessionID}; skipping orientation`);
         return;
       }
 
-      const reply = await invokeAgentNotes(
-        ["orient", "--path", dir, "--json"],
-        ctx.client
-      );
+      const reply = await invokeAgentNotes(["orient", "--path", dir, "--json"]);
 
       if (reply.status === "ok" && reply.data && typeof reply.data === "object") {
-        const orientText = formatOrientPayload(reply.data);
-        output.system = output.system ?? [];
-        if (!Array.isArray(output.system)) {
-          output.system = [output.system];
-        }
-        output.system.push(orientText);
-        ctx.client?.app?.log?.(
-          `[agent-notes] oriented session ${sessionID} (${reply.data.open_work_items.length} open work items)`
+        event.system.push({
+          type: "text",
+          text: formatOrientPayload(reply.data),
+        });
+        if (oriented.size >= MAX_ORIENTED) oriented.clear();
+        oriented.add(event.sessionID);
+        log(
+          `oriented session ${event.sessionID} (${reply.data.open_work_items.length} open work items)`
         );
       } else {
-        ctx.client?.app?.log?.(
-          `[agent-notes] orient failed for ${dir}: ${reply.error ?? reply.reason ?? "unknown"}`
+        log(
+          `orient failed for ${dir}: ${reply.error ?? reply.stderr ?? "unknown"} (session ${event.sessionID})`
         );
       }
-    },
+    });
 
-    "experimental.session.compacting": async (input, output) => {
-      const sessionID = input.sessionID;
-      const dir = sessionDirs.get(sessionID);
-
-      const syncBlock = await buildRegistaSyncBlock(ctx.client);
+    const compactionHook = await ctx.session.hook("compaction", async (event) => {
+      const syncBlock = await buildRegistaSyncBlock();
 
       const reconcilePrompt = [
         "",
@@ -246,14 +265,18 @@ export default async function agentNotesPlugin(ctx) {
         "---",
       ].join("\n");
 
-      output.context = output.context ?? [];
-      output.context.push(syncBlock + reconcilePrompt);
+      // V1 appended these to the compaction context; V2 pushes them
+      // into the compaction request's system parts so the summarizer
+      // sees (and carries forward) the sync state and checklist.
+      event.system.push({ type: "text", text: syncBlock + reconcilePrompt });
+      log(`injected reconciliation prompt for compaction (session ${event.sessionID})`);
+    });
 
-      if (dir) {
-        ctx.client?.app?.log?.(
-          `[agent-notes] injected reconciliation prompt for session ${sessionID}`
-        );
-      }
-    },
-  };
-}
+    // Hook registrations outlive setup; without disposing them a reload
+    // stacks a second copy of both hooks on the same server.
+    return async () => {
+      await Promise.allSettled([contextHook.dispose(), compactionHook.dispose()]);
+      oriented.clear();
+    };
+  },
+};

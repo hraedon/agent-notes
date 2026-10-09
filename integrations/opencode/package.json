@@ -1,15 +1,20 @@
 {
   "name": "agent-notes-opencode",
-  "version": "0.1.0",
-  "description": "agent-notes lifecycle enforcement plugin for OpenCode — injects orientation on session start and reconciliation on compaction (Plan 007 Piece 2)",
+  "version": "0.2.0",
+  "description": "agent-notes lifecycle plugin for OpenCode 2 — orientation on session start, reconciliation on compaction",
   "main": "index.js",
   "type": "module",
-  "peerDependencies": {
-    "@opencode-ai/plugin": "^1.15.10"
-  },
   "engines": {
     "bun": ">=1.0"
   },
-  "keywords": ["agent-notes", "breadcrumbs", "lifecycle", "opencode"],
-  "license": "MIT"
+  "keywords": [
+    "agent-notes",
+    "breadcrumbs",
+    "lifecycle",
+    "opencode"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@opencode/plugin": "^2.0.1"
+  }
 }
