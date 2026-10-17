@@ -29,6 +29,54 @@ from agent_notes.core import outbox, projection
 from agent_notes.core.db import _conn
 from agent_notes.core.memory_engine import OriginClass
 
+DEFAULT_LIMIT = 5
+FULL_LIMIT = 15
+DEFAULT_STALE_AFTER_DAYS = 30
+
+
+def _positive_int(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return number
+
+
+def _section_limit(value: str) -> int:
+    number = _positive_int(value)
+    if number > 100:
+        raise argparse.ArgumentTypeError("must be at most 100")
+    return number
+
+
+def _freshness(record: dict, now: datetime, stale_after_days: int) -> dict[str, Any]:
+    """Describe recorded age, never whether the record's claims are still true."""
+    updated = record.get("updated_at")
+    if isinstance(updated, str):
+        try:
+            updated = datetime.fromisoformat(updated)
+        except ValueError:
+            updated = None
+    if not isinstance(updated, datetime) or updated.tzinfo is None:
+        return {"updated_at": None, "age_days": None, "freshness": "unknown"}
+    updated = updated.astimezone(timezone.utc)
+    age_seconds = (now - updated).total_seconds()
+    age_days = int(age_seconds // 86400) if age_seconds >= 0 else None
+    state = "future" if age_days is None else ("aged" if age_days >= stale_after_days else "recent")
+    return {"updated_at": updated.isoformat(), "age_days": age_days, "freshness": state}
+
+
+def _age_label(record: dict) -> str:
+    age = record["age_days"]
+    if age is None:
+        return "future timestamp" if record["freshness"] == "future" else "update time unknown"
+    suffix = "; aged" if record["freshness"] == "aged" else ""
+    return f"updated {age}d ago{suffix}"
+
+
+def _shown_label(rows: list, has_more: bool, *, sampled: bool = False) -> str:
+    verb = "sampled" if sampled else "shown"
+    return f"{len(rows)} {verb}" + ("; more available" if has_more else "")
+
 
 def _origin_label(origin: OriginClass) -> str:
     """Human-readable provenance label for a recalled result's origin class."""
@@ -58,10 +106,31 @@ def cmd_orient(args: argparse.Namespace) -> int:
     from agent_notes.core.memory_model import list_memories
     from agent_notes.core.work_item_model import WorkItemModel
 
-    open_wis = WorkItemModel.query_work_items(project_id=proj_id, is_open=True, limit=args.limit)
-    since = datetime.now(timezone.utc) - timedelta(days=args.days)
-    changes = changes_since(since, workspace_id=ws_id, project_id=proj_id, limit=args.limit)
-    memories = list_memories(workspace_id=ws_id, project_id=proj_id, limit=args.limit)
+    now = datetime.now(timezone.utc)
+    full = getattr(args, "full", False)
+    limit = args.limit if args.limit is not None else (FULL_LIMIT if full else DEFAULT_LIMIT)
+    stale_after_days = getattr(args, "stale_after_days", DEFAULT_STALE_AFTER_DAYS)
+    # One extra row distinguishes a clipped sample from a complete result.
+    open_wis = WorkItemModel.query_work_items(project_id=proj_id, is_open=True, limit=limit + 1)
+    since = now - timedelta(days=args.days)
+    changes = changes_since(since, workspace_id=ws_id, project_id=proj_id, limit=limit + 1)
+    memories = list_memories(workspace_id=ws_id, project_id=proj_id, limit=limit + 1)
+    reflections = list_memories(
+        workspace_id=ws_id, project_id=proj_id, memory_type="reflection", limit=1
+    )
+    has_more = {
+        "open_work_items": len(open_wis) > limit,
+        "recent_changes": len(changes) > limit,
+        "memories": len(memories) > limit,
+    }
+    open_wis, changes, memories = open_wis[:limit], changes[:limit], memories[:limit]
+
+    def memory_summary(memory: dict) -> dict[str, Any]:
+        return {
+            "name": memory["name"],
+            "type": memory["memory_type"],
+            **_freshness(memory, now, stale_after_days),
+        }
 
     # Optionally surface silent-resolution drift: open breadcrumbs that a recent
     # commit already closed via its message but that nobody transitioned in the
@@ -170,6 +239,10 @@ def cmd_orient(args: argparse.Namespace) -> int:
     payload = {
         "project": proj_slug,
         "workspace": ws_slug,
+        "generated_at": now.isoformat(),
+        "freshness_basis": "record_updated_at; age does not verify accuracy",
+        "stale_after_days": stale_after_days,
+        "has_more": has_more,
         "since_days": args.days,
         "open_work_items": [
             {
@@ -177,6 +250,7 @@ def cmd_orient(args: argparse.Namespace) -> int:
                 "title": wi["title"],
                 "severity": wi["severity"],
                 "status": wi["status"],
+                **_freshness(wi, now, stale_after_days),
             }
             for wi in open_wis
         ],
@@ -189,7 +263,8 @@ def cmd_orient(args: argparse.Namespace) -> int:
             }
             for c in changes
         ],
-        "memories": [{"name": m["name"], "type": m["memory_type"]} for m in memories],
+        "memories": [memory_summary(m) for m in memories],
+        "latest_reflection": memory_summary(reflections[0]) if reflections else None,
         "resolved_in_git": [
             {"identifier": ident, "commit": info["commit"], "subject": info["subject"]}
             for ident, info in sorted(drift.items())
@@ -204,9 +279,14 @@ def cmd_orient(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2, default=str))
     else:
         print(f"Orientation for {proj_slug} (workspace {ws_slug}):")
-        print(f"\nOpen work items ({len(open_wis)}):")
-        for wi in open_wis:
-            print(f"  - [{wi['severity']}] {wi['identifier']} ({wi['status']}) — {wi['title']}")
+        print(f"As of {now.isoformat()} — recorded ages, not verified accuracy.")
+        print(f"Aged: last updated at least {stale_after_days}d ago.")
+        print(f"\nOpen work items ({_shown_label(open_wis, has_more['open_work_items'])}):")
+        for wi in payload["open_work_items"]:
+            print(
+                f"  - [{wi['severity']}] {wi['identifier']} ({wi['status']}) — "
+                f"{wi['title']} [{_age_label(wi)}]"
+            )
         if drift:
             print(
                 f"\n⚠ Resolved in git but still open in the DB ({len(drift)}) — "
@@ -228,12 +308,21 @@ def cmd_orient(args: argparse.Namespace) -> int:
                 f"{regista_sync['pending_sync_rows']} stale projection rows); "
                 "run 'agent-notes outbox reconcile'"
             )
-        print(f"\nChanges in last {args.days}d ({len(changes)}):")
-        for c in changes:
-            print(f"  - [{c.kind}] {c.identifier} {c.event} @ {c.changed_at}")
-        print(f"\nMemories ({len(memories)}):")
-        for m in memories:
-            print(f"  - {m['name']} ({m['memory_type']})")
+        print(
+            f"\nChanges in last {args.days}d "
+            f"({_shown_label(changes, has_more['recent_changes'], sampled=not full)}):"
+        )
+        if full:
+            for c in changes:
+                print(f"  - [{c.kind}] {c.identifier} {c.event} @ {c.changed_at}")
+        print(f"\nMemories ({_shown_label(memories, has_more['memories'])}):")
+        for m in payload["memories"]:
+            print(f"  - {m['name']} ({m['type']}; {_age_label(m)})")
+        reflection = payload["latest_reflection"]
+        if reflection:
+            print(f"Latest handoff: {reflection['name']} ({_age_label(reflection)})")
+        else:
+            print("Latest handoff: no reflection recorded.")
         for note in recall_notes:
             print(f"\n{note}")
         if learned_context is not None:
@@ -250,8 +339,26 @@ def register_orient_parser(sub: argparse._SubParsersAction) -> None:
         "orient",
         help="One-call session digest: open breadcrumbs, recent changes, memories",
     )
-    orient.add_argument("--days", type=int, default=7, help="Recent-changes window (days)")
-    orient.add_argument("--limit", type=int, default=15)
+    orient.add_argument(
+        "--days", type=_positive_int, default=7, help="Recent-changes window (days)"
+    )
+    orient.add_argument(
+        "--limit",
+        type=_section_limit,
+        default=None,
+        help="Entries per section, 1–100 (default: 5, or 15 with --full)",
+    )
+    orient.add_argument(
+        "--full",
+        action="store_true",
+        help="Show more entries and individual recent changes",
+    )
+    orient.add_argument(
+        "--stale-after-days",
+        type=_positive_int,
+        default=DEFAULT_STALE_AFTER_DAYS,
+        help="Label recorded updates this many days old as aged (default: 30)",
+    )
     orient.add_argument(
         "--reconcile",
         action="store_true",

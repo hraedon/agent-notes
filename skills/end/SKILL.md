@@ -73,9 +73,9 @@ If `AGENTS.md` has no such section, skip this step. **Do not invent one** — fa
 
 The `reflect` skill writes the markdown file *and* ingests it into the agent-notes memory store as a `reflection`-type memory. If you write the file directly with Write or `cat > … <<EOF`, you skip the DB ingest — which means the reflection is invisible to `/start` next session, invisible to cross-kind search, and stops half of what reflections are for. The file-on-disk is the *artifact*; the memory-store row is the *index*. You need both.
 
-Invoke the skill via your harness's skill mechanism (Claude Code: the Skill tool with `skill: "reflect"`; opencode: `/reflect`). Do this *after* step 1 so the reflection can reference the breadcrumbs it just saw move.
+Invoke the skill via your harness's skill mechanism (Claude Code: the Skill tool with `skill: "reflect"`; opencode: `/reflect`; Codex: select `$reflect` or the plugin's namespaced `reflect` skill). Do this *after* step 1 so the reflection can reference the breadcrumbs it just saw move.
 
-If the reflect skill is genuinely unavailable in your harness, fall back: write the file using the template in `~/.claude/skills/reflect/SKILL.md`, then run `agent-notes memory add --type reflection --name reflection-<date>-<model-slug> --body "$(cat <file>)"` explicitly. Note the fallback in the final report — don't hide it.
+If the reflect skill is unavailable, use the bundled sibling `../reflect/SKILL.md` template and its shell-specific ingestion command. Include the project selector. Note the fallback in the final report.
 
 ---
 

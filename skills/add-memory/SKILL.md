@@ -26,6 +26,11 @@ Examples of bad memories (file these elsewhere):
   commit message.
 - "The capital of France is Paris" — that's not project-specific.
 
+Use the store the user intends. These commands write shared agent-notes
+project memory; Codex native memory is a separate destination with its own
+write rules. Do not copy private harness memory into the shared store without
+a request that covers sharing it.
+
 ## Memory types
 
 Four conventional types, mirrored from the user's auto-memory
@@ -86,12 +91,7 @@ than with prose padding.
 ## How to run it
 
 ```
-agent-notes memory add \
-  --path <repo-path> \
-  --name <kebab-case-name> \
-  --type <user|feedback|project|reference> \
-  --body "<one sentence + context>" \
-  --json
+agent-notes memory add --path <repo-path> --name <kebab-case-name> --type <user|feedback|project|reference> --body "<one sentence + context>" --json
 ```
 
 Parse the JSON; confirm the `id` and any `supersedes` field (the

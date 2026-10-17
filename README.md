@@ -1,5 +1,7 @@
 # agent-notes
 
+Desktop Codex: [install the local plugin and configure the runtime](docs/desktop-codex.md).
+
 > **Frozen 2026-10-04 — maintenance only.** This project still works and stays
 > in use where it is already wired in, but it gets security and break-fix
 > changes only: no new features and no new plans. Active development on

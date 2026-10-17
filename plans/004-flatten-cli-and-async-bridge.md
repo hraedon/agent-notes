@@ -129,7 +129,7 @@ In `skills/` (this repo) and installable into `~/.claude/skills/`:
 | `update-breadcrumb` | Status transitions, body appends, marking resolved. | `agent-notes breadcrumb update --json` |
 | `find-breadcrumb` | Search-before-file dedup. Prompt instructs to search project + global before filing. | `agent-notes breadcrumb find --json`, `agent-notes search all --json` |
 | `add-memory` | Cross-session fact recording. Prompt drives naming convention and de-duplication. | `agent-notes memory add --json`, `agent-notes memory search --json` |
-| `start` | Session-start orientation. Prints recent breadcrumbs, active memories, last reflection. | `agent-notes breadcrumb find --status open`, `agent-notes memory list`, `agent-notes changes since` |
+| `start` | Bounded session orientation, recorded ages, and latest handoff metadata. | `agent-notes orient --reconcile --json`; fetch specific memory bodies when relevant |
 | `reflect` (existing, edited) | Now shells to CLI instead of MCP; otherwise unchanged. | `agent-notes memory add --type reflection`, file write to `reflections/` |
 | `end` (existing, edited) | Same — no projection (Plan 003), just reflect + commit. | `agent-notes` (no MCP) |
 
@@ -234,3 +234,26 @@ Triggers: 9b exit criterion met *and* the user has used skills exclusively for �
 ## 12. Status
 
 Proposed v0.1; ready for one round of peer review (Plan 002 decision 38). New evidence welcome; restated proposals not.
+
+## 13. Bounded orientation and recorded freshness (2026-10-15)
+
+Owner authorized lifting the agent-notes development freeze for this increment
+and related small fixes. Default orientation now returns five entries per
+section; `--full` restores the fifteen-entry view and individual change details,
+and an explicit `--limit` selects 1–100. Fetching one sentinel row makes
+`has_more` honest without a separate count query. Counts in summaries describe
+the displayed sample, not the project's full backlog. Git resolution scanning
+continues to cover the displayed work-item sample.
+
+`generated_at` dates the read. Work items, memories, and the independently
+queried latest reflection expose `updated_at`, whole `age_days`, and a derived
+`freshness` signal: `recent`, `aged` (30 days by default), `unknown` for absent
+or ambiguous timestamps, and `future` for clock anomalies. These describe row
+updates; they never certify correctness, review, or current implementation.
+`--stale-after-days` changes the age threshold without mutating stored records.
+The separate reflection lookup prevents new unrelated memories from hiding an
+older handoff. Orientation remains read-only and embedding-free.
+
+The start skill uses this one query and reads specific bodies only when
+relevant. Codex's automatic context samples five work items, summarizes change
+counts, and includes handoff timing while retaining its metadata-only boundary.

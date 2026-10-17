@@ -3,11 +3,39 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from agent_notes.cli.harness import _install_harness_one
 from agent_notes.scripts import doctor
 from agent_notes.scripts.doctor import _check_codex_harness
+
+
+def test_plugin_probe_limits_query_to_configured_sources(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text(
+        '[plugins."agent-notes@local-notes"]\nenabled = true\n'
+        '[plugins."other@remote"]\nenabled = true\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("shutil.which", lambda name: "codex.exe")
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            json.dumps(
+                {"installed": [{"name": "agent-notes", "version": "1.1.0", "enabled": True}]}
+            ),
+        )
+
+    monkeypatch.setattr(subprocess, "run", run)
+    assert doctor._probe_codex_agent_notes_plugin()[0] == "enabled"
+    assert calls == [["codex", "plugin", "list", "--json", "--marketplace", "local-notes"]]
 
 
 def _use_home(monkeypatch, home: Path, plugin_state: str = "absent") -> None:
@@ -76,6 +104,27 @@ def test_codex_doctor_reports_plugin_and_trust_state(monkeypatch, tmp_path) -> N
     assert ok is True
     assert detail.startswith("codex: plugin wired")
     assert "trust-unverified" in detail
+
+
+@pytest.mark.parametrize("plugin_state", ["enabled", "disabled", "stale", "absent"])
+def test_plugin_only_install_satisfies_generic_wiring_checks(
+    monkeypatch, tmp_path, plugin_state
+) -> None:
+    """A healthy plugin must not prompt installation of duplicate direct hooks."""
+    _use_home(monkeypatch, tmp_path, plugin_state=plugin_state)
+    # Exercise run_json's real wiring aggregation, without contacting a store.
+    monkeypatch.setattr(doctor, "_check_dsn", lambda: (False, "fixture store offline"))
+    monkeypatch.setattr(doctor, "_check_regista_reachable", lambda cfg: (None, "not configured"))
+    monkeypatch.setattr(doctor, "_check_secrets_backend", lambda cfg: (None, "not configured"))
+    monkeypatch.setattr(doctor, "_check_memory_provider", lambda: (None, "native"))
+    payload, _code = doctor.run_json()
+    checks = {check["name"]: check for check in payload["checks"]}
+    expected = "ok" if plugin_state == "enabled" else "fail"
+    assert checks["skills_installed"]["status"] == expected
+    assert checks["harness_wired"]["status"] == expected
+    assert checks["codex_harness"]["status"] == ("skip" if plugin_state == "absent" else expected)
+    assert checks["dsn_reachable"]["status"] == "fail"
+    assert not (tmp_path / ".agents").exists()
 
 
 def test_codex_doctor_reports_plugin_direct_duplicate(monkeypatch, tmp_path) -> None:

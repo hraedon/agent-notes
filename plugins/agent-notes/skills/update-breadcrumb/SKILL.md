@@ -52,11 +52,7 @@ When you actually fixed it in the diff you're about to commit:
 ## How to run it
 
 ```
-agent-notes work-item update <identifier> \
-  --path <repo-path> \
-  --status <new-status> \
-  --body "<existing body + appended note>" \
-  --json
+agent-notes work-item update <identifier> --path <repo-path> --status <new-status> --body "<existing body + appended note>" --json
 ```
 
 Identity is ambient v6 configuration, never a command-line override. Set the

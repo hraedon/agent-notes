@@ -37,9 +37,17 @@ The gate enforces two identity checks:
    `REGISTA_PRODUCER_MODEL_LINEAGE` must be declared and distinct from the
    authors' lineages. Configure it in the process environment or suite.env:
 
+   POSIX shells:
+
+   ```sh
+   AGENT_NOTES_ACTOR_ID=agent:reviewer REGISTA_PRODUCER_MODEL_LINEAGE=<your-lineage> agent-notes work-item review pass ...
    ```
-   AGENT_NOTES_ACTOR_ID=agent:reviewer \
-   REGISTA_PRODUCER_MODEL_LINEAGE=<your-lineage> \
+
+   PowerShell (in the independently configured reviewer process):
+
+   ```powershell
+   $env:AGENT_NOTES_ACTOR_ID = "agent:reviewer"
+   $env:REGISTA_PRODUCER_MODEL_LINEAGE = "<your-lineage>"
    agent-notes work-item review pass ...
    ```
 
@@ -101,10 +109,7 @@ Based on your findings, choose one:
 The work is sound; advance it to the final accept gate:
 
 ```
-agent-notes work-item review pass <identifier> \
-  --path <repo-path> \
-  --note "<your findings: what you checked, what you found, why it's sound>" \
-  --json
+agent-notes work-item review pass <identifier> --path <repo-path> --note "<your findings: what you checked, what you found, why it's sound>" --json
 ```
 
 The note must be substantive — the gate validator rejects empty notes.
@@ -115,10 +120,7 @@ Document what you reviewed and your assessment.
 The work needs revision:
 
 ```
-agent-notes work-item review request-changes <identifier> \
-  --path <repo-path> \
-  --note "<specific issues to address>" \
-  --json
+agent-notes work-item review request-changes <identifier> --path <repo-path> --note "<specific issues to address>" --json
 ```
 
 Be specific about what needs to change. The author will see the note in
@@ -129,10 +131,7 @@ the work item's `diagnostic_keys.review_notes`.
 After a prior adversarial pass, finalize the work (requires regista):
 
 ```
-agent-notes work-item review accept <identifier> \
-  --path <repo-path> \
-  --note "<acceptance rationale>" \
-  --json
+agent-notes work-item review accept <identifier> --path <repo-path> --note "<acceptance rationale>" --json
 ```
 
 Your `actor_id` must differ from whoever ran the `adversarial_pass`
@@ -144,10 +143,7 @@ author may accept, but a different reviewer is still preferred.
 The work is fundamentally flawed and should not proceed:
 
 ```
-agent-notes work-item review reject <identifier> \
-  --path <repo-path> \
-  --note "<rejection rationale>" \
-  --json
+agent-notes work-item review reject <identifier> --path <repo-path> --note "<rejection rationale>" --json
 ```
 
 ## Error handling

@@ -1,0 +1,12 @@
+{
+  "name": "agent-notes-local",
+  "interface": {"displayName": "Agent Notes (local)"},
+  "plugins": [
+    {
+      "name": "agent-notes",
+      "source": {"source": "local", "path": "./plugins/agent-notes"},
+      "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+      "category": "Productivity"
+    }
+  ]
+}

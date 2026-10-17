@@ -9,6 +9,20 @@ built-wheel install was verified independently of the source checkout. Phase
 
 ## Corrections applied during implementation (2026-07-17)
 
+- **Desktop portability follow-up (2026-10-15, owner requested).** A component
+  marketplace now exposes only `plugins/agent-notes`. Canonical skills and their
+  bundled copies use single-line CLI examples, with explicit PowerShell file
+  ingestion and reviewer environment examples. The `end` fallback locates its
+  bundled sibling skill instead of assuming a Claude installation. Doctor's
+  generic skills/manifest checks accept a current enabled plugin, avoiding a
+  false failure that recommended duplicate direct installation. The Codex
+  readiness check still reports stale, disabled, duplicate and trust-unverified
+  states. Local installation also exposed an unfiltered plugin-list timeout on
+  unrelated remote sources; the probe now queries configured agent-notes
+  marketplaces directly. No storage, workflow or identity contract changes. Local CLI plugin
+  installation is evidence for packaging only; authenticated desktop workflow
+  and hook execution remain separate proof.
+
 - **WI-2.1 / WI-2.2 landed (2026-07-18).** A narrow `agent-notes codex-hook`
   adapter consumes only event name, cwd, and Stop's loop flag. SessionStart
   renders the existing orientation query into a 7,000-character,

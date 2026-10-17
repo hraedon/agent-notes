@@ -91,12 +91,14 @@ If a file with that name already exists (multiple sessions same day), append `-2
 After saving the markdown file to disk, run the agent-notes CLI to record the reflection as a memory of type `reflection`:
 
 ```
-agent-notes memory add \
-  --path <repo-path> \
-  --name "reflection-<YYYY-MM-DD>-<model-slug>" \
-  --type reflection \
-  --body "$(cat <reflection-file>)" \
-  --json
+agent-notes memory add --path <repo-path> --name "reflection-<YYYY-MM-DD>-<model-slug>" --type reflection --body "$(cat <reflection-file>)" --json
+```
+
+In PowerShell, read the file as one string instead of using `cat`:
+
+```powershell
+$reflectionBody = Get-Content -LiteralPath "<reflection-file>" -Raw
+agent-notes memory add --path "<repo-path>" --name "reflection-<YYYY-MM-DD>-<model-slug>" --type reflection --body $reflectionBody --json
 ```
 
 Parse the JSON. If the CLI exits non-zero (e.g. project not configured, DB unavailable), log a brief warning and continue — the file on disk is still valid. The DB ingest is best-effort, not blocking.

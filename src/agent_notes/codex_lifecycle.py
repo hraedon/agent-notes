@@ -113,35 +113,47 @@ def _format_orientation(payload: dict[str, Any]) -> str:
         "Agent-notes project orientation (bounded stored metadata; may be stale):",
         f"Project: {project} (workspace {workspace})",
     ]
+    if payload.get("generated_at"):
+        lines.append(f"Snapshot: {_redact(payload['generated_at'])}; ages do not verify accuracy")
+    more = payload.get("has_more", {})
+    if not isinstance(more, dict):
+        more = {}
 
     work_items = payload.get("open_work_items")
     if isinstance(work_items, list):
-        lines.append(f"Open work items: {len(work_items)}")
-        for item in work_items[:10]:
+        suffix = "; more available" if more.get("open_work_items") or len(work_items) > 5 else ""
+        lines.append(f"Open work items: {min(len(work_items), 5)} shown{suffix}")
+        for item in work_items[:5]:
             if not isinstance(item, dict):
                 continue
             identifier = _redact(item.get("identifier", "?"))
             status = _redact(item.get("status", "?"))
             severity = _redact(item.get("severity", "?"))
-            lines.append(f"- [{severity}] {identifier} ({status})")
+            freshness = _redact(item.get("freshness", "unknown"))
+            age = item.get("age_days")
+            age_label = f"{age}d; " if isinstance(age, int) and age >= 0 else ""
+            lines.append(
+                f"- [{severity}] {identifier} ({status}; recorded update: {age_label}{freshness})"
+            )
 
     changes = payload.get("recent_changes")
     if isinstance(changes, list):
-        lines.append(f"Recent changes: {len(changes)}")
-        for change in changes[:10]:
-            if not isinstance(change, dict):
-                continue
-            kind = _redact(change.get("kind", "?"))
-            identifier = _redact(change.get("identifier", "?"))
-            event = _redact(change.get("event", "?"))
-            lines.append(f"- [{kind}] {identifier}: {event}")
+        suffix = "; more available" if more.get("recent_changes") else ""
+        lines.append(f"Recent changes: {len(changes)} sampled{suffix}")
 
     memories = payload.get("memories")
     if isinstance(memories, list):
         # Names can themselves contain sensitive user text.  The hook needs an
         # orientation signal, not the names; agents can opt into the skills to
         # inspect memories deliberately.
-        lines.append(f"Stored project memories: {len(memories)}")
+        suffix = "; more available" if more.get("memories") else ""
+        lines.append(f"Stored project memories: {len(memories)} sampled{suffix}")
+
+    reflection = payload.get("latest_reflection")
+    if isinstance(reflection, dict):
+        updated = _redact(reflection.get("updated_at") or "unknown")
+        freshness = _redact(reflection.get("freshness", "unknown"))
+        lines.append(f"Latest handoff: recorded update {updated} ({freshness})")
 
     resolved = payload.get("resolved_in_git")
     if isinstance(resolved, list) and resolved:
@@ -179,7 +191,7 @@ def _orientation_for_cwd(cwd: Path) -> str | None:
         project=None,
         path=str(cwd),
         days=7,
-        limit=10,
+        limit=5,
         reconcile=True,
         recall=False,
         json=True,

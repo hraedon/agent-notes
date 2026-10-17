@@ -72,3 +72,12 @@ def test_plugin_bundle_excludes_checkout_and_virtualenv() -> None:
     assert not (REPO_ROOT / ".codex-plugin" / "plugin.json").exists()
     assert all(".venv" not in path.parts and ".git" not in path.parts for path in bundled_files)
     assert sum(path.stat().st_size for path in bundled_files) < 1_000_000
+
+
+def test_marketplace_resolves_the_bounded_component_bundle() -> None:
+    catalog = json.loads(
+        (REPO_ROOT / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8")
+    )
+    (entry,) = catalog["plugins"]
+    assert entry["name"] == "agent-notes"
+    assert (REPO_ROOT / entry["source"]["path"]).resolve() == PLUGIN_ROOT.resolve()

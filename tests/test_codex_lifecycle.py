@@ -97,7 +97,34 @@ def test_orientation_renderer_redacts_and_bounds_metadata() -> None:
     assert "sk-abcdefghijklmnopqrstuvwxyz" not in context
     assert "do-not-print" not in context
     assert "also-do-not-print" not in context
-    assert "WI-10" not in context  # renderer is deliberately capped at ten items
+    assert "WI-5" not in context  # renderer is deliberately capped at five items
+    assert "more available" in context
+
+
+def test_orientation_freshness_is_visible_without_exposing_handoff_text() -> None:
+    payload = {
+        "generated_at": "2026-10-15T00:00:00+00:00",
+        "latest_reflection": {
+            "name": "password=must-not-enter-hook",
+            "age_days": 80,
+            "updated_at": "2026-07-27T00:00:00+00:00",
+            "freshness": "aged",
+        },
+        "open_work_items": [
+            {
+                "identifier": "WI-001",
+                "severity": "high",
+                "status": "open",
+                "age_days": 40,
+                "freshness": "aged",
+            }
+        ],
+        "has_more": {"open_work_items": True},
+    }
+    context = lifecycle._format_orientation(payload)
+    assert "2026-10-15" in context and "2026-07-27" in context
+    assert "40d; aged" in context
+    assert "must-not-enter-hook" not in context
 
 
 def test_stop_reconciles_once_and_never_requests_continuation(monkeypatch, tmp_path) -> None:

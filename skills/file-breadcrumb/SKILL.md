@@ -71,14 +71,7 @@ Do **not** file one when:
 5. **File it.** Run:
 
    ```
-    agent-notes work-item file \
-      --path <repo-path> \
-      --title "<sentence>" \
-      --body "<two paragraphs>" \
-      --type <existing-type> \
-      --status open \
-      --severity <low|medium|high|critical> \
-      --json
+    agent-notes work-item file --path <repo-path> --title "<sentence>" --body "<two paragraphs>" --type <existing-type> --status open --severity <low|medium|high|critical> --json
     ```
 
     Identity is ambient v6 configuration, never a command-line override. Set a

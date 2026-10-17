@@ -27,12 +27,7 @@ The CLI gives you two complementary tools; use both.
 1. **Structured filter** — fast, exact on type/status:
 
    ```
-   agent-notes work-item find \
-     --path <repo-path> \
-     --status open \
-     --type <type-if-known> \
-     --text "<short query>" \
-     --json
+   agent-notes work-item find --path <repo-path> --status open --type <type-if-known> --text "<short query>" --json
    ```
 
    `--text` does embedding similarity scoped to breadcrumbs only. Good

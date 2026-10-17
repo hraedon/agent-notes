@@ -139,7 +139,10 @@ Agent-facing workflows ship as skills under `skills/`:
 `file-breadcrumb`, `update-breadcrumb`, `find-breadcrumb`, `add-memory`,
 `adversarial-review`, `start`, `reflect`, `end`. Each is a Markdown
 SKILL.md that shells to `agent-notes <noun> <verb> --json` and carries
-the per-workflow judgment in prose. Install with `agent-notes
+the per-workflow judgment in prose. For desktop Codex, the repo-local catalog
+at `.agents/plugins/marketplace.json` exposes the bounded `plugins/agent-notes`
+bundle; see `docs/desktop-codex.md`. Keep bundled skills byte-equal to canonical
+sources and use single-line or shell-specific command examples. Install with `agent-notes
 install-skills --target {claude,opencode}` (skills only) or
 `agent-notes install-harness {claude|opencode|codex|all}` (skills + env wiring
 + opencode plugin + opencode subagent definitions — Plan 017 WI-2.1 and

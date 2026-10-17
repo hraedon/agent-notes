@@ -475,7 +475,7 @@ def _check_chain_ok() -> tuple[bool | None, str]:
         return False, f"chain verification error: {type(exc).__name__}"
 
 
-def _check_skills_installed() -> tuple[bool | None, str]:
+def _check_skills_installed(*, codex_plugin_wired: bool = False) -> tuple[bool | None, str]:
     """Detect whether the agent-notes skills are present in either harness."""
     try:
         from agent_notes.cli.skills import _discover_skills, _repo_skills_root
@@ -503,11 +503,13 @@ def _check_skills_installed() -> tuple[bool | None, str]:
                 found.append(name)
     installed = sorted(set(found))
     if not installed:
+        if codex_plugin_wired:
+            return True, "skills provided by the enabled agent-notes Codex plugin"
         return False, "no skills installed (run 'agent-notes install-harness <harness>')"
     return True, f"{len(installed)} skill(s) installed: {', '.join(installed)}"
 
 
-def _check_harness_wired() -> tuple[bool, str]:
+def _check_harness_wired(*, codex_plugin_wired: bool = False) -> tuple[bool, str]:
     """Detect whether install-harness left a manifest in either harness config."""
     from agent_notes.cli.harness import _codex_home
 
@@ -519,11 +521,13 @@ def _check_harness_wired() -> tuple[bool, str]:
     ]
     wired = [str(p) for p in manifests if p.exists()]
     if not wired:
+        if codex_plugin_wired:
+            return True, "harness wired by the enabled agent-notes Codex plugin"
         return False, "no harness manifest found (run 'agent-notes install-harness <harness>')"
     return True, f"harness wired: {', '.join(wired)}"
 
 
-def _check_codex_harness() -> tuple[bool | None, str]:
+def _check_codex_harness(*, plugin_probe: tuple[str, str] | None = None) -> tuple[bool | None, str]:
     """Report plugin/direct/duplicate/stale Codex lifecycle states.
 
     The generic skills/manifest checks above answer whether *any* harness is
@@ -551,7 +555,9 @@ def _check_codex_harness() -> tuple[bool | None, str]:
 
     paths = _harness_paths("codex")
     manifest_path = paths["manifest"]
-    plugin_state, plugin_detail = _probe_codex_agent_notes_plugin()
+    plugin_state, plugin_detail = (
+        plugin_probe if plugin_probe is not None else _probe_codex_agent_notes_plugin()
+    )
     if not manifest_path.is_file():
         if plugin_state == "enabled":
             return True, "codex: plugin wired (trust-unverified via /hooks)"
@@ -666,24 +672,45 @@ def _probe_codex_agent_notes_plugin() -> tuple[str, str]:
 
     if shutil.which("codex") is None:
         return "absent", "Codex CLI not installed"
+    # An unfiltered list can wait on unrelated remote marketplaces. Query the
+    # configured agent-notes sources directly so local readiness remains local.
+    import tomllib
+
+    from agent_notes.cli.harness import _codex_home
+
     try:
-        completed = subprocess.run(
-            ("codex", "plugin", "list", "--json"),
-            capture_output=True,
-            text=True,
-            timeout=15,
+        config = tomllib.loads((_codex_home() / "config.toml").read_text(encoding="utf-8"))
+        plugins = config.get("plugins", {})
+        markets = (
+            sorted(
+                key.split("@", 1)[1]
+                for key in plugins
+                if isinstance(key, str) and key.startswith("agent-notes@")
+            )
+            if isinstance(plugins, dict)
+            else []
         )
+    except (OSError, ValueError):
+        markets = []
+    installed: list[object] = []
+    try:
+        for market in markets or [None]:
+            command = ["codex", "plugin", "list", "--json"]
+            if market is not None:
+                command.extend(["--marketplace", market])
+            completed = subprocess.run(command, capture_output=True, text=True, timeout=15)
+            if completed.returncode != 0:
+                return "unknown", "codex plugin list failed"
+            try:
+                payload = json.loads(completed.stdout)
+            except ValueError:
+                return "unknown", "codex plugin list emitted invalid JSON"
+            entries = payload.get("installed") if isinstance(payload, dict) else None
+            if not isinstance(entries, list):
+                return "unknown", "codex plugin list omitted installed entries"
+            installed.extend(entries)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return "unknown", type(exc).__name__
-    if completed.returncode != 0:
-        return "unknown", "codex plugin list failed"
-    try:
-        payload = json.loads(completed.stdout)
-    except ValueError:
-        return "unknown", "codex plugin list emitted invalid JSON"
-    installed = payload.get("installed") if isinstance(payload, dict) else None
-    if not isinstance(installed, list):
-        return "unknown", "codex plugin list omitted installed entries"
     matches = [
         entry
         for entry in installed
@@ -1000,14 +1027,16 @@ def run_json(check_embed: bool = False) -> tuple[dict, int]:
             add(name, None, "skipped (prerequisite dsn_reachable/schema_up_to_date failed)")
 
     # --- suite-layer checks (run regardless of native DB reachability) ---
-    ok, msg = _check_skills_installed()
+    plugin_probe = _probe_codex_agent_notes_plugin()
+    codex_ok, codex_msg = _check_codex_harness(plugin_probe=plugin_probe)
+    plugin_wired = codex_ok is True and plugin_probe[0] == "enabled"
+    ok, msg = _check_skills_installed(codex_plugin_wired=plugin_wired)
     add("skills_installed", ok, msg)
 
-    ok, msg = _check_harness_wired()
+    ok, msg = _check_harness_wired(codex_plugin_wired=plugin_wired)
     add("harness_wired", ok, msg)
 
-    ok, msg = _check_codex_harness()
-    add("codex_harness", ok, msg)
+    add("codex_harness", codex_ok, codex_msg)
 
     ok, msg = _check_secrets_backend(cfg)
     add("secrets_backend", ok, msg)
@@ -1143,7 +1172,10 @@ def run(skip_embed: bool = False, check_embed: bool = False) -> int:
         _print_result(ok, msg)
         all_ok = all_ok and ok
 
-    ok, msg = _check_skills_installed()
+    plugin_probe = _probe_codex_agent_notes_plugin()
+    codex_ok, codex_msg = _check_codex_harness(plugin_probe=plugin_probe)
+    plugin_wired = codex_ok is True and plugin_probe[0] == "enabled"
+    ok, msg = _check_skills_installed(codex_plugin_wired=plugin_wired)
     _print_section("11. Skills Installed")
     if ok is None:
         print(f"  SKIP: {msg}")
@@ -1151,12 +1183,12 @@ def run(skip_embed: bool = False, check_embed: bool = False) -> int:
         _print_result(ok, msg)
         all_ok = all_ok and ok
 
-    ok, msg = _check_harness_wired()
+    ok, msg = _check_harness_wired(codex_plugin_wired=plugin_wired)
     _print_section("12. Harness Wired")
     _print_result(ok, msg)
     all_ok = all_ok and ok
 
-    ok, msg = _check_codex_harness()
+    ok, msg = codex_ok, codex_msg
     _print_section("13. Codex Harness")
     if ok is None:
         print(f"  SKIP: {msg}")
