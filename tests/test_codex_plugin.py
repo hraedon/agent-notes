@@ -63,6 +63,9 @@ def test_wheel_force_includes_the_canonical_skill_tree() -> None:
         # WI-047: the migration DDL must reach an artifact-only host. Asserted
         # by contents, not just by mapping, in tests/test_wheel_install.py.
         "schema": "agent_notes/schema",
+        # `install-harness opencode` copies this V2 plugin package; without it
+        # an artifact-only host cannot register a working plugin.
+        "integrations/opencode": "agent_notes/integrations/opencode",
     }
 
 

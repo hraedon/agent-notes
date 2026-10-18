@@ -6,7 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-## [1.1.0] — 2026-08-22
+## [1.1.1] - 2026-10-17
+
+### Fixed
+
+- **OpenCode 2 installer:** `agent-notes install-harness opencode` now installs
+  the V2 plugin package to `~/.config/opencode/agent-notes` and registers it in
+  `opencode.json` under `plugins` as `./agent-notes`. Existing V1 `plugin`
+  entries (`integrations/opencode/index.js`) are removed during install, and
+  uninstall removes the copied package. The plugin package is force-included in
+  the wheel so artifact-only hosts can install it without a source checkout.
+
+## [1.1.0] - 2026-08-22
 
 ### Changed
 

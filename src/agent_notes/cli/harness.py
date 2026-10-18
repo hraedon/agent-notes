@@ -16,14 +16,17 @@ Env-var wiring per harness (decision: respect each harness's schema):
 * **claude** — merge the suite + tool env vars into ``~/.claude/settings.json``
   under the ``env`` key (the schema-supported, working mechanism Claude Code
   injects into spawned processes).
-* **opencode** — ``opencode.json`` has no top-level ``env`` key
+* **opencode** - ``opencode.json`` has no top-level ``env`` key
   (``additionalProperties: false``), so env vars are written into agent-notes'
-  own config file (``~/.config/agent-notes/config.json``) — the existing
+  own config file (``~/.config/agent-notes/config.json``) - the existing
   harness-independent fallback that :mod:`agent_notes.core.config` already reads
-  (Plan 012 WI-1). The opencode plugin path is registered in
-  ``opencode.json["plugin"]`` (schema-supported); the two transform hooks
-  (``experimental.chat.system.transform`` / ``experimental.session.compacting``)
-  ship *inside* the plugin, so registering the path wires them.
+  (Plan 012 WI-1). OpenCode 2 uses the ``plugins`` array and loads a plugin
+  *directory* (``index.js`` at its root); the V2 package is copied to
+  ``~/.config/opencode/agent-notes`` and registered as ``./agent-notes``. The
+  obsolete V1 ``plugin`` entry (``integrations/opencode/index.js``) is removed
+  on install, because V2's plugin API is a deliberate break. The two V2 hooks
+  (``ctx.session.hook('context')`` / ``ctx.session.hook('compaction')``) ship
+  inside the package, so registering the directory wires them.
 * **hermes** — ``~/.hermes/.env`` is a ``KEY=VALUE`` file (not JSON). Env vars
   are written between sentinel comments (``# BEGIN agent-notes-harness-managed``
   / ``# END agent-notes-harness-managed``). Idempotent: if sentinels exist the
@@ -241,9 +244,39 @@ def _action_is_unchanged(a: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _plugin_path() -> Path:
-    """Resolve the opencode plugin path (repo-relative, absolute)."""
-    return _repo_skills_root().parent / "integrations" / "opencode" / "index.js"
+def _opencode_plugin_src() -> Path:
+    """Resolve the OpenCode 2 plugin package (``index.js`` + ``package.json``).
+
+    Wheels force-include ``integrations/opencode`` at
+    ``agent_notes/integrations/opencode``; a source checkout keeps it at the
+    repository root. Resolve both layouts, mirroring :func:`_repo_skills_root`.
+    """
+    here = Path(__file__).resolve()
+    pkg_internal = here.parent.parent / "integrations" / "opencode"
+    if pkg_internal.is_dir():
+        return pkg_internal
+    return here.parents[3] / "integrations" / "opencode"
+
+
+# OpenCode 2 config entry for the copied plugin package. Relative paths resolve
+# from opencode.json's directory, so this stays valid across machines.
+OPENCODE_PLUGIN_ENTRY = "./agent-notes"
+_OPENCODE_PLUGIN_FILES = ("index.js", "package.json", "README.md")
+
+
+def _opencode_plugin_dest(home: Path | None = None) -> Path:
+    """Resolve where install-harness copies the V2 plugin package."""
+    return (home or Path.home()) / ".config" / "opencode" / "agent-notes"
+
+
+def _is_legacy_opencode_plugin_entry(value: object) -> bool:
+    """True for the V1 ``integrations/opencode/index.js`` registration form."""
+    if isinstance(value, (list, tuple)) and value:
+        value = value[0]
+    if not isinstance(value, str):
+        return False
+    normalized = value.replace("\\", "/").rstrip("/")
+    return normalized.endswith("integrations/opencode/index.js")
 
 
 def _opencode_agents_src_root(src_override: Path | None = None) -> Path:
@@ -324,6 +357,7 @@ def _harness_paths(harness: str, home: Path | None = None) -> dict[str, Path]:
         "manifest": base / MANIFEST_FILENAME,
         "agent_config": agent_config,
         "agents_dest": base / "agents",
+        "plugin_dir": _opencode_plugin_dest(home),
     }
 
 
@@ -964,23 +998,92 @@ def _wire_env_hermes(
 # ---------------------------------------------------------------------------
 
 
+def _install_opencode_plugin(
+    src: Path, dest: Path, dry_run: bool
+) -> tuple[list[dict], bool, list[str]]:
+    """Copy the OpenCode 2 plugin package into the user config directory.
+
+    The package is installer-owned (not a user-editable skill), so a newer
+    shipped ``index.js``/``package.json`` replaces the old copy. Returns
+    ``(actions, installed_now, warnings)``.
+    """
+    if not (src / "index.js").is_file() or not (src / "package.json").is_file():
+        raise RuntimeError(
+            f"OpenCode 2 plugin package not found at {src} "
+            "(expected index.js and package.json)."
+        )
+
+    actions: list[dict] = []
+    installed_now = False
+    warns: list[str] = []
+    for name in _OPENCODE_PLUGIN_FILES:
+        source = src / name
+        if not source.is_file():
+            if name != "README.md":
+                warns.append(f"opencode plugin source missing: {source}")
+            continue
+        payload = source.read_bytes()
+        target = dest / name
+        if target.is_file() and target.read_bytes() == payload:
+            status = "unchanged"
+        else:
+            status = "updated" if target.exists() else "created"
+            installed_now = True
+            if not dry_run:
+                dest.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(payload)
+        a = _act(
+            "create_file",
+            [],
+            f"opencode plugin file {name} ({status})",
+            status=status,
+        )
+        a["path"] = str(target)
+        actions.append(a)
+    return actions, installed_now, warns
+
+
 def _wire_plugin(
-    opencode_cfg: dict, plugin_path: Path, dry_run: bool
+    opencode_cfg: dict, dry_run: bool
 ) -> tuple[list[dict], bool, bool]:
-    """Register the opencode plugin path. Returns (actions, registered_now, already_present)."""
-    plugins = opencode_cfg.setdefault("plugin", [])
+    """Register the V2 plugin directory and migrate the obsolete V1 entry.
+
+    Returns ``(actions, registered_now, already_present)``. Only entries this
+    installer owns are touched: the V1 path always ends in
+    ``integrations/opencode/index.js``; unrelated ``plugin``/``plugins``
+    entries are preserved.
+    """
+    legacy_removed = False
+    legacy = opencode_cfg.get("plugin")
+    if isinstance(legacy, list):
+        kept = [p for p in legacy if not _is_legacy_opencode_plugin_entry(p)]
+        if len(kept) != len(legacy):
+            legacy_removed = True
+            if not dry_run:
+                if kept:
+                    opencode_cfg["plugin"] = kept
+                else:
+                    opencode_cfg.pop("plugin", None)
+
+    plugins = opencode_cfg.get("plugins")
     if not isinstance(plugins, list):
         plugins = []
-        opencode_cfg["plugin"] = plugins
-    ppath = str(plugin_path)
-    already = any(p == ppath or (isinstance(p, list) and p and p[0] == ppath) for p in plugins)
-    if already:
-        a = _act("merge_json", ["plugin"], "plugin already registered (unchanged)")
-        return ([a], False, True)
-    if not dry_run:
-        plugins.append(ppath)
-    detail = "register opencode plugin (system.transform + session.compacting)"
-    return ([_act("merge_json", ["plugin"], detail)], True, False)
+        if not dry_run:
+            opencode_cfg["plugins"] = plugins
+    already = OPENCODE_PLUGIN_ENTRY in plugins
+    if not already and not dry_run:
+        plugins.append(OPENCODE_PLUGIN_ENTRY)
+
+    if already and not legacy_removed:
+        detail = "opencode V2 plugin already registered (unchanged)"
+        return ([_act("merge_json", ["plugins"], detail, status="unchanged")], False, True)
+
+    detail = (
+        "migrate opencode plugin config to V2 (plugins array + copied package)"
+        if legacy_removed
+        else "register opencode V2 plugin directory (context + compaction hooks)"
+    )
+    return ([_act("merge_json", ["plugins"], detail)], True, already)
 
 
 # ---------------------------------------------------------------------------
@@ -1022,7 +1125,6 @@ def _install_harness_one(
     skills_dest = dest or paths["skills_dest"]
     config_path = paths["config"]
     agent_config_path = paths["agent_config"]
-    plugin_path = _plugin_path()
 
     env_values = _resolve_harness_env(user)
     warns: list[str] = []
@@ -1206,13 +1308,19 @@ def _install_harness_one(
         warns += ow
         if not dry_run and agent_cfg:
             _save_json(agent_config_path, agent_cfg)
-        # plugin -> opencode.json (schema-supported 'plugin' array)
-        pa, registered, already = _wire_plugin(config, plugin_path, dry_run)
+        # plugin package -> ~/.config/opencode/agent-notes, then register it in
+        # opencode.json's V2 'plugins' array (and drop the obsolete V1 entry).
+        plugin_files, plugin_files_new, plugin_file_warns = _install_opencode_plugin(
+            _opencode_plugin_src(), paths["plugin_dir"], dry_run
+        )
+        config_actions += plugin_files
+        warns += plugin_file_warns
+        pa, registered, already = _wire_plugin(config, dry_run)
         for a in pa:
             a["path"] = str(config_path)
         config_actions += pa
-        plugin_newly = registered
-        plugin_managed = registered or (already and prev_plugin)
+        plugin_newly = registered or plugin_files_new
+        plugin_managed = registered or plugin_files_new or (already and prev_plugin)
         if not dry_run and config:
             _save_json(config_path, config)
 
@@ -1295,11 +1403,11 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
     # plugin path is present in the live config without a prior manifest record.
     if harness == "opencode" and not manifest.get("plugin"):
         oc_cfg = _load_json(paths["config"])
-        plugins = oc_cfg.get("plugin", [])
-        ppath = str(_plugin_path())
-        if any(
-            p == ppath or (isinstance(p, list) and p and p[0] == ppath)
-            for p in (plugins if isinstance(plugins, list) else [])
+        plugins = oc_cfg.get("plugins", [])
+        legacy = oc_cfg.get("plugin", [])
+        if (isinstance(plugins, list) and OPENCODE_PLUGIN_ENTRY in plugins) or (
+            isinstance(legacy, list)
+            and any(_is_legacy_opencode_plugin_entry(p) for p in legacy)
         ):
             manifest["plugin"] = True
 
@@ -1380,20 +1488,48 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
     # --- remove plugin (opencode only) ---
     if manifest.get("plugin"):
         oc_cfg = _load_json(paths["config"])
-        plugins = oc_cfg.get("plugin", [])
+        changed = False
+        legacy = oc_cfg.get("plugin")
+        if isinstance(legacy, list):
+            kept = [p for p in legacy if not _is_legacy_opencode_plugin_entry(p)]
+            if len(kept) != len(legacy):
+                changed = True
+                if kept:
+                    oc_cfg["plugin"] = kept
+                else:
+                    oc_cfg.pop("plugin", None)
+        plugins = oc_cfg.get("plugins")
         if isinstance(plugins, list):
-            ppath = str(_plugin_path())
-            before = len(plugins)
-            plugins[:] = [
-                p
-                for p in plugins
-                if not (p == ppath or (isinstance(p, list) and p and p[0] == ppath))
-            ]
-            if len(plugins) != before:
-                a = _act("remove_key", ["plugin"], "removed plugin entry")
-                a["path"] = str(paths["config"])
-                actions.append(a)
-                _save_json(paths["config"], oc_cfg)
+            kept = [p for p in plugins if p != OPENCODE_PLUGIN_ENTRY]
+            if len(kept) != len(plugins):
+                changed = True
+                if kept:
+                    oc_cfg["plugins"] = kept
+                else:
+                    oc_cfg.pop("plugins", None)
+        if changed:
+            a = _act(
+                "remove_key",
+                ["plugins"],
+                "removed OpenCode 2 plugin registration",
+            )
+            a["path"] = str(paths["config"])
+            actions.append(a)
+            _save_json(paths["config"], oc_cfg)
+
+        plugin_dir = paths.get("plugin_dir")
+        if plugin_dir and plugin_dir.is_dir():
+            for name in _OPENCODE_PLUGIN_FILES:
+                plugin_file = plugin_dir / name
+                if plugin_file.is_file():
+                    plugin_file.unlink()
+                    a = _act("remove_file", [], "removed OpenCode plugin file")
+                    a["path"] = str(plugin_file)
+                    actions.append(a)
+            try:
+                plugin_dir.rmdir()
+            except OSError:
+                pass
 
     # --- remove opencode agents (opencode only) ---
     agent_hashes = _normalize_hash_map(manifest.get("agents", []))

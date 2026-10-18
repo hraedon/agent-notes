@@ -35,6 +35,7 @@ SOURCE_SCHEMA_DIR = REPO_ROOT / "schema"
 # Where force-include places the schema inside the wheel; the same anchor
 # ``agent_notes.scripts.migrate`` resolves through importlib.resources.
 WHEEL_SCHEMA_PREFIX = "agent_notes/schema/"
+WHEEL_PLUGIN_PREFIX = "agent_notes/integrations/opencode/"
 
 # Console scripts land in ``bin/`` on POSIX and ``Scripts/`` on Windows.
 # Resolved from the interpreter's own install scheme rather than hardcoded, so
@@ -135,6 +136,19 @@ def test_wheel_ships_every_schema_sql_file(tmp_path: Path) -> None:
         "wheel schema contents differ from schema/ in the source tree; "
         "check [tool.hatch.build.targets.wheel.force-include] in pyproject.toml"
     )
+
+
+def test_wheel_ships_the_opencode_plugin_package(tmp_path: Path) -> None:
+    """The V2 plugin must travel in the wheel so install-harness works on an
+    artifact-only host (the source checkout is not reachable there)."""
+    wheel = _build_wheel(tmp_path)
+    with zipfile.ZipFile(wheel) as zf:
+        names = set(zf.namelist())
+    for required in ("index.js", "package.json"):
+        assert f"{WHEEL_PLUGIN_PREFIX}{required}" in names, (
+            f"wheel is missing {WHEEL_PLUGIN_PREFIX}{required}; check "
+            "[tool.hatch.build.targets.wheel.force-include] in pyproject.toml"
+        )
 
 
 def test_wheel_install_migrate_resolves_schema_with_no_source_tree(tmp_path: Path) -> None:

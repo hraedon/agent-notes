@@ -345,9 +345,13 @@ def test_opencode_install_writes_config_file_and_plugin():
         assert cfg["regista"]["require_ssl"] is True  # coerced to bool
         assert cfg["regista"]["writes_enabled"] is True
         assert cfg["dsn"] == "postgresql://native/x"
-        # plugin -> opencode.json
+        # plugin package -> ~/.config/opencode/agent-notes; V2 registration
         oc = json.loads((td / ".config" / "opencode" / "opencode.json").read_text())
-        assert any("index.js" in p for p in oc["plugin"])
+        assert oc.get("plugins") == ["./agent-notes"]
+        assert "plugin" not in oc
+        plugin_dir = td / ".config" / "opencode" / "agent-notes"
+        assert (plugin_dir / "index.js").is_file()
+        assert (plugin_dir / "package.json").is_file()
         # skills
         assert (td / ".config" / "opencode" / "command" / "demo.md").is_file()
 
@@ -378,7 +382,43 @@ def test_opencode_reinstall_noop_and_uninstall():
         assert "dsn" not in cfg
         assert cfg.get("regista", {}) == {}
         oc = json.loads((td / ".config" / "opencode" / "opencode.json").read_text())
-        assert not any("index.js" in p for p in oc.get("plugin", []))
+        assert "./agent-notes" not in oc.get("plugins", [])
+        assert not (td / ".config" / "opencode" / "agent-notes").exists()
+
+
+def test_opencode_install_migrates_legacy_v1_plugin_entry():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        _make_opencode_agents(td)
+        config = td / ".config" / "opencode" / "opencode.json"
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            json.dumps(
+                {
+                    "plugin": [
+                        "/old/agent-notes/integrations/opencode/index.js",
+                        "someone-else-plugin",
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = _run(
+            "install-harness",
+            "opencode",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            env=_SUITE_ENV,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        oc = json.loads(config.read_text())
+        assert oc["plugins"] == ["./agent-notes"]
+        assert oc["plugin"] == ["someone-else-plugin"]
 
 
 # ---------------------------------------------------------------------------
