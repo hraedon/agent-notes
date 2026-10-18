@@ -137,7 +137,7 @@ Add it to the relevant numbered decision in `plans/001-architecture-and-implemen
 
 Agent-facing workflows ship as skills under `skills/`:
 `file-breadcrumb`, `update-breadcrumb`, `find-breadcrumb`, `add-memory`,
-`adversarial-review`, `start`, `reflect`, `end`. Each is a Markdown
+`adversarial-review`, `steward-change`, `start`, `reflect`, `end`. Each is a Markdown
 SKILL.md that shells to `agent-notes <noun> <verb> --json` and carries
 the per-workflow judgment in prose. For desktop Codex, the repo-local catalog
 at `.agents/plugins/marketplace.json` exposes the bounded `plugins/agent-notes`

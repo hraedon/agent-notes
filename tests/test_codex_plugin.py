@@ -31,6 +31,7 @@ def test_component_owned_plugin_bundles_exact_canonical_skills() -> None:
         "find-breadcrumb",
         "reflect",
         "start",
+        "steward-change",
         "update-breadcrumb",
     ]
     for bundled in skills_root.glob("*/SKILL.md"):

@@ -152,6 +152,7 @@ CLI is dumb storage; the policy lives in the skill Markdown.
 | `find-breadcrumb` | Search-before-file dedup helper. |
 | `add-memory` | Cross-session fact recording with naming/dedup. |
 | `start` | Session-start orientation. |
+| `steward-change` | Risk-bounded change workflow for declared intent, isolation, evidence, and review. |
 | `reflect` | Write a session reflection (now via CLI, not MCP). |
 | `end` | Wrap-up: reconcile breadcrumbs, reflect, commit. |
 
