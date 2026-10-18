@@ -279,6 +279,22 @@ def _is_legacy_opencode_plugin_entry(value: object) -> bool:
     return normalized.endswith("integrations/opencode/index.js")
 
 
+def _is_direct_opencode_plugin_entry(value: object) -> bool:
+    """True for a V2 entry pointing directly at the source ``integrations/opencode``.
+
+    ``install-harness`` copies the package to ``~/.config/opencode/agent-notes``
+    and registers ``./agent-notes``. A checkout that was wired manually with the
+    absolute source directory is the same package; migrate it so the plugin is
+    not loaded twice.
+    """
+    if isinstance(value, (list, tuple)) and value:
+        value = value[0]
+    if not isinstance(value, str):
+        return False
+    normalized = value.replace("\\", "/").rstrip("/")
+    return normalized.endswith("integrations/opencode")
+
+
 def _opencode_agents_src_root(src_override: Path | None = None) -> Path:
     """Resolve the repo-local ``.opencode/agents/`` directory.
 
@@ -1070,17 +1086,21 @@ def _wire_plugin(
         plugins = []
         if not dry_run:
             opencode_cfg["plugins"] = plugins
-    already = OPENCODE_PLUGIN_ENTRY in plugins
+    direct_removed = any(_is_direct_opencode_plugin_entry(p) for p in plugins)
+    if direct_removed and not dry_run:
+        plugins[:] = [p for p in plugins if not _is_direct_opencode_plugin_entry(p)]
+    effective = [p for p in plugins if not _is_direct_opencode_plugin_entry(p)]
+    already = OPENCODE_PLUGIN_ENTRY in effective
     if not already and not dry_run:
         plugins.append(OPENCODE_PLUGIN_ENTRY)
 
-    if already and not legacy_removed:
+    if already and not legacy_removed and not direct_removed:
         detail = "opencode V2 plugin already registered (unchanged)"
         return ([_act("merge_json", ["plugins"], detail, status="unchanged")], False, True)
 
     detail = (
         "migrate opencode plugin config to V2 (plugins array + copied package)"
-        if legacy_removed
+        if (legacy_removed or direct_removed)
         else "register opencode V2 plugin directory (context + compaction hooks)"
     )
     return ([_act("merge_json", ["plugins"], detail)], True, already)

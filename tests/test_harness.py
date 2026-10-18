@@ -386,7 +386,7 @@ def test_opencode_reinstall_noop_and_uninstall():
         assert not (td / ".config" / "opencode" / "agent-notes").exists()
 
 
-def test_opencode_install_migrates_legacy_v1_plugin_entry():
+def test_opencode_install_migrates_v1_and_direct_plugin_entries():
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         src = _make_skill_tree(td)
@@ -399,7 +399,11 @@ def test_opencode_install_migrates_legacy_v1_plugin_entry():
                     "plugin": [
                         "/old/agent-notes/integrations/opencode/index.js",
                         "someone-else-plugin",
-                    ]
+                    ],
+                    "plugins": [
+                        "/projects/agent-notes/integrations/opencode",
+                        "someone-else-v2-plugin",
+                    ],
                 }
             ),
             encoding="utf-8",
@@ -417,7 +421,7 @@ def test_opencode_install_migrates_legacy_v1_plugin_entry():
         )
         assert result.returncode == 0, result.stderr
         oc = json.loads(config.read_text())
-        assert oc["plugins"] == ["./agent-notes"]
+        assert oc["plugins"] == ["someone-else-v2-plugin", "./agent-notes"]
         assert oc["plugin"] == ["someone-else-plugin"]
 
 
