@@ -172,7 +172,9 @@ prompt and compaction context on every session:
 
 ```bash
 # Add to ~/.config/opencode/opencode.json:
-#   "plugin": ["/projects/agent-notes/integrations/opencode/index.js"]
+#   "plugins": ["./agent-notes"]
+# `agent-notes install-harness opencode` copies the package there and writes
+# this entry (and removes the obsolete V1 "plugin" entry) for you.
 ```
 
 See `integrations/opencode/README.md` for full setup.

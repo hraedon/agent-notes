@@ -1,6 +1,8 @@
-# agent-notes opencode plugin
+# agent-notes OpenCode 2 plugin
 
-Plan 007 Piece 2 — opencode enforcement hooks.
+OpenCode 2 lifecycle hooks. The V1 `experimental.chat.system.transform` /
+`experimental.session.compacting` implementation was removed by OpenCode's
+deliberate V2 plugin API break; this package targets V2 only.
 
 ## One canonical skill tree
 
@@ -14,43 +16,70 @@ Q4).
 
 ## What it does
 
-- **Session-start orientation:** Injects `agent-notes orient --json` output into the system prompt of every new session, so the agent starts with open breadcrumbs, recent changes, and active memories already loaded.
-- **Compaction reconciliation:** Appends a reconciliation checklist to the session-compaction prompt, enforcing the `/end` discipline (close breadcrumbs, file new ones, run `/reflect`, commit) before context is lost.
+- **Session-start orientation:** the `context` hook injects
+  `agent-notes orient --json` output into the system prompt on the first model
+  request of each session, so the agent starts with open work items, recent
+  changes, and active memories already loaded.
+- **Compaction reconciliation:** the `compaction` hook appends the outbox sync
+  block and reconciliation checklist to the summary request, enforcing the
+  `/end` discipline (close work items, file new ones, run `/reflect`, commit)
+  before context is lost.
 
 ## Installation
 
-1. Ensure `agent-notes` is installed and on `PATH`:
-   ```bash
-   cd /projects/agent-notes
-   uv pip install -e ".[test]"
-   ```
+Preferred (copies the package and writes the V2 config for you):
 
-2. Ensure `AGENT_NOTES_DSN` is set in your environment.
+```bash
+agent-notes install-harness opencode
+```
 
-3. Add the plugin to `~/.config/opencode/opencode.json`:
-   ```json
-   {
-     "plugin": [
-       "/projects/agent-notes/integrations/opencode/index.js"
-     ]
-   }
-   ```
+This installs the package at `~/.config/opencode/agent-notes` and writes:
 
-4. Restart opencode.
+```json
+{
+  "plugins": ["./agent-notes"]
+}
+```
+
+It also removes the obsolete V1 `plugin` entry
+(`.../integrations/opencode/index.js`) if present. Reload or restart OpenCode
+afterwards.
+
+Manual source-checkout install: OpenCode 2 loads a plugin **directory** and
+resolves `index.js` at its root. Do not point at the file, and do not import
+`@opencode/plugin` from a file-path plugin:
+
+```json
+{
+  "plugins": ["/projects/agent-notes/integrations/opencode"]
+}
+```
 
 ## Configuration
 
 | Environment variable | Default | Description |
 |---|---|---|
 | `AGENT_NOTES_ORIENT_TIMEOUT_MS` | `15000` | Timeout for `agent-notes orient` subprocess |
-| `AGENT_NOTES_DSN` | — | Postgres connection string (required) |
+| `AGENT_NOTES_RECONCILE_TIMEOUT_MS` | `60000` | Timeout for `agent-notes outbox reconcile` |
+| `AGENT_NOTES_DSN` | — | Postgres connection string; the CLI also reads its own config file |
 
 ## Troubleshooting
 
-- **"no directory for session … skipping orientation"** — the session was created before the plugin loaded, or the directory field is missing. The plugin only orients sessions it sees created via `session.created` event.
-- **"orient failed"** — `agent-notes` is not on PATH, the project is not registered (`agent-notes init`), or the DSN is unreachable. Check `client.app.log` output.
+- **"orient failed"** — `agent-notes` is not on PATH, the project is not
+  registered (`agent-notes init`), or the DSN is unreachable. V2 has no
+  `client.app.log`; the plugin logs to stderr, which lands in the OpenCode
+  server log.
+- **No orientation** — the session's directory is resolved with
+  `ctx.session.get`; there is no `session.created` event dependency. Check the
+  server log for `[agent-notes]` lines.
 
 ## Limitations
 
-- The plugin does not run `git` or `agent-notes` commands itself; it only injects prompts. The agent still decides whether to act on them. This is the same enforcement model as Claude Code's `settings.json` SessionStart hook — the harness makes the prompt non-optional, but the agent chooses the tool calls.
-- The `experimental.session.compacting` hook is opencode's pre-compaction seam. If opencode changes the hook name, the plugin will need updating.
+- The plugin does not run `git` or `agent-notes` commands itself; it only
+  injects prompts. The agent still decides whether to act on them. This is the
+  same enforcement model as Claude Code's `settings.json` SessionStart hook —
+  the harness makes the prompt non-optional, but the agent chooses the tool
+  calls.
+- The hooks are OpenCode 2's `ctx.session.hook("context")` and
+  `ctx.session.hook("compaction")`. If OpenCode changes that API, the plugin
+  will need updating.

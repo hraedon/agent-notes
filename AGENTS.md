@@ -178,11 +178,13 @@ This is the bridge that lets an agent working inside agent-notes invoke a
 subagent to perform adversarial review. In Claude Code the equivalent is the
 `adversarial-review` skill (already installed in `~/.claude/skills/`).
 
-**Opencode plugin** (Plan 007 Piece 2): `integrations/opencode/index.js`
-uses `experimental.chat.system.transform` to inject `agent-notes orient`
-output into every session's system prompt, and `experimental.session.compacting`
-to append a reconciliation checklist before compaction. This is the
-non-optional enforcement layer that complements the opt-in skills.
+**Opencode plugin** (Plan 007 Piece 2, OpenCode 2): `integrations/opencode/index.js`
+uses `ctx.session.hook("context")` to inject `agent-notes orient` output into the
+first model request of every session, and `ctx.session.hook("compaction")` to
+append the outbox sync block and reconciliation checklist before compaction.
+This is the non-optional enforcement layer that complements the opt-in skills.
+`agent-notes install-harness opencode` copies the package to
+`~/.config/opencode/agent-notes` and registers the V2 `plugins` entry.
 
 ## End of session
 
