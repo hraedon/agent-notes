@@ -54,6 +54,9 @@ function invokeAgentNotes(args, timeoutMs = ORIENT_TIMEOUT_MS) {
       stdio: ["pipe", "pipe", "pipe"],
       env: process.env,
       timeout: timeoutMs,
+      // OpenCode's Windows service has no console, so an un-hidden console
+      // child gets a brand-new visible console window. Harmless off Windows.
+      windowsHide: true,
     });
 
     let stdout = "";
