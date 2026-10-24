@@ -257,3 +257,15 @@ older handoff. Orientation remains read-only and embedding-free.
 The start skill uses this one query and reads specific bodies only when
 relevant. Codex's automatic context samples five work items, summarizes change
 counts, and includes handoff timing while retaining its metadata-only boundary.
+
+## 14. Expected claim-release refusals (WI-078, 2026-10-24)
+
+`work-item release` renders the kernel's documented `CLAIM_NOT_FOUND` and
+`CLAIM_LOST` refusals through the common error envelope, retaining the kernel
+code and returning conflict exit `4` (decision 52). Human output goes to stderr;
+`--json` returns one stdout document. A missing claim remains a refusal, not an
+idempotent success. The work item, claim, projection and event history remain
+unchanged. Other kernel errors retain the existing dispatch behavior, including
+the `DB_NOT_FOUND` provisioning guidance. Real CLI subprocess regressions use
+disposable PostgreSQL projection and regista stores and verify both refusal
+states, normal release, and repeated release.

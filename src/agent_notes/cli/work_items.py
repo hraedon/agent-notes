@@ -4,7 +4,7 @@ import argparse
 import json
 from typing import Any
 
-from regista._errors import RegistaError
+from regista._errors import ErrorCode, RegistaError
 
 from agent_notes.cli.common import (
     EXIT_CONFLICT,
@@ -902,6 +902,16 @@ def cmd_wi_release(args: argparse.Namespace) -> int:
         wi = WorkItemModel.release_work_item(
             project_id=proj_id,
             identifier=args.identifier,
+        )
+    except RegistaError as exc:
+        if exc.code not in {ErrorCode.CLAIM_NOT_FOUND, ErrorCode.CLAIM_LOST}:
+            raise
+        return emit_error(
+            exc.code.value,
+            exc.message,
+            use_json=use_json,
+            detail=exception_detail(exc),
+            exit_code=EXIT_CONFLICT,
         )
     except ValueError as exc:
         return emit_error(
