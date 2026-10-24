@@ -946,6 +946,16 @@ def cmd_wi_heartbeat(args: argparse.Namespace) -> int:
             identifier=args.identifier,
             ttl_seconds=args.ttl,
         )
+    except RegistaError as exc:
+        if exc.code not in {ErrorCode.CLAIM_NOT_FOUND, ErrorCode.CLAIM_LOST}:
+            raise
+        return emit_error(
+            exc.code.value,
+            exc.message,
+            use_json=use_json,
+            detail=exception_detail(exc),
+            exit_code=EXIT_CONFLICT,
+        )
     except ValueError as exc:
         return emit_error(
             "VALIDATION_FAILED",
