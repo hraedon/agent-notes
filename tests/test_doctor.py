@@ -6,6 +6,7 @@ is required so the schema checks pass.
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
@@ -15,6 +16,22 @@ from agent_notes.core import db as coredb
 from tests.conftest import ephemeral_db  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures("ephemeral_db")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_harness_home(monkeypatch, tmp_path):
+    """Synthetic store checks must not inherit an operator's harness health.
+
+    Keep the real Codex check active, with an absent installation as the
+    controlled default. Dedicated cases can override this probe to assert
+    that an explicitly configured stale installation still fails.
+    """
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+    monkeypatch.setattr(
+        "agent_notes.scripts.doctor._probe_codex_agent_notes_plugin",
+        lambda: ("absent", "fixture has no plugin"),
+    )
 
 
 def _fake_embed(text, task="document"):
@@ -434,6 +451,19 @@ class TestDoctorJsonSuiteShape:
         assert "nobody" not in regista_checks["regista_reachable"]["detail"]
         assert code == 1
         assert payload["status"] == "unhealthy"
+
+    def test_configured_stale_codex_plugin_still_fails(self, monkeypatch):
+        from agent_notes.scripts import doctor
+
+        monkeypatch.setattr(
+            doctor, "_probe_codex_agent_notes_plugin", lambda: ("stale", "fixture version mismatch")
+        )
+        payload, code = doctor.run_json()
+        checks = {check["name"]: check for check in payload["checks"]}
+        assert checks["codex_harness"]["status"] == "fail"
+        assert "stale" in checks["codex_harness"]["detail"]
+        assert payload["status"] == "unhealthy"
+        assert code == 1
 
     def test_clean_store_reports_healthy(self):
         """When regista is reachable and every check passes, status is healthy."""
