@@ -79,7 +79,7 @@ jobs:
 
   # Plan 003 WI-5.1 — prove agent-notes imports and unit tests pass on native
   # Windows. Postgres-dependent tests (testcontainers) skip cleanly when Docker
-  # is unavailable; unit tests (config, outbox, secrets, lifecycle, etc.) run
+  # is unavailable; unit tests (config, secrets, lifecycle, etc.) run
   # without a DB.
   windows-test:
     runs-on: windows-latest

@@ -4,16 +4,13 @@ v6 identity: the reviewer IS the running producer. There is deliberately no
 per-call ``actor_id`` / ``model_lineage`` override — tests move the *process*
 environment (``AGENT_NOTES_ACTOR_ID`` + the ``REGISTA_PRODUCER_*`` block),
 exactly as a real reviewer host would, and every lineage a test signs is
-paired with a model from the same family (see ``conftest._set_truthful_producer``).
+paired with a model from the same family.
 
-Covers both the native (degrade) and regista paths:
+Covers the native op-log path (the only path since Plan 026 D1):
 
-- Native: adversarial_pass / reject / request_changes drive the status
+- adversarial_pass / accept / reject / request_changes drive the status
   transition and stamp the review_note into diagnostic_keys.review_notes.
-  accept is blocked (Plan 014 WI-2 — the gate cannot run off-regista).
-- Regista: review_transition threads only the review_note into the transition
-  payload; regista's signed producer is the reviewer-lineage authority, and a
-  producer with no model or canonical lineage is refused before any write.
+  Reviewer independence itself is covered in ``test_review_independence.py``.
 - CLI: review list / pass / accept / reject / request-changes.
 """
 
@@ -22,21 +19,12 @@ from __future__ import annotations
 import argparse
 import inspect
 import json
-from pathlib import Path
 
 import pytest
-from regista import RegistaError
 
-from agent_notes.core.actor import Actor, ActorConfigurationError
-from agent_notes.core.face_factory import reset_face, set_face_for_test, write_actor
-from agent_notes.core.producer import ProducerConfigurationError
-from agent_notes.core.regista_face import RegistaFace
+from agent_notes.core.actor import Actor, ActorConfigurationError, write_actor
 from agent_notes.core.work_item_model import WorkItemModel
-from tests.conftest import (
-    _set_truthful_producer,
-    ephemeral_db,  # noqa: F401
-    provision_v6_regista,
-)
+from tests.conftest import ephemeral_db  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures("ephemeral_db")
 
@@ -54,13 +42,6 @@ def default_project():
     )
 
 
-@pytest.fixture
-def v6_key_path(tmp_path: Path) -> str:
-    """Path for the throwaway v6 keyset (provision writes the real file)."""
-
-    return str(tmp_path / "v6_keys.json")
-
-
 def _vec768():
     return [0.0] * 768
 
@@ -68,7 +49,6 @@ def _vec768():
 def _native(monkeypatch):
     monkeypatch.delenv("AGENT_NOTES_REGISTA_WRITES", raising=False)
     monkeypatch.delenv("REGISTA_DSN", raising=False)
-    reset_face()
 
 
 def _to_in_review(project_id, identifier, monkeypatch):
@@ -100,45 +80,6 @@ def _to_in_review(project_id, identifier, monkeypatch):
     )
     monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:native-reviewer")
     monkeypatch.setenv("AGENT_NOTES_MODEL", "kimi-k2.5")
-
-
-def _author_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:author-agent")
-    _set_truthful_producer(monkeypatch, model="glm-5.3")
-
-
-def _reviewer_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:reviewer")
-    _set_truthful_producer(monkeypatch, model="kimi-k2.5")
-
-
-def _accepter_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:accepter")
-    _set_truthful_producer(monkeypatch, model="claude-opus-4.6")
-
-
-def _file_to_in_review_regista(project_id, identifier) -> dict:
-    """File + drive to in_review on the regista path (as the author)."""
-
-    WorkItemModel.file_work_item(
-        project_id=project_id,
-        identifier=identifier,
-        title="regista review",
-        body="body",
-        kind="bug",
-        status="open",
-        severity="medium",
-        embedding=_vec768(),
-    )
-    WorkItemModel.update_work_item(
-        project_id=project_id,
-        identifier=identifier,
-        status="in_progress",
-    )
-    WorkItemModel.close_work_item(project_id, identifier)
-    wi_row = WorkItemModel.get_work_item(project_id, identifier)
-    assert wi_row["status"] == "in_review"
-    return wi_row
 
 
 # ---------------------------------------------------------------------------
@@ -321,222 +262,6 @@ class TestNativeReviewTransition:
 # ---------------------------------------------------------------------------
 # Regista path — review_transition (the gate runs)
 # ---------------------------------------------------------------------------
-
-
-class TestRegistaReviewTransition:
-    def test_review_pass_threads_note_and_signed_producer_into_committed_event(
-        self, default_project, v6_key_path, monkeypatch
-    ):
-        """The committed event carries the note and signed producer lineage."""
-        monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-
-        reg = provision_v6_regista(v6_key_path)
-        face = RegistaFace(reg)
-        reset_face()
-        set_face_for_test(face)
-
-        try:
-            _author_env(monkeypatch)
-            wi = _file_to_in_review_regista(default_project.id, "RV-REG-01")
-
-            _reviewer_env(monkeypatch)
-            result = WorkItemModel.review_transition(
-                default_project.id,
-                "RV-REG-01",
-                transition_name="adversarial_pass",
-                review_note="Cross-lineage pass — looks good.",
-            )
-            assert result["status"] == "in_human_review"
-
-            events = face.history(wi["regista_work_item_id"])
-            pass_events = [
-                e for e in events if getattr(e, "transition", None) == "adversarial_pass"
-            ]
-            assert len(pass_events) == 1
-            committed = pass_events[0]
-            payload = committed.payload or {}
-            assert payload.get("review_note") == "Cross-lineage pass — looks good."
-            assert "reviewer_claims" not in payload
-            envelope = json.loads(committed.canonical_envelope)
-            assert envelope["producer"]["model_lineage"] == "kimi"
-            assert envelope["producer"]["model"] == "kimi-k2.5"
-            # The reviewer actor is the ambient principal, not a per-call one.
-            assert committed.actor_id == "agent:reviewer"
-        finally:
-            reset_face()
-            reg.close()
-
-    def test_review_accept_reaches_done(self, default_project, v6_key_path, monkeypatch):
-        monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-
-        reg = provision_v6_regista(v6_key_path)
-        face = RegistaFace(reg)
-        reset_face()
-        set_face_for_test(face)
-
-        try:
-            _author_env(monkeypatch)
-            _file_to_in_review_regista(default_project.id, "RV-REG-02")
-
-            _reviewer_env(monkeypatch)
-            WorkItemModel.review_transition(
-                default_project.id,
-                "RV-REG-02",
-                transition_name="adversarial_pass",
-                review_note="adversarial pass OK",
-            )
-
-            _accepter_env(monkeypatch)
-            result = WorkItemModel.review_transition(
-                default_project.id,
-                "RV-REG-02",
-                transition_name="accept",
-                review_note="accepted — good work",
-            )
-            assert result["status"] == "done"
-
-            row = WorkItemModel.get_work_item(default_project.id, "RV-REG-02")
-            events = face.history(row["regista_work_item_id"])
-            accept_events = [e for e in events if e.transition == "accept"]
-            assert len(accept_events) == 1
-            assert "reviewer_claims" not in (accept_events[0].payload or {})
-        finally:
-            reset_face()
-            reg.close()
-
-    def test_same_lineage_verdict_without_ack_is_rejected(
-        self, default_project, v6_key_path, monkeypatch
-    ):
-        """A reviewer whose lineage matches an author's must acknowledge it."""
-        monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-
-        reg = provision_v6_regista(v6_key_path)
-        face = RegistaFace(reg)
-        reset_face()
-        set_face_for_test(face)
-
-        try:
-            _author_env(monkeypatch)
-            _file_to_in_review_regista(default_project.id, "RV-REG-SAME")
-
-            # Same lineage (glm) reviewer, distinct actor, no acknowledgment.
-            monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:reviewer")
-            _set_truthful_producer(monkeypatch, model="glm-5.3")
-            with pytest.raises(RegistaError, match="same_lineage_acknowledged"):
-                WorkItemModel.review_transition(
-                    default_project.id,
-                    "RV-REG-SAME",
-                    transition_name="adversarial_pass",
-                    review_note="same lineage, unacknowledged",
-                )
-            # The refused verdict left no committed pass event.
-            row = WorkItemModel.get_work_item(default_project.id, "RV-REG-SAME")
-            events = face.history(row["regista_work_item_id"])
-            assert not [e for e in events if e.transition == "adversarial_pass"]
-        finally:
-            reset_face()
-            reg.close()
-
-    def test_same_lineage_acknowledged_passes_through(
-        self, default_project, v6_key_path, monkeypatch
-    ):
-        monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-
-        reg = provision_v6_regista(v6_key_path)
-        face = RegistaFace(reg)
-        reset_face()
-        set_face_for_test(face)
-
-        try:
-            _author_env(monkeypatch)
-            _file_to_in_review_regista(default_project.id, "RV-REG-03")
-
-            monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:reviewer")
-            _set_truthful_producer(monkeypatch, model="glm-5.3")
-            result = WorkItemModel.review_transition(
-                default_project.id,
-                "RV-REG-03",
-                transition_name="adversarial_pass",
-                review_note="same-lineage review acknowledged",
-                acknowledgement="same-lineage review acknowledged for the test",
-            )
-            assert result["status"] == "in_human_review"
-
-            row = WorkItemModel.get_work_item(default_project.id, "RV-REG-03")
-            events = face.history(row["regista_work_item_id"])
-            pass_events = [e for e in events if e.transition == "adversarial_pass"]
-            assert len(pass_events) == 1
-            assert (pass_events[0].payload or {}).get("same_lineage_acknowledged") is True
-        finally:
-            reset_face()
-            reg.close()
-
-    def test_review_refused_when_producer_declares_no_model(
-        self, default_project, v6_key_path, monkeypatch
-    ):
-        """A no-model producer cannot sign a verdict — refusal happens in
-        agent-notes, before any write, and commits nothing."""
-        monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-
-        reg = provision_v6_regista(v6_key_path)
-        face = RegistaFace(reg)
-        reset_face()
-        set_face_for_test(face)
-
-        try:
-            _author_env(monkeypatch)
-            wi = _file_to_in_review_regista(default_project.id, "RV-REG-NOMODEL")
-
-            monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:reviewer")
-            # A harness identity but no model: a legitimate "no model"
-            # producer, which must not cast review verdicts.
-            monkeypatch.setenv("REGISTA_PRODUCER_HARNESS", "claude-code")
-            monkeypatch.setenv("REGISTA_PRODUCER_HARNESS_VERSION", "test-harness/1")
-            monkeypatch.delenv("REGISTA_PRODUCER_MODEL", raising=False)
-            monkeypatch.delenv("REGISTA_PRODUCER_MODEL_LINEAGE", raising=False)
-
-            with pytest.raises(ProducerConfigurationError, match="REGISTA_PRODUCER_MODEL"):
-                WorkItemModel.review_transition(
-                    default_project.id,
-                    "RV-REG-NOMODEL",
-                    transition_name="adversarial_pass",
-                    review_note="cannot sign this",
-                )
-            # Refused before the write: no verdict event, state unchanged.
-            events = face.history(wi["regista_work_item_id"])
-            assert not [e for e in events if e.transition == "adversarial_pass"]
-            assert face.get(wi["regista_work_item_id"]).current_state == "in_review"
-        finally:
-            reset_face()
-            reg.close()
-
-    def test_review_refused_when_producer_lineage_is_not_canonical(
-        self, default_project, v6_key_path, monkeypatch
-    ):
-        monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-
-        reg = provision_v6_regista(v6_key_path)
-        reset_face()
-        set_face_for_test(RegistaFace(reg))
-
-        try:
-            _author_env(monkeypatch)
-            _file_to_in_review_regista(default_project.id, "RV-REG-BADLIN")
-
-            monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:reviewer")
-            monkeypatch.setenv("REGISTA_PRODUCER_MODEL", "claude-fable-5")
-            monkeypatch.setenv("REGISTA_PRODUCER_MODEL_LINEAGE", "not-a-family")
-
-            with pytest.raises(ProducerConfigurationError):
-                WorkItemModel.review_transition(
-                    default_project.id,
-                    "RV-REG-BADLIN",
-                    transition_name="adversarial_pass",
-                    review_note="also cannot sign this",
-                )
-        finally:
-            reset_face()
-            reg.close()
 
 
 # ---------------------------------------------------------------------------

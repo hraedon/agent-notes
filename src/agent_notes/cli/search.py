@@ -39,7 +39,7 @@ def _run_learned_recall(
     proj_slug: str,
     ws_slug: str,
 ) -> tuple[list[dict[str, Any]], str | None, list[str]]:
-    """Query the configured memory engine for learned results.
+    """Query the native memory engine for learned results.
 
     Returns (learned_results, engine_name, warnings).
     Honest degradation: never raises — on any failure returns ([], None, [msg]).
@@ -55,8 +55,9 @@ def _run_learned_recall(
 
     try:
         engine = get_engine()
-    except ValueError:
-        warnings.append("learned: skipped (unknown engine configuration)")
+    except ValueError as exc:
+        # A retired engine setting: name it, so it isn't a silent fallback.
+        warnings.append(f"learned: skipped — {exc}")
         return learned, None, warnings
     except Exception as exc:
         warnings.append(f"learned: failed — {type(exc).__name__}")

@@ -18,49 +18,21 @@ from pathlib import Path
 import docker.errors
 import psycopg
 import pytest
-from regista import canonical_workflow_yaml
-from regista.testing import InMemoryRegista, make_v6_keyset, open_v6_epoch
 from testcontainers.postgres import PostgresContainer
 
 from agent_notes.core import db as coredb
 
 SCHEMA_DIR = Path(__file__).resolve().parents[1] / "schema"
 
-# The producer identity regista resolves from the process environment. Tests
-# (and regista's own test helpers, e.g. ``set_v6_producer_env`` inside
-# ``open_v6_epoch``) mutate these variables directly in ``os.environ`` —
-# deliberately outside ``monkeypatch`` — so without a per-test restore a
-# producer configured in one test silently signs every later test's events.
+# The transitional producer variables the native review gate still reads
+# (``REGISTA_PRODUCER_MODEL``, Plan 026 D2). A test that sets one directly in
+# ``os.environ`` must not leak it into every later test, so they are restored
+# per test.
 _PRODUCER_ENV_KEYS = (
     "REGISTA_PRODUCER_HARNESS",
     "REGISTA_PRODUCER_HARNESS_VERSION",
     "REGISTA_PRODUCER_MODEL",
     "REGISTA_PRODUCER_MODEL_LINEAGE",
-)
-
-# Keep the test-only v6 identity vocabulary explicit.  Production code must not
-# open an epoch or register a workflow as a side effect of constructing a face;
-# tests that need an ordinary v6 writer provision the throwaway project through
-# this helper instead.
-V6_TEST_PRINCIPALS: tuple[str, ...] = (
-    "agent:worker",
-    "agent:test-agent",
-    "agent:author-agent",
-    "agent:reviewer",
-    "agent:accepter",
-    "agent:env-linker",
-    "agent:env-remover",
-    "agent:env-lease-agent",
-    "agent:p3-test-agent",
-    "agent:note-ac-agent",
-    "agent:ac-test-agent",
-    "agent:a",
-    "agent:b",
-    "agent:deleter-agent",
-    "human:operator",
-    "human:reviewer",
-    "service:hooks",
-    "service:agent-notes-migration",
 )
 
 
@@ -107,37 +79,15 @@ def shape_valid_delegation(*, subject_principal_id: str) -> dict:
     }
 
 
-def provision_v6_regista(key_path: str | Path, *, project: str = "test_project") -> InMemoryRegista:
-    """Return a throwaway, fully admitted v6 in-memory regista instance.
-
-    The helper intentionally lives in the consumer test suite.  It keeps the
-    production ``RegistaFace`` honest: workflow registration and genesis are
-    external provisioning operations, never an implicit write-path side effect.
-    """
-
-    path = Path(key_path)
-    keyset = make_v6_keyset(
-        path.parent,
-        principals=V6_TEST_PRINCIPALS,
-        filename=path.name,
-    )
-    instance = InMemoryRegista(project=project, hmac_key_path=keyset.path)
-    open_v6_epoch(instance, keyset, principals=V6_TEST_PRINCIPALS)
-    instance.register_workflow(canonical_workflow_yaml())
-    return instance
-
-
 @pytest.fixture(autouse=True, scope="session")
 def _hermetic_config(tmp_path_factory):
     """Hermetic config isolation for the test session.
 
-    Plan 012 WI-1 added a config-file fallback to ``RegistaConfig``. Without
-    isolation, the operator's host ``~/.config/agent-notes/config.json`` (which
-    enables regista against the prod DB) would be read by every test that hits
-    the write path, routing test writes to production. This pins
-    ``AGENT_NOTES_CONFIG`` to an empty ``{}`` session file and clears any
-    host-provided regista env, so regista stays disabled unless a test opts in
-    (via ``monkeypatch`` env, or ``set_face_for_test`` which bypasses config).
+    Without isolation, the operator's host ``~/.config/agent-notes/config.json``
+    (its native DSN, or a leftover ``regista.writes_enabled``) would be read by
+    every test that hits the write path. This pins ``AGENT_NOTES_CONFIG`` to an
+    empty ``{}`` session file and clears any host-provided regista env, so a
+    test only sees the retired regista settings when it sets them itself.
     """
     cfg = tmp_path_factory.mktemp("cfg") / "empty.json"
     cfg.write_text("{}")
@@ -151,8 +101,9 @@ def _hermetic_config(tmp_path_factory):
         "AGENT_NOTES_CONFIG",
         "AGENT_SUITE_CONFIG",
         "AGENT_SUITE_SYSTEM_CONFIG",
-        # Clear the canonical suite vars and the tool-specific write gate so a
-        # host environment cannot enable regista for every test.
+        "AGENT_NOTES_OUTBOX_DIR",
+        # Clear the retired regista vars so a host environment cannot make
+        # every write refuse.
         "AGENT_NOTES_REGISTA_WRITES",
         "REGISTA_DSN",
         "REGISTA_KEY_PATH",
@@ -165,9 +116,7 @@ def _hermetic_config(tmp_path_factory):
         "AGENT_NOTES_ACTOR_ID",
         "REGISTA_PRINCIPAL_ID",
         # Project slug (WI-029 sweep) — the per-user suite.env overlay exports
-        # AGENT_NOTES_PROJECT on bootstrapped hosts; inherited into the test
-        # process it overrides every RegistaConfig().project and breaks
-        # projection-sync assertions that pin their own project.
+        # AGENT_NOTES_PROJECT on bootstrapped hosts; keep it out of tests.
         "AGENT_NOTES_PROJECT",
     )
     saved = {k: os.environ.get(k) for k in keys}
@@ -175,7 +124,10 @@ def _hermetic_config(tmp_path_factory):
     os.environ["AGENT_NOTES_CONFIG"] = str(cfg)
     os.environ["AGENT_SUITE_CONFIG"] = str(suite_cfg)
     os.environ["AGENT_SUITE_SYSTEM_CONFIG"] = str(suite_cfg)
-    for k in keys[3:]:
+    # The retired regista outbox dir doctor inspects (Plan 026 D5): point it at
+    # a path that does not exist so a host's real queue never reaches a test.
+    os.environ["AGENT_NOTES_OUTBOX_DIR"] = str(suite_cfg.parent / "no-legacy-outbox")
+    for k in keys[4:]:
         os.environ.pop(k, None)
     # All ordinary write-path tests run as one canonical fixture actor. Tests
     # that exercise the refusal path delete this value explicitly.
@@ -201,14 +153,7 @@ def _apply_schema(dsn: str) -> None:
 
 @pytest.fixture(autouse=True)
 def _hermetic_producer_env():
-    """Snapshot/restore the process producer identity around every test.
-
-    ``provision_v6_regista`` → ``open_v6_epoch`` → ``set_v6_producer_env``
-    writes ``REGISTA_PRODUCER_*`` straight into ``os.environ`` (only filling
-    absent variables), so the first provisioning test would otherwise pin the
-    producer for the whole session and make later tests depend on execution
-    order. Restoring per test keeps each test's producer claims its own.
-    """
+    """Snapshot/restore the process producer identity around every test."""
 
     saved = {key: os.environ.get(key) for key in _PRODUCER_ENV_KEYS}
     try:
@@ -219,72 +164,6 @@ def _hermetic_producer_env():
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
-
-
-@pytest.fixture
-def v6_key_path(tmp_path: Path) -> str:
-    """Path for a throwaway v6 keyset (no file written here).
-
-    The HMAC-era placeholder manifest is gone: ``provision_v6_regista`` (or
-    ``make_v6_keyset``) writes the real keyset at this path, so pre-writing a
-    stand-in file would only be overwritten — and would mislabel a v6 keyset
-    as an HMAC key manifest.
-    """
-
-    return str(tmp_path / "v6_keys.json")
-
-
-@pytest.fixture
-def producer_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
-    """Set a truthful producer (model and lineage as a consistent pair).
-
-    Every fixture that moves the producer lineage must move the paired model
-    with it: the producer block signs both, and a ``REGISTA_PRODUCER_MODEL``
-    from one family next to a ``REGISTA_PRODUCER_MODEL_LINEAGE`` from another
-    is a false identity claim the test would then commit to the event log.
-    Tests override via ``_set_truthful_producer`` on the returned patcher.
-    """
-
-    _set_truthful_producer(monkeypatch, model=TEST_PRODUCER_MODEL, lineage=TEST_PRODUCER_LINEAGE)
-    return monkeypatch
-
-
-# The default fixture producer: one model, one lineage, mutually consistent
-# (mirrors regista's own test identity: harness claude-code / model
-# claude-fable-5 / lineage fable).
-TEST_PRODUCER_MODEL = "claude-fable-5"
-TEST_PRODUCER_LINEAGE = "fable"
-
-# Truthful (model, lineage) pairs a test may switch the producer between.
-TRUTHFUL_PRODUCER_PAIRS: dict[str, str] = {
-    "claude-fable-5": "fable",
-    "kimi-k2.5": "kimi",
-    "glm-5.3": "glm",
-    "claude-opus-4.6": "claude-opus",
-    "longcat-flash-1": "longcat",
-}
-
-
-def _set_truthful_producer(
-    monkeypatch: pytest.MonkeyPatch, *, model: str, lineage: str | None = None
-) -> None:
-    """Point the process producer at a consistent (model, lineage) pair.
-
-    ``lineage=None`` looks the pair up from the model so callers cannot drift
-    the two apart. Harness identity always stays set (the v6 writer refuses
-    without it).
-    """
-
-    if lineage is None:
-        lineage = TRUTHFUL_PRODUCER_PAIRS.get(model)
-        if lineage is None:
-            raise ValueError(f"no truthful lineage pairing declared for model {model!r}")
-    if TRUTHFUL_PRODUCER_PAIRS.get(model) != lineage:
-        raise ValueError(f"untruthful producer pair: model {model!r} is not a {lineage!r} model")
-    monkeypatch.setenv("REGISTA_PRODUCER_HARNESS", "claude-code")
-    monkeypatch.setenv("REGISTA_PRODUCER_HARNESS_VERSION", "test-harness/1")
-    monkeypatch.setenv("REGISTA_PRODUCER_MODEL", model)
-    monkeypatch.setenv("REGISTA_PRODUCER_MODEL_LINEAGE", lineage)
 
 
 @pytest.fixture(scope="session")

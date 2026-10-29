@@ -72,65 +72,6 @@ def _write_config(tmp_path, monkeypatch, dsn):
     return cfg
 
 
-def test_suite_env_dsn_sits_between_env_and_file(monkeypatch, tmp_path):
-    """suite.env DSN is used when env is unset, and beats the config file."""
-    _write_suite_env(monkeypatch, tmp_path, "REGISTA_DSN=postgresql://suite/db\n", level="system")
-    _write_config(tmp_path, monkeypatch, "postgresql://file/db")
-    monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-
-    cfg = config.RegistaConfig()
-
-    assert cfg.dsn == "postgresql://suite/db"
-    assert cfg.enabled is True
-
-
-def test_env_dsn_beats_suite_env(monkeypatch, tmp_path):
-    """Process env DSN takes precedence over suite.env."""
-    _write_suite_env(monkeypatch, tmp_path, "REGISTA_DSN=postgresql://suite/db\n", level="system")
-    monkeypatch.setenv("REGISTA_DSN", "postgresql://env/db")
-    monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-
-    assert config.RegistaConfig().dsn == "postgresql://env/db"
-
-
-def test_per_user_suite_env_beats_system_for_dsn(monkeypatch, tmp_path):
-    """Per-user suite.env overrides the system suite.env for DSN."""
-    _write_suite_env(monkeypatch, tmp_path, "REGISTA_DSN=postgresql://system/db\n", level="system")
-    _write_suite_env(monkeypatch, tmp_path, "REGISTA_DSN=postgresql://user/db\n", level="user")
-    monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-
-    assert config.RegistaConfig().dsn == "postgresql://user/db"
-
-
-def test_suite_env_key_path(monkeypatch, tmp_path):
-    _write_suite_env(monkeypatch, tmp_path, "REGISTA_KEY_PATH=/suite/key\n", level="system")
-    monkeypatch.setenv("REGISTA_DSN", "postgresql://x")
-    monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-
-    assert config.RegistaConfig().key_path == "/suite/key"
-
-
-def test_suite_env_require_ssl(monkeypatch, tmp_path):
-    _write_suite_env(monkeypatch, tmp_path, "REGISTA_REQUIRE_SSL=true\n", level="system")
-    monkeypatch.setenv("REGISTA_DSN", "postgresql://x")
-
-    assert config.RegistaConfig().require_ssl is True
-
-
-def test_suite_env_project_slug(monkeypatch, tmp_path):
-    """AGENT_NOTES_PROJECT from suite.env sets the project slug."""
-    _write_suite_env(monkeypatch, tmp_path, "AGENT_NOTES_PROJECT=my-project\n", level="user")
-
-    assert config.RegistaConfig().project == "my-project"
-
-
-def test_env_project_beats_suite_env(monkeypatch, tmp_path):
-    _write_suite_env(monkeypatch, tmp_path, "AGENT_NOTES_PROJECT=suite-project\n", level="user")
-    monkeypatch.setenv("AGENT_NOTES_PROJECT", "env-project")
-
-    assert config.RegistaConfig().project == "env-project"
-
-
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch, tmp_path):
     names = (
@@ -149,26 +90,6 @@ def _clean_env(monkeypatch, tmp_path):
     suite = tmp_path / "suite.env"
     monkeypatch.setenv("AGENT_SUITE_CONFIG", str(suite))
     monkeypatch.setenv("AGENT_SUITE_SYSTEM_CONFIG", str(suite))
-
-
-def test_regista_config_reads_shared_suite_values(monkeypatch, tmp_path):
-    suite = tmp_path / "suite.env"
-    suite.write_text(
-        "REGISTA_DSN=postgresql://suite/db\n"
-        "REGISTA_KEY_PATH=/suite/key\n"
-        "REGISTA_REQUIRE_SSL=true\n"
-        "AGENT_NOTES_PROJECT=my-project\n"
-    )
-    monkeypatch.setenv("AGENT_SUITE_SYSTEM_CONFIG", str(suite))
-    monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-
-    cfg = config.RegistaConfig()
-
-    assert cfg.dsn == "postgresql://suite/db"
-    assert cfg.key_path == "/suite/key"
-    assert cfg.require_ssl is True
-    assert cfg.project == "my-project"
-    assert cfg.enabled is True
 
 
 def test_process_env_beats_suite_env(monkeypatch, tmp_path):
@@ -210,4 +131,12 @@ def test_config_file_remains_a_native_dsn_fallback(monkeypatch, tmp_path):
     path.write_text(json.dumps({"dsn": "postgresql://file/db"}))
     monkeypatch.setenv("AGENT_NOTES_CONFIG", str(path))
 
-    assert config.RegistaConfig().dsn is None
+    assert config.resolve_dsn() == "postgresql://file/db"
+
+
+def test_suite_env_does_not_switch_on_the_retired_regista_writes(monkeypatch, tmp_path):
+    """The retired writes gate is read from the process env and config file
+    only, as before; a suite.env entry never turned it on."""
+    _write_suite_env(monkeypatch, tmp_path, "AGENT_NOTES_REGISTA_WRITES=1\n", level="system")
+
+    assert config.regista_writes_requested() is False

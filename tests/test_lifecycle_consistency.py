@@ -1,6 +1,6 @@
 """Consistency guards for Plan 013 — the "can't miss a surface" guarantee.
 
-Three cross-layer checks ensure the status vocabulary stays in sync:
+Cross-layer checks ensure the status vocabulary stays in sync:
 
 1. **lifecycle module vs DB wi_status vocab** (DB-backed) — every
    ``wi_status`` row's ``is_terminal``/``is_open`` must match
@@ -11,10 +11,6 @@ Three cross-layer checks ensure the status vocabulary stays in sync:
    every non-amend transition in the YAML must appear in
    ``VALID_TRANSITIONS`` and vice versa. This catches a missed transition
    table edit when the workflow YAML changes.
-
-3. **projection._STATUS_FROM_STATE vs lifecycle.ALL_VALID_STATES** (no DB) —
-   the state→status alias map must cover exactly the valid state set. This
-   catches a missed projection edit.
 
 These guards MUST run in the default CI job. The "can't miss a surface"
 guarantee is only real if the consistency tests actually execute on every
@@ -31,7 +27,7 @@ import regista
 import yaml
 from psycopg.rows import dict_row
 
-from agent_notes.core import lifecycle, projection
+from agent_notes.core import lifecycle
 
 # Import the fixture so pytest discovers it
 from tests.conftest import ephemeral_db  # noqa: F401
@@ -163,28 +159,6 @@ def test_valid_transitions_only_canonical_states():
 
 
 # ---------------------------------------------------------------------------
-# 3. projection._STATUS_FROM_STATE vs lifecycle.ALL_VALID_STATES (no DB)
-# ---------------------------------------------------------------------------
-
-
-def test_projection_status_map_covers_all_valid_states():
-    """The projection's state→status map must cover exactly ALL_VALID_STATES."""
-    projection_keys = set(projection._STATUS_FROM_STATE.keys())
-    assert projection_keys == lifecycle.ALL_VALID_STATES, (
-        f"projection._STATUS_FROM_STATE keys {sorted(projection_keys)} "
-        f"!= lifecycle.ALL_VALID_STATES {sorted(lifecycle.ALL_VALID_STATES)}"
-    )
-
-
-def test_projection_status_map_is_identity():
-    """The projection's state→status map must be identity (state == status)."""
-    for state, status in projection._STATUS_FROM_STATE.items():
-        assert state == status, (
-            f"projection._STATUS_FROM_STATE is not identity: {state!r} -> {status!r}"
-        )
-
-
-# ---------------------------------------------------------------------------
 # 4. Lattice rank completeness (no DB)
 # ---------------------------------------------------------------------------
 
@@ -254,26 +228,6 @@ def test_db_check_constraint_matches_lifecycle():
     assert constraint_statuses == lifecycle.ALL_VALID_STATES, (
         f"DB CHECK constraint statuses {sorted(constraint_statuses)} != "
         f"lifecycle.ALL_VALID_STATES {sorted(lifecycle.ALL_VALID_STATES)}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# 6. regista_face._TERMINAL_STATES is a subset of lifecycle.IS_TERMINAL (no DB)
-# ---------------------------------------------------------------------------
-
-
-def test_regista_face_terminal_states_subset_of_lifecycle():
-    """The regista face's terminal set must be a subset of lifecycle.IS_TERMINAL.
-
-    It is intentionally only ``{"done"}`` (not ``{"done", "closed"}``) because
-    the regista path only produces canonical states. If someone adds a terminal
-    state to the regista face without updating lifecycle, this guard fails.
-    """
-    from agent_notes.core.regista_face import _TERMINAL_STATES
-
-    assert _TERMINAL_STATES.issubset(lifecycle.IS_TERMINAL), (
-        f"regista_face._TERMINAL_STATES {_TERMINAL_STATES} is not a subset of "
-        f"lifecycle.IS_TERMINAL {lifecycle.IS_TERMINAL}"
     )
 
 

@@ -1,8 +1,8 @@
 """Tests for the shared hermetic CLI-subprocess harness (WI-030).
 
-These pin the contract that keeps ``test_cli.py`` and
-``test_memory_provider_cli.py`` isolated from the operator's environment and
-config-file discovery. They are subprocess-free and need no database.
+These pin the contract that keeps ``test_cli.py`` and the other CLI
+subprocess tests isolated from the operator's environment and config-file
+discovery. They are subprocess-free and need no database.
 """
 
 from __future__ import annotations

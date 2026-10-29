@@ -11,7 +11,8 @@ from __future__ import annotations
 import psycopg
 from psycopg.rows import dict_row
 
-from agent_notes.core import face_factory, kernel
+from agent_notes.core import actor as core_actor
+from agent_notes.core import kernel
 from agent_notes.core.change_log import write_change
 from agent_notes.core.db import _conn
 
@@ -35,7 +36,7 @@ def request_work_item(
     request. The request is signed evidence; the target project owns the
     created item.
     """
-    actor = face_factory.write_actor()
+    actor = core_actor.write_actor()
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         _common.validate_vocab(conn, workspace_id, "wi_kind", kind)
@@ -120,7 +121,7 @@ def wait_on_work_item(
     session is blocked until the target item resolves. The wake system
     will resume the session when the target closes.
     """
-    actor = face_factory.write_actor()
+    actor = core_actor.write_actor()
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
 
@@ -208,7 +209,7 @@ def add_cross_project_link(
     The ``cross_project_links`` table stores the target by slug so it
     survives across DB instances.
     """
-    actor = face_factory.write_actor()
+    actor = core_actor.write_actor()
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, from_project_id)
 

@@ -1,9 +1,10 @@
 """Memory engine protocol — provider-neutral learned-memory interface.
 
 Plan 020 WI-0.1: defines typed provider-neutral requests/results for the
-learned-memory engine. The existing agent-notes pgvector search becomes
-``NativeMemoryEngine``; external engines (Hindsight, Mem0, etc.) implement
-the same protocol.
+learned-memory engine. The agent-notes pgvector search is
+``NativeMemoryEngine``, the only engine: Plan 026 D6 retired the external
+engine adapter. A future learned engine would implement the same protocol
+(Plan 027 decides whether one comes back).
 
 Design principles (Plan 020 §Decisions):
 - One authority per content class: exact knowledge is regista-signed notes;
@@ -114,7 +115,7 @@ class MemoryScope:
     """Provider-neutral scope for ingestion and recall.
 
     Maps agent-notes' project/workspace/user/agent/session identifiers to
-    provider-native scope concepts (e.g., Hindsight banks, Mem0 user_id).
+    provider-native scope concepts (e.g., per-tenant banks or user IDs).
 
     ``project_slug`` and ``workspace_slug`` are the agent-notes identifiers;
     the adapter maps them to provider-native isolation boundaries.
@@ -362,14 +363,14 @@ class EngineHealth:
 class MemoryEngine(Protocol):
     """Provider-neutral learned-memory engine.
 
-    The native pgvector implementation and external adapters (Hindsight,
-    Mem0, etc.) both implement this protocol. Agent-notes' CLI and skills
+    The native pgvector implementation implements this protocol; so would
+    any future external adapter. Agent-notes' CLI and skills
     consume this interface, not concrete implementations.
     """
 
     @property
     def engine_name(self) -> str:
-        """Stable identifier for this engine (e.g., 'native', 'hindsight')."""
+        """Stable identifier for this engine (e.g., 'native')."""
         ...
 
     def describe(self) -> EngineHealth:
@@ -416,31 +417,23 @@ _PROVIDER_ENV = "AGENT_NOTES_MEMORY_ENGINE"
 
 
 def get_engine() -> MemoryEngine:
-    """Return the configured memory engine.
+    """Return the memory engine: always the native pgvector engine.
 
-    Selection precedence:
-    1. ``AGENT_NOTES_MEMORY_ENGINE`` env var (``native``, ``hindsight``)
-    2. ``AGENT_NOTES_MEMORY_ENGINE`` in suite.env (per-user > system)
-    3. Config file ``memory_engine`` key
-    4. Default: ``native``
-
-    The native engine is always available (it uses the local pgvector
-    database). External engines require configuration (endpoint, auth).
-
-    This function is the single dispatch point — adding a new engine
-    is one branch here plus an adapter module.
+    Plan 026 D6 retired the external engine. ``AGENT_NOTES_MEMORY_ENGINE``
+    (process env, then suite.env per-user > system, then the config file's
+    ``memory_engine`` key) may still be set, but only to ``native``. Any other
+    value is a ``ValueError``, not a silent fallback: an operator who asked for
+    another engine should learn it is gone rather than get native results
+    labelled as something else.
     """
     import os
 
-    engine_name = os.environ.get(_PROVIDER_ENV, "").lower()
+    engine_name = os.environ.get(_PROVIDER_ENV, "").strip().lower()
     if not engine_name:
         try:
             from agent_notes.core.suite_env import load_suite_env
 
-            suite = load_suite_env()
-            val = suite.get(_PROVIDER_ENV)
-            if val:
-                engine_name = val.lower()
+            engine_name = (load_suite_env().get(_PROVIDER_ENV) or "").strip().lower()
         except Exception:
             pass
 
@@ -453,26 +446,21 @@ def get_engine() -> MemoryEngine:
                 import json
 
                 data = json.loads(path.read_text())
-                engine_name = str(data.get("memory_engine", "")).lower()
+                if isinstance(data, dict):
+                    engine_name = str(data.get("memory_engine") or "").strip().lower()
         except Exception:
             pass
 
-    if not engine_name:
-        engine_name = "native"
+    if engine_name and engine_name != "native":
+        raise ValueError(
+            f"Memory engine {engine_name!r} is not available: native is the only "
+            f"memory engine (Plan 026 D6). Unset {_PROVIDER_ENV} (or the config "
+            "file's memory_engine key), or set it to 'native'."
+        )
 
-    match engine_name:
-        case "native":
-            from agent_notes.core.native_engine import NativeMemoryEngine
+    from agent_notes.core.native_engine import NativeMemoryEngine
 
-            return NativeMemoryEngine()
-        case "hindsight":
-            from agent_notes.core.hindsight_adapter import HindsightEngine
-
-            return HindsightEngine.from_config()
-        case other:
-            raise ValueError(
-                f"Unknown memory engine '{other}'. Set {_PROVIDER_ENV} to 'native' or 'hindsight'."
-            )
+    return NativeMemoryEngine()
 
 
 def engine_label(state: EngineHealthState) -> str:

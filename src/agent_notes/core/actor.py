@@ -214,6 +214,28 @@ def resolve_actor(config: ActorConfig | None = None) -> Actor:
     return validate_actor(actor)
 
 
+def write_actor() -> Actor:
+    """Return the configured actor for an authored work-item write.
+
+    There are intentionally no actor or model-lineage override arguments: a
+    write is authored by the process's configured principal. Refuses the
+    retired regista write-through setting first (Plan 026 D1), so a process
+    that still asks for regista writes fails loudly instead of writing
+    natively behind the operator's back.
+    """
+
+    from agent_notes.core.config import reject_regista_writes
+
+    reject_regista_writes()
+    return resolve_actor()
+
+
+def default_actor() -> Actor:
+    """Return the configured actor for note-shaped and ordinary write paths."""
+
+    return write_actor()
+
+
 def migration_actor() -> Actor:
     """The canonical system actor used for snapshot migration."""
 
@@ -230,8 +252,10 @@ __all__ = [
     "ActorConfig",
     "ActorConfigurationError",
     "DelegationConfigurationError",
+    "default_actor",
     "load_actor_config",
     "migration_actor",
     "resolve_actor",
     "validate_actor",
+    "write_actor",
 ]

@@ -15,7 +15,6 @@ import pytest
 
 from agent_notes.core import kernel, messaging
 from agent_notes.core.db import _conn
-from agent_notes.core.face_factory import reset_face
 from agent_notes.core.work_item import _independence
 from agent_notes.core.work_item._independence import IndependenceError
 from agent_notes.core.work_item_model import WorkItemModel
@@ -49,7 +48,6 @@ def _native_and_hermetic(monkeypatch):
         *(var for var, _ in messaging.HARNESS_ENV_VARS),
     ):
         monkeypatch.delenv(name, raising=False)
-    reset_face()
 
 
 def _as(monkeypatch, actor: str, model: str | None) -> None:

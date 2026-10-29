@@ -178,12 +178,12 @@ class TestFederatedNativeEngine:
         assert results[2]["origin"] == "extracted"
 
 
-class TestFederatedHindsightEngine:
-    """--federated with hindsight engine returns exact + learned results."""
+class TestFederatedExternalEngine:
+    """--federated with a (mocked) non-native engine returns exact + learned results."""
 
-    def test_hindsight_returns_exact_and_learned_json(self, default_project, capsys):
+    def test_external_engine_returns_exact_and_learned_json(self, default_project, capsys):
         engine = _MockEngine(
-            engine_name="hindsight",
+            engine_name="mock-learned",
             recall_response=RecallResponse(
                 results=[
                     _recall_result(
@@ -201,7 +201,7 @@ class TestFederatedHindsightEngine:
                         memory_type="observation",
                     ),
                 ],
-                engine="hindsight",
+                engine="mock-learned",
                 usage={"count": 2},
             ),
         )
@@ -217,7 +217,7 @@ class TestFederatedHindsightEngine:
         payload = json.loads(captured.out)
         assert payload["exact_count"] == 2
         assert payload["learned_count"] == 2
-        assert payload["engine"] == "hindsight"
+        assert payload["engine"] == "mock-learned"
         results = payload["results"]
         assert results[0]["source"] == "exact"
         assert results[1]["source"] == "exact"
@@ -226,9 +226,9 @@ class TestFederatedHindsightEngine:
         assert results[3]["source"] == "learned"
         assert results[3]["origin"] == "derived"
 
-    def test_hindsight_text_output_source_labels(self, default_project, capsys):
+    def test_external_engine_text_output_source_labels(self, default_project, capsys):
         engine = _MockEngine(
-            engine_name="hindsight",
+            engine_name="mock-learned",
             recall_response=RecallResponse(
                 results=[
                     _recall_result(
@@ -242,7 +242,7 @@ class TestFederatedHindsightEngine:
                         score=0.72,
                     ),
                 ],
-                engine="hindsight",
+                engine="mock-learned",
                 usage={"count": 2},
             ),
         )
@@ -262,7 +262,7 @@ class TestFederatedHindsightEngine:
 
     def test_exact_results_come_before_learned(self, default_project, capsys):
         engine = _MockEngine(
-            engine_name="hindsight",
+            engine_name="mock-learned",
             recall_response=RecallResponse(
                 results=[
                     _recall_result(
@@ -271,7 +271,7 @@ class TestFederatedHindsightEngine:
                         score=0.99,
                     ),
                 ],
-                engine="hindsight",
+                engine="mock-learned",
                 usage={"count": 1},
             ),
         )
@@ -299,7 +299,7 @@ class TestFederatedDegradation:
 
     def test_engine_unreachable_returns_exact_only(self, default_project, capsys):
         engine = _MockEngine(
-            engine_name="hindsight",
+            engine_name="mock-learned",
             recall_raises=ConnectionError("engine down"),
         )
         embed_patch, search_patch = _patch_exact_search()
@@ -323,7 +323,7 @@ class TestFederatedDegradation:
             search_patch,
             patch(
                 "agent_notes.core.memory_engine.get_engine",
-                side_effect=ValueError("Unknown memory engine 'foo'"),
+                side_effect=ValueError("Memory engine 'foo' is not available"),
             ),
         ):
             code = cmd_search_all(_make_args(federated=True))
@@ -332,14 +332,14 @@ class TestFederatedDegradation:
         payload = json.loads(captured.out)
         assert payload["exact_count"] == 2
         assert payload["learned_count"] == 0
-        assert "learned: skipped (unknown engine configuration)" in captured.err
+        assert "learned: skipped — Memory engine 'foo' is not available" in captured.err
 
     def test_engine_empty_results_returns_exact_only(self, default_project, capsys):
         engine = _MockEngine(
-            engine_name="hindsight",
+            engine_name="mock-learned",
             recall_response=RecallResponse(
                 results=[],
-                engine="hindsight",
+                engine="mock-learned",
                 usage={"count": 0},
             ),
         )
@@ -359,10 +359,10 @@ class TestFederatedDegradation:
 
     def test_engine_usage_error_returns_exact_only(self, default_project, capsys):
         engine = _MockEngine(
-            engine_name="hindsight",
+            engine_name="mock-learned",
             recall_response=RecallResponse(
                 results=[],
-                engine="hindsight",
+                engine="mock-learned",
                 usage={"error": "index timeout"},
             ),
         )
@@ -382,7 +382,7 @@ class TestFederatedDegradation:
 
     def test_recall_raises_runtime_error_degrades(self, default_project, capsys):
         engine = _MockEngine(
-            engine_name="hindsight",
+            engine_name="mock-learned",
             recall_raises=RuntimeError("connection reset"),
         )
         embed_patch, search_patch = _patch_exact_search()

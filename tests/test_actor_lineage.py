@@ -129,21 +129,3 @@ def test_delegation_terminal_subject_must_match_the_actor(monkeypatch):
 
     with pytest.raises(DelegationConfigurationError, match="terminal action-delegation subject"):
         validate_actor(mismatched)
-
-
-def test_delegation_terminal_subject_mismatch_refused_by_the_face(monkeypatch):
-    """The same refusal holds through the face's actor crack — the earliest
-    boundary a queued outbox op would cross."""
-    from agent_notes.core.regista_face import _crack
-
-    monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:worker")
-    mismatched = Actor(
-        actor_id="agent:worker",
-        actor_kind="agent",
-        action_delegation_credentials=(
-            shape_valid_delegation(subject_principal_id="agent:someone-else"),
-        ),
-    )
-
-    with pytest.raises(DelegationConfigurationError, match="does not match actor_id"):
-        _crack(mismatched)

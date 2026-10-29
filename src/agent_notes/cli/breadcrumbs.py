@@ -31,8 +31,6 @@ from agent_notes.cli.common import (
 # Work items live only in repo projects: `--workspace` alone never selects the
 # workspace's `global` memory tier here (Plan 025 D3).
 from agent_notes.cli.common import resolve_repo_project as _resolve
-from agent_notes.core import config as reg_config
-from agent_notes.core import outbox
 from agent_notes.core.lifecycle import map_legacy_to_canonical as _map_status
 
 # Plan 013: the legacy bc_status → wi_status mapping now lives in
@@ -486,15 +484,6 @@ def cmd_bc_export_index(args: argparse.Namespace) -> int:
         "# Do not edit by hand; regenerate with: agent-notes breadcrumb export-index",
         "",
     ]
-
-    cfg = reg_config.regista_config()
-    if cfg.enabled:
-        n = outbox.count_ops(cfg.project)
-        if n:
-            lines.insert(
-                0,
-                f"> ⚠ STALE — {n} ops pending sync; run `agent-notes outbox reconcile`",
-            )
 
     for wi in open_wis:
         ident = wi.get("identifier", "?")

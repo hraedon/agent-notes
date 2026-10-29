@@ -45,11 +45,11 @@ Tests for triggers, recursive CTEs, and `change_log` semantics must run against 
 
 ## Architecture in one paragraph
 
-One Postgres database (`agent_notes`), one Python package (`agent_notes`), one `Server` base class with composable kind registries. The **CLI (`agent-notes`) is the primary sync surface** (Plan 004 Phase 9a+). The shared `core/` library handles DB connection pooling, embedding, links, change_log, NOTIFY, and search. A read-only web frontend (`agent-notes-web`) provides browser-based browsing of breadcrumbs, memories, and semantic search. **Native Postgres is the authority for work items** (Plan 025 D7): every write goes to the `op_log` and folds into the `work_items` cache. The regista write-through face (Plan 012–017) is retired and only runs when `AGENT_NOTES_REGISTA_WRITES` is set explicitly; rows mirrored during the regista era are sealed into the op-log on their next native write (`core/work_item/_seal.py`). No code path writes physical breadcrumb files — the `bc_files` module is a one-time import path (files→DB), not a write path.
+One Postgres database (`agent_notes`), one Python package (`agent_notes`), one `Server` base class with composable kind registries. The **CLI (`agent-notes`) is the primary sync surface** (Plan 004 Phase 9a+). The shared `core/` library handles DB connection pooling, embedding, links, change_log, NOTIFY, and search. A read-only web frontend (`agent-notes-web`) provides browser-based browsing of breadcrumbs, memories, and semantic search. **Native Postgres is the authority for work items** (Plan 025 D7): every write goes to the `op_log` and folds into the `work_items` cache. The regista write-through face (Plan 012–017) was retired in Plan 025 D7 and deleted in Plan 026 D1; `AGENT_NOTES_REGISTA_WRITES` (or `regista.writes_enabled`) is now an error on every write. Rows mirrored during the regista era are sealed into the op-log on their next native write (`core/work_item/_seal.py`). No code path writes physical breadcrumb files — the `bc_files` module is a one-time import path (files→DB), not a write path.
 
-**Work-item model layout (Plan 016):** `core/work_item_model.py` is a thin dispatch facade — each public `WorkItemModel` method selects the native op-log path (normal) or the retired regista path (only when a face is explicitly enabled) and delegates to free functions in the `core/work_item/` subpackage (`_common`, `_regista`, `_native`, `_queries`, `_cross_project`). The public class API is unchanged; do not add new logic to the facade — extend the relevant subpackage module.
+**Work-item model layout (Plan 016, Plan 026 D1):** `core/work_item_model.py` is a thin facade — each public `WorkItemModel` method delegates to free functions in the `core/work_item/` subpackage (`_common`, `_native`, `_queries`, `_cross_project`, plus `_independence`, `_seal` and the review modules). With one write path left it holds no dispatch logic; extend the relevant subpackage module.
 
-**Work-log coordination kernel** (Plan 008, P0–P4): the `op_log` is an append-only operation log (op-CRDT model) with content-addressed blobs, a deterministic fold into the `work_items` cache, a fail-safe status lattice, and a standalone verifier CLI. Cross-project coordination (P3) adds `request`/`wait` ops, a derived index for foreign work items, and a reverse-edge map so the `ready` query spans projects. The **regista coordinator is an optional, not-yet-attached L3 layer** — the degrade contract (`coordinator-absent / local-lease`) is the default and fully functional mode; the coordinator adds only race-free multi-writer claims when attached later.
+**Work-log coordination kernel** (Plan 008, P0–P4): the `op_log` is an append-only operation log (op-CRDT model) with content-addressed blobs, a deterministic fold into the `work_items` cache, a fail-safe status lattice, and a standalone verifier CLI. Cross-project coordination (P3) adds `request`/`wait` ops, a derived index for foreign work items, and a reverse-edge map so the `ready` query spans projects. Claims are local leases; `doctor` reports the coordination mode as `local-lease`. The Tier B coordinator stub (`core/coordinator.py`) was deleted in Plan 026 D1.
 
 ## Schema conventions
 
@@ -87,31 +87,31 @@ applies a validated delegated review (Plan 023/025) as the reviewer, once.
 
 This is cooperative enforcement: identity is self-reported. It prevents
 accidental self-approval and records overrides; it is not authentication.
-`core/producer.py` (`require_reviewer_model_lineage`) still guards the
-retired regista path only, and goes away in Plan 026 Phase 2.
 Optional signed action-delegation evidence is loaded
 from the configured `AGENT_NOTES_ACTION_DELEGATION_PATHS` files.
 
-The write path resolves the ambient actor through `core/actor.py::resolve_actor`
-and passes it through `core/regista_face.py`. The CLI renders configuration
-failures as a named error envelope; nothing is written. Memories and
+The write path resolves the ambient actor through `core/actor.py::write_actor`
+(which refuses the retired regista writes setting, then calls `resolve_actor`).
+The CLI renders configuration failures as a named error envelope; nothing is
+written. Memories and
 reflections use the same canonical actor, but remain non-workflow note entities
 and do not participate in the work-item review gate.
 
-**Canonical regista configuration (retired write-through, Plan 025 D7):** `REGISTA_DSN`, `REGISTA_KEY_PATH`,
-`REGISTA_REQUIRE_SSL`, and `AGENT_NOTES_PROJECT` are the only accepted values
-for the regista DSN, key-set manifest, SSL requirement, and project. The
-`regista` block in `config.json` uses `dsn`, `key_path`, `require_ssl`, and
-`writes_enabled`. `AGENT_NOTES_REGISTA_WRITES` remains the tool-specific write
-gate and defaults off; `install-harness` no longer propagates any of these.
-Configuration aliases are not supported; unknown names are ignored.
+**Regista configuration is retired (Plan 026 D1).** `REGISTA_DSN`,
+`REGISTA_KEY_PATH` and `REGISTA_REQUIRE_SSL` are no longer read.
+`AGENT_NOTES_REGISTA_WRITES=1` (or `regista.writes_enabled` in `config.json`)
+makes every write fail with `RETIRED_SETTING`, and `doctor` reports it as the
+`retired_settings` check; see `docs/spikes/025-regista-cutover.md`.
+`install-harness` removes the regista entries it wrote earlier. The regista
+*library* is still a dependency (principal grammar, action delegation, error
+codes, secret refs) until Plan 026 Phase 3.
 
 **Checking the wiring: `agent-notes invariants probe`** (WI-071). This is the
 read-only probe the suite genesis gate consumes
 (`agent_suite.genesis_gate`, required check
 `agent_notes.session_identity_resolvable`). It answers one question about *this*
 environment — "would a work-item write issued right now carry a resolvable,
-valid identity?" — by resolving through `face_factory.write_actor`, the same
+valid identity?" — by resolving through `actor.resolve_actor`, the same
 entry point every authored write uses, and reporting what that call did. It
 writes nothing and opens no connection.
 
@@ -127,11 +127,10 @@ test a different configuration set the suite environment the write path
 actually reads.
 
 Two deliberate exemptions: `actor_kind="system"` actors (the migration actor)
-carry no model and are never counted by the gate, and note-shaped entities
-(memories, reflections via `core/note_model.py`) still use the un-gated
-`face_factory.default_actor()` because `derive_authors` never reads them.
-Moving notes under the same rule is a deliberate decision, not a tidy-up — it
-fails `memory add` for every unconfigured caller.
+carry no model and are never counted by the gate, and memories and reflections
+(`core/memory_model.py`) resolve no actor at all, because `derive_authors`
+never reads them. Moving notes under the same rule is a deliberate decision,
+not a tidy-up — it fails `memory add` for every unconfigured caller.
 
 ## Embedding
 

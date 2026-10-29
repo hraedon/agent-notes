@@ -306,41 +306,6 @@
       "aliases": []
     },
     {
-      "name": "memory rebuild-from-regista",
-      "mutability": "mutating",
-      "json": true,
-      "framing": "document",
-      "aliases": []
-    },
-    {
-      "name": "memory check-drift",
-      "mutability": "read-only",
-      "json": true,
-      "framing": "document",
-      "aliases": []
-    },
-    {
-      "name": "memory-provider describe",
-      "mutability": "read-only",
-      "json": true,
-      "framing": "document",
-      "aliases": []
-    },
-    {
-      "name": "memory-provider configure",
-      "mutability": "mutating",
-      "json": true,
-      "framing": "document",
-      "aliases": []
-    },
-    {
-      "name": "memory-provider doctor",
-      "mutability": "read-only",
-      "json": true,
-      "framing": "document",
-      "aliases": []
-    },
-    {
       "name": "link add",
       "mutability": "mutating",
       "json": true,
@@ -441,34 +406,6 @@
     {
       "name": "orient",
       "mutability": "read-only",
-      "json": true,
-      "framing": "document",
-      "aliases": []
-    },
-    {
-      "name": "outbox status",
-      "mutability": "read-only",
-      "json": true,
-      "framing": "document",
-      "aliases": []
-    },
-    {
-      "name": "outbox reconcile",
-      "mutability": "mutating",
-      "json": true,
-      "framing": "document",
-      "aliases": []
-    },
-    {
-      "name": "projection rebuild-from-regista",
-      "mutability": "mutating",
-      "json": true,
-      "framing": "document",
-      "aliases": []
-    },
-    {
-      "name": "migrate-to-regista",
-      "mutability": "mutating",
       "json": true,
       "framing": "document",
       "aliases": []

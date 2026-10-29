@@ -27,7 +27,8 @@ displayed name may be namespaced) or ask to orient to the project's notes.
 
 Review lifecycle hooks using `/hooks` where supported. Installation does not
 prove hook trust or execution. SessionStart emits bounded project metadata;
-Stop attempts outbox reconciliation and does not force another agent turn.
+Stop is a no-op (the outbox it used to reconcile was deleted in Plan 026) and
+does not force another agent turn.
 Do not also run `agent-notes install-harness codex` for the same profile: that
 fallback installs duplicate skills and hooks. Doctor names duplicate wiring.
 

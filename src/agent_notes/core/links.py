@@ -61,7 +61,7 @@ def _resolved_actor(actor: str | None) -> str:
     """
     if actor is not None:
         return actor
-    from agent_notes.core.face_factory import default_actor
+    from agent_notes.core.actor import default_actor
 
     resolved: str = default_actor().actor_id
     return resolved

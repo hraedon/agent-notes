@@ -2,8 +2,7 @@
 
 Read-only queries (``get``, ``query``, ``find``, ``suggest_duplicates``,
 ``diagnose``, ``get_work_item_body``), coordination queries (``ready``,
-``claimable``), and the regista-path delete. Native-path delete lives in
-``_native.delete_work_item``; the facade selects between them.
+``claimable``). Delete lives in ``_native.delete_work_item``.
 """
 
 from __future__ import annotations
@@ -12,8 +11,7 @@ from typing import Any
 
 from psycopg.rows import dict_row
 
-from agent_notes.core import face_factory, kernel
-from agent_notes.core.change_log import write_change
+from agent_notes.core import kernel
 from agent_notes.core.db import _conn
 
 from . import _common
@@ -285,41 +283,3 @@ def claimable_work_items(
     limit: int = 50,
 ) -> list[dict]:
     return kernel.claimable_work_items(project_id, workspace_id, limit)
-
-
-def delete_work_item_regista(
-    project_id: int,
-    identifier: str,
-) -> bool:
-    """Regista-path delete: drops local cache + leases; regista retains the item."""
-    with _conn() as conn:
-        workspace_id = _common.resolve_workspace_for_project(conn, project_id)
-        cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
-            (project_id, identifier),
-        )
-        old = cur.fetchone()
-        if old is None:
-            return False
-        actor = face_factory.write_actor()
-        cur.execute(
-            "DELETE FROM work_item_leases WHERE entity_id = %s",
-            (old["entity_id"],),
-        )
-        cur.execute(
-            "DELETE FROM work_items WHERE project_id = %s AND identifier = %s",
-            (project_id, identifier),
-        )
-        write_change(
-            conn,
-            kind=KIND,
-            workspace_id=workspace_id,
-            project_id=project_id,
-            identifier=identifier,
-            event="deleted",
-            payload={"title": old["title"], "regista_retained": True},
-            actor=actor.actor_id,
-        )
-        conn.commit()
-    return True

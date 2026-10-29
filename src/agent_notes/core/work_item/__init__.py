@@ -5,10 +5,8 @@ operations. The public surface is still ``WorkItemModel`` in
 ``agent_notes.core.work_item_model``; these modules are internal.
 
 Modules:
-- ``_common``   — shared helpers (workspace/vocab lookup, embedding diff,
-                  regista-snapshot mirroring, change-log payload builder).
-- ``_regista``  — retired regista write-through (only when explicitly enabled).
-- ``_native``   — native op-log write path (the authority; Plan 025 D7).
+- ``_common``   — shared helpers (workspace/vocab lookup, embedding diff).
+- ``_native``   — native op-log write path (the only write path; Plan 026 D1).
 - ``_queries``  — read-only queries + delete + diagnose.
 - ``_cross_project`` — P3 request / wait / cross-project links.
 """

@@ -95,21 +95,12 @@ def emit_error(
 def _resolve(
     ws_slug: str | None, proj_slug: str | None, path: str | None, *, repo_only: bool = False
 ) -> tuple[int, int, str, str]:
-    """Resolve the current workspace/project and set the regista routing context.
+    """Resolve the current workspace/project.
 
-    Plan 011: every CLI command resolves its project here, so this is the single
-    place to bind the regista write face to the matching per-project schema.
     ``repo_only`` refuses ``--workspace`` alone, which otherwise selects the
     workspace's ``global`` memory tier; work items live only in repo projects.
     """
-    result = _resolve_impl(ws_slug, proj_slug, path, repo_only=repo_only)
-    from agent_notes.core import face_factory
-
-    try:
-        face_factory.set_current_project(face_factory.regista_project_name(result[3]))
-    except Exception:
-        face_factory.set_current_project(None)
-    return result
+    return _resolve_impl(ws_slug, proj_slug, path, repo_only=repo_only)
 
 
 def resolve_repo_project(
@@ -329,15 +320,6 @@ def _vm_id(args: argparse.Namespace) -> str:
         raise ScopeError("VM_ID_UNRESOLVED", str(exc), EXIT_NOT_CONFIGURED) from exc
 
 
-def _bind_regista_project(slug: str) -> None:
-    from agent_notes.core import face_factory
-
-    try:
-        face_factory.set_current_project(face_factory.regista_project_name(slug.replace(":", "_")))
-    except Exception:
-        face_factory.set_current_project(None)
-
-
 def resolve_memory_target(args: argparse.Namespace, *, create: bool = False) -> MemoryTarget:
     """Resolve ``--scope`` (repo|vm|global) to one project row.
 
@@ -379,7 +361,6 @@ def resolve_memory_target(args: argparse.Namespace, *, create: bool = False) -> 
         proj = get_or_create_scope_project(ctx.ws_id, scope, vm_id)
     else:
         proj = find_scope_project(ctx.ws_id, scope, vm_id)
-    _bind_regista_project(slug)
     return MemoryTarget(ctx.ws_id, ctx.ws_slug, proj.id if proj else None, slug, scope, key)
 
 

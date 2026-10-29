@@ -92,7 +92,7 @@ def _provider_prefix(value: str) -> Optional[str]:
     ``postgresql://...`` → ``None`` (literal DSN, no resolution). ``env:FOO`` →
     ``"env"``. ``/etc/keys.json`` → ``None`` (bare path). Mirrors regista's
     ``_detect_prefix`` recognition set. Recognition is case-insensitive
-    (``ENV:``/``Vault:`` are refs); ``_normalize_for_regista`` lowercases the
+    (``ENV:``/``Vault:`` are refs); ``_normalize_backend_ref`` lowercases the
     prefix before the regista call because regista's provider names are
     lowercase and it does NOT lowercase itself.
     """
@@ -102,7 +102,7 @@ def _provider_prefix(value: str) -> Optional[str]:
     return prefix if prefix in _ALL_PROVIDERS else None
 
 
-def _normalize_for_regista(value: str) -> str:
+def _normalize_backend_ref(value: str) -> str:
     """Lowercase the provider prefix so ``ENV:VAR`` resolves like ``env:VAR``.
 
     Only the prefix (before the first ``:``) is lowercased — the remainder
@@ -166,7 +166,7 @@ def resolve_dsn(value: Optional[str]) -> Optional[str]:
     prefix = _provider_prefix(value)
     if prefix is None:
         return value  # literal DSN — no resolution, no regista import
-    normalized = _normalize_for_regista(value)
+    normalized = _normalize_backend_ref(value)
     try:
         result = _resolver().resolve_str(normalized)
     except Exception as exc:
@@ -222,7 +222,7 @@ def materialize_key_manifest(
         )
 
     # Remote backend ref — resolve bytes and materialize to a private temp file.
-    normalized = _normalize_for_regista(value)
+    normalized = _normalize_backend_ref(value)
     try:
         data = _resolver().resolve(normalized)
         _validate_manifest_bytes(data)

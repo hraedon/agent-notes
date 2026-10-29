@@ -69,7 +69,7 @@ def test_probe_is_contract_shaped_after_an_unexpected_error(monkeypatch, capsys)
 def test_probe_opens_no_database_connection_and_builds_no_face(monkeypatch):
     """Structural proof of the read-only claim.
 
-    Every door to the store — the regista face, the projection DB pool, the
+    Every door to the store — the DB pool, the
     ``psycopg_pool.ConnectionPool`` constructor the pool is built from (it
     connects eagerly, ``open=True``), and ``socket.create_connection`` — is
     booby-trapped. A probe that touched any of them fails here rather than in
@@ -103,7 +103,6 @@ def test_probe_opens_no_database_connection_and_builds_no_face(monkeypatch):
     import psycopg_pool
 
     from agent_notes.core import db as coredb
-    from agent_notes.core import face_factory
 
     touched: list[str] = []
 
@@ -117,8 +116,6 @@ def test_probe_opens_no_database_connection_and_builds_no_face(monkeypatch):
     # `raising=False` is deliberately absent everywhere: every symbol below
     # exists today, and a rename must fail this test loudly rather than quietly
     # disarm the trap by patching an attribute nothing calls.
-    monkeypatch.setattr(face_factory, "get_face", _forbid("face_factory.get_face"))
-    monkeypatch.setattr(face_factory, "_build_face", _forbid("face_factory._build_face"))
     monkeypatch.setattr(coredb, "_conn", _forbid("db._conn"))
     monkeypatch.setattr(coredb, "_get_pool", _forbid("db._get_pool"))
     # Both bindings: `db.py` from-imports the class, so patching the

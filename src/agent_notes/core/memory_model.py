@@ -16,6 +16,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from agent_notes.core.change_log import write_change
+from agent_notes.core.config import reject_regista_writes
 from agent_notes.core.db import _conn
 
 _log = logging.getLogger(__name__)
@@ -62,16 +63,8 @@ def add_memory(
     attributes: dict | None = None,
     embedding: Any | None = None,
 ) -> dict:
+    reject_regista_writes()
     _validate_memory_type(workspace_id, memory_type)
-
-    from agent_notes.core import face_factory
-
-    if face_factory.get_face() is not None:
-        from agent_notes.core import note_model
-
-        return note_model.add_memory(
-            workspace_id, project_id, name, memory_type, body, attributes, embedding
-        )
 
     with _conn() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -668,13 +661,7 @@ def list_memories_composed(
 
 def delete_memory(workspace_id: int, project_id: int, name: str) -> dict | None:
     """Soft-delete a memory (sets active=false). Returns the deleted row or None."""
-    from agent_notes.core import face_factory
-
-    if face_factory.get_face() is not None:
-        from agent_notes.core import note_model
-
-        return note_model.delete_memory(workspace_id, project_id, name)
-
+    reject_regista_writes()
     with _conn() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -713,13 +700,7 @@ def update_memory(
 
     Raises ValueError if the memory is not found or not active.
     """
-    from agent_notes.core import face_factory
-
-    if face_factory.get_face() is not None:
-        from agent_notes.core import note_model
-
-        return note_model.update_memory(workspace_id, project_id, name, body, attributes)
-
+    reject_regista_writes()
     with _conn() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(

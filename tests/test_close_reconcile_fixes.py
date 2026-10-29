@@ -1,12 +1,8 @@
 """Regression tests for two agent-notes defects surfaced during the
 agent-suite WI-010/011/013/015/016/017 closure tranche (2026-07-25).
 
-1. ``close --force`` on a regista-connected project raised
-   ``fold_work_item returned None after close op``. Root cause:
-   ``close_work_item(force=True)`` routed to the native path unconditionally,
-   bypassing the regista face — but regista-synced items have no native op
-   chain, so the native fold returned None. Fix: route the face check first
-   (matching ``update_work_item``) and terminalize through the workflow.
+1. ``close --force`` writes the legacy terminal op on the native path (the
+   regista-connected half of this fix went with the write-through, Plan 026).
 
 2. ``breadcrumb reconcile --apply`` crashed the whole run on the first work
    item whose status had no direct terminal transition (e.g. ``in_review`` →
@@ -18,17 +14,14 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from agent_notes.cli.breadcrumbs import cmd_bc_reconcile
 from agent_notes.core import db as coredb
-from agent_notes.core.face_factory import reset_face, set_face_for_test
-from agent_notes.core.regista_face import RegistaFace
 from agent_notes.core.work_item_model import WorkItemModel
-from tests.conftest import ephemeral_db, provision_v6_regista  # noqa: F401
+from tests.conftest import ephemeral_db  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures("ephemeral_db")
 
@@ -39,12 +32,6 @@ def default_project():
     return coredb.get_or_create_project(ws.id, slug="sf2", name="sf2", repo_root="/projects/sf2")
 
 
-@pytest.fixture
-def v6_key_path(tmp_path: Path):
-    # provision_v6_regista writes the real v6 keyset here.
-    return str(tmp_path / "v6_keys.json")
-
-
 def _vec768():
     return [0.0] * 768
 
@@ -52,46 +39,8 @@ def _vec768():
 # ── Fix 1: force-close on a regista-connected project ───────────────────
 
 
-def test_force_close_on_regista_path_terminalizes_instead_of_fold_crash(
-    default_project, v6_key_path, monkeypatch
-):
-    """A regista-synced item (no native op chain) force-closes through the
-    workflow instead of raising fold_work_item-returned-None."""
-    monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-    monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:author-agent")
-
-    reg = provision_v6_regista(v6_key_path)
-    face = RegistaFace(reg)
-    reset_face()
-    set_face_for_test(face)
-    try:
-        WorkItemModel.file_work_item(
-            project_id=default_project.id,
-            identifier="FC-REG-01",
-            title="regista force-close",
-            body="body",
-            kind="bug",
-            status="open",
-            severity="medium",
-            embedding=_vec768(),
-        )
-        row = WorkItemModel.get_work_item(default_project.id, "FC-REG-01")
-        # Precondition: this is a regista-synced item (the bug class).
-        assert row["regista_work_item_id"] is not None
-
-        closed = WorkItemModel.close_work_item(default_project.id, "FC-REG-01", force=True)
-        # Terminalized through the workflow (done), not a cryptic fold crash.
-        assert closed["status"] in ("done", "closed")
-        assert closed["closed_at"] is not None
-    finally:
-        reset_face()
-        reg.close()
-
-
 def test_force_close_native_path_still_writes_legacy_terminal(default_project, monkeypatch):
-    """The degrade (no-face) path is unchanged: force writes the terminal
-    'closed' op directly (Plan 014 A(b))."""
-    reset_face()
+    """Force writes the terminal 'closed' op directly (Plan 014 A(b))."""
     WorkItemModel.file_work_item(
         project_id=default_project.id,
         identifier="FC-NATIVE-01",
@@ -205,10 +154,7 @@ def test_mem_add_empty_body_returns_validation_error(capsys, monkeypatch):
     and a nonzero exit code (not a silent success or a traceback)."""
     from agent_notes.cli.memory import cmd_mem_add
 
-    monkeypatch.setattr(
-        "agent_notes.cli.memory._resolve",
-        lambda *a, **k: (1, 1, "ws", "proj"),
-    )
+    # The body check runs before scope resolution, so nothing is resolved.
     ns = argparse.Namespace(
         workspace=None,
         project=None,
@@ -224,75 +170,3 @@ def test_mem_add_empty_body_returns_validation_error(capsys, monkeypatch):
     out = json.loads(capsys.readouterr().out)
     assert out["ok"] is False
     assert out["error"]["code"] == "VALIDATION_FAILED"
-
-
-# ── Fix 4 (9ab81ab): review CLI catches RegistaError ─────────────────────
-
-
-def test_review_pass_cli_catches_regista_error(default_project, v6_key_path, monkeypatch, capsys):
-    """When the review gate raises RegistaError, the CLI catches it and emits a
-    VALIDATION_FAILED envelope instead of a traceback.
-
-    The trigger is a same-lineage review without ``--same-lineage-acknowledged``
-    (the producer env configured by provisioning authored the item, and the
-    same producer reviews it) — a rejection the gate raises and the CLI must
-    render cleanly.
-    """
-    from agent_notes.cli.work_items import cmd_wi_review_pass
-
-    monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-    monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:author-agent")
-
-    reg = provision_v6_regista(v6_key_path)
-    face = RegistaFace(reg)
-    reset_face()
-    set_face_for_test(face)
-    try:
-        # File and drive to in_review (producer lineage: fable, from
-        # provisioning).
-        WorkItemModel.file_work_item(
-            project_id=default_project.id,
-            identifier="RV-CLI-ERR",
-            title="regista error test",
-            body="body",
-            kind="bug",
-            status="open",
-            severity="medium",
-            embedding=_vec768(),
-        )
-        WorkItemModel.update_work_item(
-            project_id=default_project.id,
-            identifier="RV-CLI-ERR",
-            status="in_progress",
-        )
-        WorkItemModel.close_work_item(default_project.id, "RV-CLI-ERR")
-
-        # A same-lineage reviewer without an ack is rejected (the running
-        # producer also authored the item). The CLI must catch the rejection
-        # and return a VALIDATION_FAILED envelope.
-        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:reviewer")
-        ns = argparse.Namespace(
-            workspace=None,
-            project=None,
-            path="/projects/sf2",
-            json=True,
-            identifier="RV-CLI-ERR",
-            note="This should fail cleanly",
-            same_lineage_acknowledged=False,
-        )
-        rc = cmd_wi_review_pass(ns)
-        assert rc != 0, "CLI must not return exit 0 on RegistaError"
-        captured = capsys.readouterr()
-        # structlog may write key-loading info to stdout in the full suite.
-        # The CLI error envelope is a pretty-printed JSON document (indent=2)
-        # so it starts with '{\n  "ok":'. Find it by locating the last
-        # '"ok":' marker and backing up to the preceding '{'.
-        ok_pos = captured.out.rindex('"ok":')
-        brace_pos = captured.out.rindex("{", 0, ok_pos)
-        out = json.loads(captured.out[brace_pos:])
-        assert out["ok"] is False
-        assert out["error"]["code"] == "VALIDATION_FAILED"
-        assert "Traceback" not in captured.err
-    finally:
-        reset_face()
-        reg.close()

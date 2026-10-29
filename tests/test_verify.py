@@ -527,10 +527,8 @@ class TestVerifyCli:
         import os
 
         from agent_notes.cli.verify import cmd_verify
-        from agent_notes.core.face_factory import reset_face
 
         os.environ.pop("AGENT_NOTES_REGISTA_WRITES", None)
-        reset_face()
 
         wi = WorkItemModel.file_work_item(
             project_id=default_project.id,

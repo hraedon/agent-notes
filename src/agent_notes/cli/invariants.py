@@ -56,9 +56,8 @@ def _render_human(report: dict) -> None:
 def cmd_invariants_probe(args: argparse.Namespace) -> int:
     """Emit the read-only session-identity invariant report.
 
-    Read-only: resolves identity, consults regista's lineage registry constant,
-    and runs the boundary validation. It opens no database connection, builds no
-    regista face, and writes nothing anywhere.
+    Read-only: resolves identity and runs the boundary validation. It opens no
+    database connection and writes nothing anywhere.
     """
     from agent_notes.core.invariant_probe import invariant_probe_report
 

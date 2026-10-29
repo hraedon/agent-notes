@@ -114,8 +114,6 @@ def test_plugin_only_install_satisfies_generic_wiring_checks(
     _use_home(monkeypatch, tmp_path, plugin_state=plugin_state)
     # Exercise run_json's real wiring aggregation, without contacting a store.
     monkeypatch.setattr(doctor, "_check_dsn", lambda: (False, "fixture store offline"))
-    monkeypatch.setattr(doctor, "_check_regista_reachable", lambda cfg: (None, "not configured"))
-    monkeypatch.setattr(doctor, "_check_secrets_backend", lambda cfg: (None, "not configured"))
     monkeypatch.setattr(doctor, "_check_memory_provider", lambda: (None, "native"))
     payload, _code = doctor.run_json()
     checks = {check["name"]: check for check in payload["checks"]}

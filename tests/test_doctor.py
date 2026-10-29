@@ -6,6 +6,7 @@ is required so the schema checks pass.
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
@@ -51,10 +52,6 @@ class TestDoctorClean:
             patch(
                 "agent_notes.scripts.doctor._check_chain_ok",
                 return_value=(True, "mocked chain ok"),
-            ),
-            patch(
-                "agent_notes.scripts.doctor._check_regista_reachable",
-                return_value=(None, "not configured"),
             ),
         )
         for p in suite_patches:
@@ -341,9 +338,9 @@ class TestDoctorSkipsEmbeddingByDefault:
 class TestDoctorJsonSuiteShape:
     """The suite contract (blueprint §2.4 / Plan 017 WI-3.1) requires every
     component's ``doctor --json`` to emit a common shape so a suite-doctor
-    umbrella can aggregate them. These tests pin the shape and the two AC
-    guarantees: degrade mode is a named status (not a failure), and an
-    unconfigured regista is clean.
+    umbrella can aggregate them. Plan 026 D1 removed the ``regista`` block and
+    the ``degraded`` status: regista write-through is deleted, so an absent
+    regista is the normal state, never a degraded one.
     """
 
     @pytest.fixture(autouse=True)
@@ -361,107 +358,172 @@ class TestDoctorJsonSuiteShape:
         coredb.add_vocabulary(ws.id, "memory_type", "note")
 
     def _required_top_keys(self):
-        return {"component", "version", "ok", "degraded", "status", "regista", "checks"}
+        return {"component", "version", "ok", "degraded", "status", "checks"}
 
-    def _required_regista_keys(self):
-        return {"reachable", "project", "writes_enabled", "chain_ok", "mode"}
+    def _hermetic(self, doctor):
+        """Pin DB-state and host-state checks against session-shared rows and
+        the operator's installed harnesses."""
+        return [
+            patch.object(doctor, "_check_chain_ok", return_value=(True, "0 violations")),
+            patch.object(doctor, "_check_links_audit", return_value=(True, "clean")),
+            patch.object(doctor, "_check_vocab_integrity", return_value=(True, "clean")),
+            patch.object(doctor, "_check_skills_installed", return_value=(True, "7 skills")),
+            patch.object(doctor, "_check_harness_wired", return_value=(True, "wired")),
+            patch.object(doctor, "_check_codex_harness", return_value=(None, "absent")),
+            patch.object(
+                doctor, "_probe_codex_agent_notes_plugin", return_value=("absent", "absent")
+            ),
+            patch.object(doctor, "_check_bridge_target", return_value=(True, "disabled")),
+            patch.object(doctor, "_check_harness_configs", return_value=(True, "clean")),
+        ]
+
+    def _run(self, doctor):
+        patchers = self._hermetic(doctor)
+        for p in patchers:
+            p.start()
+        try:
+            return doctor.run_json()
+        finally:
+            for p in patchers:
+                p.stop()
 
     def test_emits_suite_shape(self):
         from agent_notes.scripts.doctor import run_json
 
         payload, code = run_json()
         assert self._required_top_keys() <= set(payload)
+        assert "regista" not in payload
         assert payload["component"] == "agent-notes"
         assert payload["version"] != "unknown"
-        assert payload["status"] in {"healthy", "degraded", "unhealthy"}
+        assert payload["status"] in {"healthy", "unhealthy"}
         assert isinstance(payload["ok"], bool)
-        assert isinstance(payload["degraded"], bool)
-        # The umbrella-read booleans agree with the human-facing tri-state.
+        assert payload["degraded"] is False
+        # The umbrella-read boolean agrees with the human-facing status.
         assert payload["ok"] == (payload["status"] != "unhealthy")
-        assert payload["degraded"] == (payload["status"] == "degraded")
-        assert self._required_regista_keys() <= set(payload["regista"])
         assert isinstance(payload["checks"], list) and payload["checks"]
-        assert "codex_harness" in {check["name"] for check in payload["checks"]}
+        names = {check["name"] for check in payload["checks"]}
+        assert "codex_harness" in names
+        assert "retired_settings" in names
+        assert not names & {"regista_reachable", "regista_face", "secrets_backend"}
         for c in payload["checks"]:
             assert {"name", "status", "detail"} <= set(c)
             assert c["status"] in {"ok", "warn", "fail", "skip"}
 
-    def test_degrade_mode_is_not_a_failure(self):
-        """regista unconfigured (coordinator-absent) must not *fail* the suite.
-
-        It reports ``status: "degraded"`` (a distinct, non-failing signal for
-        the umbrella), never ``"unhealthy"``. The regista_reachable +
-        chain_integrity checks are ``skip``.
-        """
+    def test_absent_regista_is_healthy_not_degraded(self, monkeypatch):
+        """No regista configuration at all is the normal state (Plan 026 D1)."""
         from agent_notes.scripts import doctor
 
-        # Pin the regista-layer + DB-state checks so the test is hermetic
-        # against a host REGISTA_DSN (conftest clears it, but belt-and-braces)
-        # and against session-shared DB rows from earlier tests.
-        suite_patches = [
-            patch.object(doctor, "_check_regista_reachable", return_value=(None, "not configured")),
-            patch.object(doctor, "_check_chain_ok", return_value=(None, "skipped")),
-            patch.object(doctor, "_check_links_audit", return_value=(True, "clean")),
-            patch.object(doctor, "_check_vocab_integrity", return_value=(True, "clean")),
-            patch.object(doctor, "_check_skills_installed", return_value=(True, "7 skills")),
-            patch.object(doctor, "_check_harness_wired", return_value=(True, "wired")),
-        ]
-        for p in suite_patches:
-            p.start()
-        try:
-            payload, code = doctor.run_json()
-        finally:
-            for p in suite_patches:
-                p.stop()
-        regista_checks = {c["name"]: c for c in payload["checks"]}
-        assert regista_checks["regista_reachable"]["status"] == "skip"
-        assert payload["regista"]["reachable"] is None
-        assert payload["status"] == "degraded"
-        assert code == 0
-        failing = [c["name"] for c in payload["checks"] if c["status"] == "fail"]
-        assert "regista_reachable" not in failing
+        for name in ("REGISTA_DSN", "REGISTA_KEY_PATH", "AGENT_NOTES_REGISTA_WRITES"):
+            monkeypatch.delenv(name, raising=False)
+        payload, code = self._run(doctor)
+        assert code == 0, payload
+        assert payload["status"] == "healthy"
+        assert payload["degraded"] is False
+        modes = {c["name"]: c for c in payload["checks"]}
+        assert modes["coordination_mode"]["status"] == "ok"
+        assert "local-lease" in modes["coordination_mode"]["detail"]
 
-    def test_configured_but_unreachable_regista_fails(self, monkeypatch):
-        """A regista DSN that is set but cannot be reached is a real failure."""
-        from agent_notes.scripts.doctor import run_json
+    def test_configured_regista_dsn_is_ignored(self, monkeypatch):
+        """A leftover REGISTA_DSN is never probed, so it can't fail or degrade."""
+        from agent_notes.scripts import doctor
 
         monkeypatch.setenv("REGISTA_DSN", "postgresql://nobody@127.0.0.1:1/none")
+        monkeypatch.delenv("AGENT_NOTES_REGISTA_WRITES", raising=False)
+        payload, code = self._run(doctor)
+        assert code == 0, payload
+        assert payload["status"] == "healthy"
+        assert "nobody" not in str(payload)
+
+    def test_retired_regista_writes_setting_fails(self, monkeypatch):
+        from agent_notes.scripts import doctor
+
         monkeypatch.setenv("AGENT_NOTES_REGISTA_WRITES", "1")
-        payload, code = run_json()
-        regista_checks = {c["name"]: c for c in payload["checks"]}
-        assert regista_checks["regista_reachable"]["status"] == "fail"
-        # No secret leak: the detail must not contain the user/password.
-        assert "nobody" not in regista_checks["regista_reachable"]["detail"]
+        payload, code = self._run(doctor)
+        checks = {c["name"]: c for c in payload["checks"]}
+        assert checks["retired_settings"]["status"] == "fail"
+        assert "025-regista-cutover.md" in checks["retired_settings"]["detail"]
         assert code == 1
         assert payload["status"] == "unhealthy"
 
-    def test_clean_store_reports_healthy(self):
-        """When regista is reachable and every check passes, status is healthy."""
+    def test_retired_memory_engine_setting_fails(self, monkeypatch):
         from agent_notes.scripts import doctor
 
-        checks = {
-            "_check_dsn": (True, "ok"),
-            "_check_schema": (True, "ok"),
-            "_check_coordination_mode": (True, "coordinator-present / local-lease"),
-            "_check_links_audit": (True, "no dangling links"),
-            "_check_vocab_integrity": (True, "ok"),
-            "_check_bridge_target": (True, "disabled"),
-            "_check_harness_configs": (True, "clean"),
-            "_check_regista_face": (True, "ok"),
-            "_check_chain_ok": (True, "0 violations"),
-            "_check_skills_installed": (True, "7 skills"),
-            "_check_harness_wired": (True, "wired"),
-            "_check_regista_reachable": (True, "regista DSN reachable"),
-        }
-        patchers = [patch.object(doctor, name, return_value=val) for name, val in checks.items()]
-        for p in patchers:
-            p.start()
-        try:
-            payload, code = doctor.run_json()
-        finally:
-            for p in patchers:
-                p.stop()
+        monkeypatch.setenv("AGENT_NOTES_MEMORY_ENGINE", "hindsight")
+        payload, code = self._run(doctor)
+        checks = {c["name"]: c for c in payload["checks"]}
+        assert checks["memory_provider"]["status"] == "fail"
+        assert "native is the only" in checks["memory_provider"]["detail"]
+        assert code == 1
+
+    def test_native_memory_engine_setting_is_clean(self, monkeypatch):
+        from agent_notes.scripts import doctor
+
+        monkeypatch.setenv("AGENT_NOTES_MEMORY_ENGINE", "native")
+        payload, code = self._run(doctor)
+        checks = {c["name"]: c for c in payload["checks"]}
+        assert checks["memory_provider"]["status"] == "skip"
         assert code == 0, payload
-        assert payload["status"] == "healthy"
-        assert payload["regista"]["reachable"] is True
-        assert all(c["status"] != "fail" for c in payload["checks"])
+
+
+class TestLegacyOutbox:
+    """Plan 026 D5: a leftover regista outbox queue must be archived, not lost."""
+
+    def test_absent_directory_passes(self, monkeypatch, tmp_path):
+        from agent_notes.scripts import doctor
+
+        monkeypatch.setenv("AGENT_NOTES_OUTBOX_DIR", str(tmp_path / "outbox"))
+        ok, msg = doctor._check_legacy_outbox()
+        assert ok is True
+        assert "no legacy outbox" in msg
+
+    def test_empty_queue_files_pass(self, monkeypatch, tmp_path):
+        from agent_notes.scripts import doctor
+
+        root = tmp_path / "outbox"
+        (root / "agent_notes").mkdir(parents=True)
+        (root / "agent_notes" / "session.jsonl").write_text("")
+        monkeypatch.setenv("AGENT_NOTES_OUTBOX_DIR", str(root))
+        ok, msg = doctor._check_legacy_outbox()
+        assert ok is True
+        assert "empty" in msg
+
+    def test_non_empty_queue_fails_with_archive_message(self, monkeypatch, tmp_path):
+        from agent_notes.scripts import doctor
+
+        root = tmp_path / "outbox"
+        (root / "agent_notes").mkdir(parents=True)
+        queued = root / "agent_notes" / "abc.jsonl"
+        queued.write_text('{"not": "parsed"}\n')
+        (root / "agent_notes" / "abc.conflicts.jsonl").write_text("x\n")
+        before = queued.read_bytes()
+        monkeypatch.setenv("AGENT_NOTES_OUTBOX_DIR", str(root))
+
+        ok, msg = doctor._check_legacy_outbox()
+        assert ok is False
+        assert "2 non-empty legacy regista outbox file(s)" in msg
+        assert "agent_notes/abc.jsonl" in msg.replace("\\", "/")
+        assert "archive" in msg
+        # Read-only: the queue is left exactly as it was.
+        assert queued.read_bytes() == before
+
+    def test_default_path_is_the_old_platform_state_dir(self, monkeypatch):
+        import platformdirs
+
+        from agent_notes.scripts import doctor
+
+        monkeypatch.delenv("AGENT_NOTES_OUTBOX_DIR", raising=False)
+        expected = Path(platformdirs.user_state_dir("regista")) / "outbox"
+        assert doctor._legacy_outbox_dir() == expected
+
+    def test_json_reports_it_as_a_failing_check(self, monkeypatch, tmp_path):
+        from agent_notes.scripts import doctor
+
+        root = tmp_path / "outbox"
+        root.mkdir()
+        (root / "s.jsonl").write_text("op\n")
+        monkeypatch.setenv("AGENT_NOTES_OUTBOX_DIR", str(root))
+        with patch.object(doctor, "_check_dsn", return_value=(False, "no dsn")):
+            payload, code = doctor.run_json()
+        checks = {c["name"]: c for c in payload["checks"]}
+        assert checks["legacy_outbox"]["status"] == "fail"
+        assert code == 1

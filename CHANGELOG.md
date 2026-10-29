@@ -24,6 +24,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   listing (`workspace list`, web UI, export `projects`, project resolution by slug
   or path); `export` carries them separately under `memory_scopes`.
 
+### Removed
+
+- **Regista write-through (Plan 026 D1).** The native op-log is the only write
+  path. Removed the `outbox`, `projection`, `migrate-to-regista`,
+  `memory rebuild-from-regista` and `memory check-drift` commands. A hidden
+  `agent-notes outbox ...` no-op remains for old per-repo Stop hooks;
+  `agent-notes init <repo>` removes those hooks.
+  `AGENT_NOTES_REGISTA_WRITES` / `regista.writes_enabled` now makes every write
+  fail with `RETIRED_SETTING`. `REGISTA_DSN`, `REGISTA_KEY_PATH` and
+  `REGISTA_REQUIRE_SSL` are no longer read. `doctor --json` drops its `regista`
+  block and never reports `degraded`; a new `retired_settings` check fails
+  while the writes setting is on, and `legacy_outbox` fails while the old
+  outbox directory still holds queued files (archive them).
+- **Hindsight memory engine (Plan 026 D6).** Native is the only memory engine.
+  The `memory-provider` command is gone, and `AGENT_NOTES_MEMORY_ENGINE` set to
+  anything but `native` is an error rather than a silent fallback.
+
 ## [1.1.1] - 2026-10-17
 
 ### Fixed

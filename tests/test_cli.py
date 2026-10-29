@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -1399,3 +1400,22 @@ def test_write_parsers_reject_identity_override_flags():
         parser.parse_args(["work-item", "file", "--title", "x", "--actor-id", "agent:worker"])
     with pytest.raises(SystemExit):
         parser.parse_args(["work-item", "file", "--title", "x", "--model-lineage", "glm"])
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["outbox", "reconcile"],
+        ["outbox", "reconcile", "--json"],
+        ["outbox", "status", "--project", "x"],
+    ],
+)
+def test_retired_outbox_is_a_hidden_no_op(argv, monkeypatch, capsys):
+    """Per-repo Claude Stop hooks written by older ``init`` runs still call
+    ``agent-notes outbox reconcile``; it must exit 0, not argparse's 2, which
+    would block the Claude stop (Plan 026 D1)."""
+    import agent_notes.cli as cli_mod
+
+    monkeypatch.setattr(sys, "argv", ["agent-notes", *argv])
+    assert cli_mod.main() == 0
+    assert "retired" in capsys.readouterr().err

@@ -5,7 +5,7 @@ Covers:
 - ``env:`` / ``file:`` resolution via regista's providers (always available).
 - Key-manifest materialization: bare path + ``file:`` pass through; a remote
   ``env:`` ref writes a 0600 temp file that the cleanup scrubs.
-- ``atexit`` safety net + ``reset_face`` scrubbing.
+- ``atexit`` safety net scrubbing.
 - DSN-with-colon-in-password still treated as literal (regression guard).
 - Vault/Azure providers: skipped cleanly when their SDK is absent (mirrors
   regista's own gated pattern).
@@ -257,38 +257,8 @@ def test_config_resolve_dsn_explicit_arg_routes_through_resolver(monkeypatch):
     assert config.resolve_dsn("postgresql://literal/x") == "postgresql://literal/x"
 
 
-def test_doctor_secrets_check_fails_for_missing_file_manifest(monkeypatch, tmp_path):
-    """MAJOR M6: a file: key manifest that does not exist must fail the doctor
-    check, not pass silently (materialize returns the path unread)."""
-    from agent_notes.scripts.doctor import _check_secrets_backend
-
-    # Build a RegistaConfig-like with a file: ref to a nonexistent manifest.
-    missing = tmp_path / "absent-keys.json"
-
-    class _Cfg:
-        dsn = None
-        key_path = f"file:{missing}"
-
-    ok, msg = _check_secrets_backend(_Cfg())
-    assert ok is False
-    assert "REGISTA_KEY_PATH" in msg
-
-
-def test_face_reset_scrubs_real_temp_manifest(monkeypatch):
-    """Real (not fake) reset_face scrub: a materialized temp file is unlinked."""
-    from agent_notes.core import face_factory
-
-    manifest = json.dumps({"keys": []})
-    monkeypatch.setenv("AN_REAL_RESET_MANIFEST", manifest)
-    path, cleanup = suite_secrets.materialize_key_manifest("env:AN_REAL_RESET_MANIFEST")
-    assert Path(path).exists()
-    face_factory._FACE_CLEANUPS["real-proj"] = cleanup
-    face_factory.reset_face()
-    assert not Path(path).exists()
-
-
 # ---------------------------------------------------------------------------
-# atexit safety net + reset_face scrubbing
+# atexit safety net scrubbing
 # ---------------------------------------------------------------------------
 
 
@@ -301,24 +271,6 @@ def test_scrub_all_cleans_registered_temps(monkeypatch):
     suite_secrets._scrub_all()
     assert not Path(path).exists()
     assert suite_secrets.materialized_temp_count() == 0
-
-
-def test_face_reset_scrubs_materialized_manifest(monkeypatch, tmp_path):
-    """A face built with a backend-sourced manifest must scrub it on reset_face.
-
-    Uses an in-memory test face path indirectly: we only assert the cleanup is
-    registered and invoked, without standing up a real regista connection (which
-    needs Postgres). This isolates the lifecycle bookkeeping from the DB.
-    """
-    from agent_notes.core import face_factory
-
-    monkeypatch.setenv("AN_FACE_RESET_MANIFEST", '{"keys":[]}')
-    cleanup_called = []
-    fake_cleanup = lambda: cleanup_called.append(True)  # noqa: E731
-    face_factory._FACE_CLEANUPS["test-proj"] = fake_cleanup
-    face_factory.reset_face()
-    assert cleanup_called == [True]
-    assert "test-proj" not in face_factory._FACE_CLEANUPS
 
 
 # ---------------------------------------------------------------------------

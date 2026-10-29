@@ -1,21 +1,19 @@
 """Work-item server model — public facade (Plan 008 P0).
 
 Mirrors the structure of `BreadcrumbModel` so the CLI can present the same
-interface. The difference is underneath: every mutation writes an op to the
-op-log and then folds into the `work_items` cache (native path) or drives the
-regista face and mirrors the result (regista path).
+interface. Underneath, every mutation writes an op to the op-log and then
+folds into the `work_items` cache. The native op-log is the only write path:
+regista write-through was retired (Plan 025 D7) and deleted (Plan 026 D1).
 
 The implementation is split across the ``core/work_item/`` subpackage:
-- ``_regista``  — retired regista write-through (only when explicitly enabled).
-- ``_native``   — native op-log write path (the authority; Plan 025 D7).
+- ``_native``   — native op-log write path.
 - ``_queries``  — read-only queries, delete, diagnose.
 - ``_cross_project`` — P3 request / wait / cross-project links.
 - ``_common``   — shared helpers.
 
-This module is the thin dispatch layer: each public method selects the path
-based on ``face_factory.get_face()`` and delegates. Behavior is preserved
-exactly from the pre-split monolith (Plan 013/014 transition checks, Plan 010
-lease semantics, Plan 014 gate-parity invariants).
+This module is a thin public facade: each method delegates to the subpackage.
+It stays a class because the CLI, hooks, dispatcher and bridge all call
+``WorkItemModel``; with one path left it holds no dispatch logic.
 
 Public surface:
 - `file_work_item` — create a new work item.
@@ -39,17 +37,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent_notes.core import face_factory
 from agent_notes.core.lifecycle import transition_for as _lifecycle_transition_for
-from agent_notes.core.work_item import _cross_project, _native, _queries, _regista
+from agent_notes.core.work_item import _cross_project, _native, _queries
 
 
 class WorkItemModel:
     """Encapsulates work-item CRUD, query, lease, and cross-project helpers.
 
-    This is a dispatch facade over the ``core/work_item/`` subpackage; each
-    method selects the regista path (face attached) or the native op-log
-    path (degrade mode).
+    A facade over the ``core/work_item/`` subpackage; every method delegates
+    to the native op-log path or the read-side queries.
     """
 
     kind = "work_item"
@@ -94,21 +90,6 @@ class WorkItemModel:
         embedding: Any | None = None,
         frontmatter_version: int = 1,
     ) -> dict:
-        face = face_factory.get_face()
-        if face is not None:
-            return _regista.file_work_item(
-                face,
-                project_id,
-                identifier,
-                title,
-                body,
-                kind,
-                status,
-                severity,
-                external_refs,
-                diagnostic_keys,
-                embedding,
-            )
         return _native.file_work_item(
             project_id,
             identifier,
@@ -139,21 +120,6 @@ class WorkItemModel:
         frontmatter_version: int | None = None,
         force: bool = False,
     ) -> dict:
-        face = face_factory.get_face()
-        if face is not None:
-            return _regista.update_work_item(
-                face,
-                project_id,
-                identifier,
-                title,
-                body,
-                kind,
-                status,
-                severity,
-                external_refs,
-                diagnostic_keys,
-                embedding,
-            )
         with _native._conn() as conn:
             result = _native.update_work_item(
                 conn,
@@ -183,9 +149,8 @@ class WorkItemModel:
     ) -> dict:
         """Dedicated status transition (writes a set_status op).
 
-        Plan 013 WI-5: validates the transition via ``lifecycle.transition_for``
-        on the native path (same check as the regista path). Pass ``force=True``
-        to bypass the check for admin/repair overrides.
+        Plan 013 WI-5: validates the transition via ``lifecycle.transition_for``.
+        Pass ``force=True`` to bypass the check for admin/repair overrides.
         """
         return cls.update_work_item(
             project_id=project_id,
@@ -203,31 +168,12 @@ class WorkItemModel:
     ) -> dict:
         """Close a work item.
 
-        Native branch (the default; Plan 025 D7): ``close`` completes the item
-        (``done``) in one transaction and releases any lease. Review is an
-        explicit workflow (``review_transition`` or ``status="in_review"``), not
-        a side effect of closing. ``force=True`` is the admin/repair escape
-        hatch that writes the legacy terminal ``close`` op.
-
-        Regista branch (retired write-through, only when
-        ``AGENT_NOTES_REGISTA_WRITES`` is explicitly on; Plan 010 WI-3):
-        ``close`` → ``submit_for_review`` → ``in_review``; ``force=True``
-        terminalizes through the workflow via :meth:`update_work_item`.
+        ``close`` completes the item (``done``) in one transaction and
+        releases any lease (Plan 025 D7). Review is an explicit workflow
+        (``review_transition`` or ``status="in_review"``), not a side effect
+        of closing. ``force=True`` is the admin/repair escape hatch that
+        writes the legacy terminal ``close`` op.
         """
-        face = face_factory.get_face()
-        if face is not None:
-            if force:
-                return cls.update_work_item(
-                    project_id=project_id,
-                    identifier=identifier,
-                    status="done",
-                    force=True,
-                )
-            return _regista.close_work_item(
-                face,
-                project_id,
-                identifier,
-            )
         if force:
             return _native.close_work_item_force(
                 project_id,
@@ -254,21 +200,15 @@ class WorkItemModel:
         The item stays terminal; the attestation makes the waiver legible in
         the op-chain rather than silently completing work. It is an
         operator-invoked action (not automatic) and operates on the local
-        op-log only — regista-path items (projection-only, no ops) are
-        gate-verified by construction and have nothing to attest.
+        op-log.
         """
         return _native.attest_gate_waiver(project_id, identifier, reason)
 
     # ------------------------------------------------------------------
     # Review-gate transitions (adversarial_pass / accept / reject /
-    # request_changes).  These carry a mandatory review_note payload that
-    # regista's cross-lineage validators require.  The reviewer is the
-    # running producer (see ``core/producer.py``): the ambient actor signs
-    # the event and the producer block in that signed envelope carries its
-    # canonical model lineage — there is no per-call identity or payload copy.
-    # On the native (degrade) path the note is stored in diagnostic_keys
-    # for provenance; the gate itself cannot run off-regista (accept is
-    # blocked by Plan 014 WI-2).
+    # request_changes).  These carry a mandatory review_note, stored in
+    # diagnostic_keys for provenance. Positive verdicts run the reviewer
+    # independence check (Plan 026 D2, ``work_item/_independence.py``).
     # ------------------------------------------------------------------
 
     @classmethod
@@ -284,21 +224,12 @@ class WorkItemModel:
         """Drive a review-gate transition with a review_note payload.
 
         Transitions: ``adversarial_pass``, ``accept``, ``reject``,
-        ``request_changes``.  The ``review_note`` is required by regista's
-        cross-lineage validators (``_review_validators.py``); without it the
-        gate rejects the transition.
+        ``request_changes``.  The ``review_note`` is required and is stamped
+        into ``diagnostic_keys.review_notes`` for provenance.
 
-        On the regista path the note is threaded into the transition payload
-        and the gate validators run.  On the native (degrade) path the note
-        is stamped into ``diagnostic_keys.review_notes`` for provenance;
-        ``accept`` is blocked (Plan 014 WI-2) because the gate cannot run
-        off-regista.
-
-        On the native path, positive verdicts run the reviewer independence
-        check (Plan 026 D2). ``acknowledgement`` is the recorded same-lineage
-        override, and ``attempt_id`` applies a validated delegated review as
-        the reviewer. On the regista path, a non-empty ``acknowledgement``
-        passes through as regista's same-lineage flag.
+        Positive verdicts run the reviewer independence check (Plan 026 D2).
+        ``acknowledgement`` is the recorded same-lineage override, and
+        ``attempt_id`` applies a validated delegated review as the reviewer.
         """
         if transition_name not in cls._REVIEW_TRANSITION_TO_STATUS:
             raise ValueError(
@@ -308,16 +239,6 @@ class WorkItemModel:
         if not review_note or not review_note.strip():
             raise ValueError("review_note is required for review-gate transitions")
 
-        face = face_factory.get_face()
-        if face is not None:
-            return _regista.review_transition(
-                face,
-                project_id,
-                identifier,
-                transition_name,
-                review_note,
-                bool(acknowledgement),
-            )
         return _native.review_transition(
             project_id,
             identifier,
@@ -342,13 +263,6 @@ class WorkItemModel:
         identifier: str,
     ) -> bool:
         """Soft-delete via snapshot op with tombstone. Removes from cache."""
-        if face_factory.get_face() is not None:
-            existing = _queries.get_work_item(project_id, identifier)
-            if existing is not None and existing.get("regista_work_item_id") is not None:
-                return _queries.delete_work_item_regista(
-                    project_id,
-                    identifier,
-                )
         return _native.delete_work_item(
             project_id,
             identifier,
@@ -438,22 +352,7 @@ class WorkItemModel:
         identifier: str,
         ttl_seconds: int = 300,
     ) -> dict:
-        """Claim a work item (Plan 010 WI-2 — lease as a regista claim).
-
-        Acquires a regista claim (the authoritative lease) and mirrors it into
-        the local ``work_item_leases`` projection. The lifecycle state is NOT
-        moved — ``claimed`` is no longer a lifecycle state (it is a claim).
-        Legacy path (no regista face) writes a ``claim`` op + ``set_status``
-        to ``claimed`` unchanged.
-        """
-        face = face_factory.get_face()
-        if face is not None:
-            return _regista.claim_work_item(
-                face,
-                project_id,
-                identifier,
-                ttl_seconds,
-            )
+        """Claim a work item: a ``claim`` op plus the local lease (Plan 010 WI-2)."""
         return _native.claim_work_item(project_id, identifier, ttl_seconds)
 
     @classmethod
@@ -462,18 +361,7 @@ class WorkItemModel:
         project_id: int,
         identifier: str,
     ) -> dict:
-        """Release a claimed work item (Plan 010 WI-2 — lease as a regista claim).
-
-        Releases the regista claim; the lifecycle state is untouched. Legacy
-        path writes a ``release`` op + ``set_status`` back to ``open``.
-        """
-        face = face_factory.get_face()
-        if face is not None:
-            return _regista.release_work_item(
-                face,
-                project_id,
-                identifier,
-            )
+        """Release a claimed work item: a ``release`` op that drops the lease."""
         return _native.release_work_item(project_id, identifier)
 
     @classmethod
@@ -483,19 +371,7 @@ class WorkItemModel:
         identifier: str,
         ttl_seconds: int = 300,
     ) -> dict:
-        """Heartbeat a claimed work item to extend its lease (Plan 010 WI-2).
-
-        Authoritative liveness is the regista claim heartbeat; the local lease
-        row is a projection mirror. Legacy path touches the local lease only.
-        """
-        face = face_factory.get_face()
-        if face is not None:
-            return _regista.heartbeat_work_item(
-                face,
-                project_id,
-                identifier,
-                ttl_seconds,
-            )
+        """Heartbeat a claimed work item to extend its local lease (Plan 010 WI-2)."""
         return _native.heartbeat_work_item(project_id, identifier, ttl_seconds)
 
     # ------------------------------------------------------------------

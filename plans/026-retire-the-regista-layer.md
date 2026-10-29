@@ -511,3 +511,54 @@ lineage.
   `actor_id`, so a first version of the check saw no implementers and passed
   everything as `no-recorded-implementers`. `_independence` now has its own
   query, and the tests pin the implementer set's contents.
+
+### 2026-10-29: Phases 2 and 2b (D1, D6), not yet deployed
+
+- **Deleted.** `core/regista_face.py`, `core/work_item/_regista.py`,
+  `core/outbox.py`, `cli/outbox.py`, `core/reconcile.py`, `core/projection.py`,
+  `cli/projection.py`, `core/producer.py`, `core/coordinator.py`,
+  `core/note_model.py`, `core/face_factory.py`, `cli/admin.py`, the three
+  one-shot scripts, `core/hindsight_adapter.py` and `cli/memory_provider.py`,
+  plus the regista-only tests. `memory rebuild-from-regista` and
+  `memory check-drift` went with `note_model`: memories were already
+  native-only whenever the face was off.
+- **`face_factory` was moved, not shimmed.** `write_actor` and `default_actor`
+  live in `core/actor.py`; callers import `actor` directly.
+  `RegistaConfig`/`regista_config()` are gone too: nothing read them once the
+  face was deleted. `REGISTA_DSN`, `REGISTA_KEY_PATH` and
+  `REGISTA_REQUIRE_SSL` are no longer read.
+- **Retired settings are errors.** `AGENT_NOTES_REGISTA_WRITES` or
+  `regista.writes_enabled` raises `RetiredSettingError`
+  (`RETIRED_SETTING`, pointing at `docs/spikes/025-regista-cutover.md`) from
+  `actor.write_actor` and from memory add/update/delete, so every write path
+  refuses; reads are unaffected. `AGENT_NOTES_MEMORY_ENGINE` other than
+  `native` is a `ValueError` from `get_engine`; `memory recall` reports
+  `ENGINE_UNAVAILABLE`, and `search --federated` and `orient --recall` name it
+  in their warnings.
+- **Doctor.** No `regista` block, no `regista_reachable`, `regista_face` or
+  `secrets_backend` checks, and no `degraded` status (`degraded` stays in the
+  JSON, always `false`). `coordination_mode` is a constant `local-lease`. New
+  `retired_settings` check fails while the writes gate is on;
+  `memory_provider` fails on a non-native engine setting.
+- **D5 outbox check.** New read-only `legacy_outbox` check. It looks at the old
+  queue directory (`AGENT_NOTES_OUTBOX_DIR`, else
+  `platformdirs.user_state_dir("regista")/outbox`) and fails on any non-empty
+  `*.jsonl` file under it, saying to archive the directory. It only lists
+  files and checks sizes; it never reads or replays ops.
+  - **Evidence, 2026-10-29 (coordinator).** No outbox directory on any of the
+    three deployed hosts, so nothing needed archiving. Checked
+    `/home/itadmin/.local/state/regista/outbox` on mvmcc02 and mvmhermes01,
+    and
+    `C:\Users\merrittp\AppData\Local\regista\regista\outbox`
+    on Windows, where the regista state dir holds only `keys.json`.
+- **Native seal coverage.** The seal and lazy-seal tests from the deleted
+  backfill test file moved to `tests/test_native_seal.py`, with chainless
+  rows built by direct SQL. Only the backfill's dry-run, report and
+  import-unmirrored cases, and its own race test, were dropped.
+- **Kept on purpose.** A hidden `agent-notes outbox ...` no-op that exits 0.
+  41 per-repo `.claude/settings.json` files on mvmcc02 still run
+  `agent-notes outbox reconcile` at `Stop`; 26 without `|| true`. Without the
+  stub, argparse exits 2, which blocks a Claude stop. `agent-notes init <repo>`
+  removes the hook; delete the stub once none remain. The protocol in
+  `core/memory_engine.py` stays, because `native_engine`, `orient` and
+  `search` use its types.

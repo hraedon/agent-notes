@@ -1,6 +1,6 @@
 """Shared hermetic runner for CLI-subprocess tests (WI-030).
 
-``test_cli.py`` and ``test_memory_provider_cli.py`` each grew their own ``_run``
+``test_cli.py`` and the (since deleted) memory-provider CLI tests each grew their own ``_run``
 that copied ``os.environ`` into the child. That leaks the operator's environment
 into the CLI subprocess and — more subtly — lets engine/config selection read the
 operator's real ``suite.env`` via platformdirs discovery (``$XDG_CONFIG_HOME`` /
@@ -10,7 +10,7 @@ flip the resolved memory engine or route writes at the production spine.
 This module is the single implementation both modules use. It strips caller-named
 keys, then applies discovery pins *last* so a caller-supplied env dict (even a
 full ``os.environ`` copy) cannot undo the hermeticity. The pins mirror the
-WI-029 fix first landed inline in ``test_memory_provider_cli.py`` (PR #17).
+WI-029 fix first landed inline in the memory-provider CLI tests (PR #17).
 """
 
 from __future__ import annotations
@@ -70,7 +70,7 @@ def build_cli_env(
     """Assemble the hermetic environment for a CLI subprocess.
 
     Inherited environment is copied minus ``strip_keys`` (module-specific live
-    values, e.g. the hindsight engine vars); ``env`` is layered on top; the
+    values, e.g. engine selection vars); ``env`` is layered on top; the
     discovery pins are applied last so they always win — even over a caller that
     passes a full ``os.environ`` copy.
     """

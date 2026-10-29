@@ -235,11 +235,7 @@ def test_resolve_project_still_filters_to_repo_projects(ws, vm, tmp_path):
 
 @pytest.fixture
 def init_env(monkeypatch):
-    class _Off:
-        enabled = False
-        project = "agent_notes"
-
-    monkeypatch.setattr("agent_notes.core.config.regista_config", lambda: _Off())
+    monkeypatch.delenv("AGENT_NOTES_REGISTA_WRITES", raising=False)
 
 
 def test_init_records_a_checkout_for_the_current_vm(vm, init_env, tmp_path, capsys):

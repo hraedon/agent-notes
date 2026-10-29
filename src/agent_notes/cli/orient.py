@@ -255,8 +255,9 @@ def cmd_orient(args: argparse.Namespace) -> int:
 
         try:
             engine = get_engine()
-        except ValueError:
-            recall_notes.append("recall: skipped (unknown engine configuration)")
+        except ValueError as exc:
+            # A retired engine setting: name it, so it isn't a silent fallback.
+            recall_notes.append(f"recall: skipped — {exc}")
         except Exception as exc:
             recall_notes.append(f"recall: failed — {type(exc).__name__}")
         else:

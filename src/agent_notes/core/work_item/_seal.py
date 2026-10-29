@@ -1,10 +1,11 @@
 """Seal a ``work_items`` cache row into the op-log (Plan 025 Phase 1).
 
-While regista was the write path, ``_regista`` mirrored each snapshot straight
-into the ``work_items`` cache and wrote no ops. Those rows have no op chain, or
-a chain that stopped when the item moved to regista. With native Postgres as
-the only authority, the next native write folds the entity: a chainless row
-fails to fold, and a stale chain silently reverts the row.
+While regista was the write path, the (since deleted) write-through mirrored
+each snapshot straight into the ``work_items`` cache and wrote no ops. Those
+rows have no op chain, or a chain that stopped when the item moved to regista.
+With native Postgres as the only authority, the next native write folds the
+entity: a chainless row fails to fold, and a stale chain silently reverts the
+row.
 
 ``seal`` appends the ops that make the fold reproduce the cached row exactly:
 a ``create`` stub for a chainless entity (usually its op_id is the regista-era
@@ -13,7 +14,7 @@ dangles), then a ``snapshot`` op carrying the cached state. The snapshot also
 supersedes an earlier tombstone: regista re-mirrored some natively deleted
 items, so the cache row is the live truth. It writes nothing when the fold
 already matches, so it is safe to call before every native mutation and from
-the bulk backfill (``scripts/backfill_native_op_log``).
+the one-shot bulk backfill that ran at the Plan 025 cutover.
 """
 
 from __future__ import annotations

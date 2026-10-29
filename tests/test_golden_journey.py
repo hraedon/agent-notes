@@ -3,16 +3,15 @@
 Exercises the complete memory lifecycle through the MemoryEngine protocol:
 file → ingest → recall → read exact → forget (cascade) → cross-project isolation.
 
-Runs against both the native pgvector engine (ephemeral DB) and the Hindsight
-adapter (mocked HTTP transport — no live network).
+Runs against the native pgvector engine (ephemeral DB), the only engine since
+Plan 026 D6.
 """
 
 from __future__ import annotations
 
 import uuid
-from typing import Any, assert_never
+from typing import assert_never
 from unittest.mock import patch
-from urllib.parse import urlparse
 
 import pytest
 
@@ -40,110 +39,6 @@ def _fake_embed(text: str, task: str = "document") -> list[float]:
 
 
 # ---------------------------------------------------------------------------
-# Stateful Hindsight HTTP mock
-# ---------------------------------------------------------------------------
-
-
-class _StatefulHindsightMock:
-    """Stateful mock standing in for ``hindsight_adapter._http_request``.
-
-    Tracks ingested documents per bank_id and returns them in recall.
-    Removes documents on delete. Returns empty for unknown banks.
-    Set ``outage = True`` to simulate a provider outage.
-    """
-
-    def __init__(self) -> None:
-        self.banks: dict[str, dict[str, dict[str, Any]]] = {}
-        self._op_counter = 0
-        self.outage = False
-
-    def __call__(
-        self,
-        url: str,
-        *,
-        method: str = "GET",
-        body: dict[str, Any] | None = None,
-        api_key: str | None = None,
-        timeout: int = 30,
-    ) -> tuple[int | None, dict[str, Any] | str | None, str | None]:
-        if self.outage:
-            return None, None, "unreachable: simulated outage"
-
-        parsed = urlparse(url)
-        path = parsed.path
-
-        # GET .../operations/{op_id} — always completed
-        if method == "GET" and "/operations/" in path:
-            op_id = path.rsplit("/operations/", 1)[-1]
-            return 200, {"operation_id": op_id, "status": "completed"}, None
-
-        if "/banks/" not in path:
-            return 404, {"error": "unknown endpoint"}, None
-
-        after_banks = path.split("/banks/", 1)[1]
-        bank_id = after_banks.split("/", 1)[0]
-
-        # PUT .../banks/{bank_id} — ensure bank exists
-        if method == "PUT":
-            return 200, {"success": True}, None
-
-        # POST .../banks/{bank_id}/memories — ingest
-        if method == "POST" and path.endswith("/memories"):
-            if bank_id not in self.banks:
-                self.banks[bank_id] = {}
-            items = body.get("items", []) if body else []
-            for item in items:
-                doc_id = item.get("document_id", f"doc-{len(self.banks[bank_id])}")
-                self.banks[bank_id][doc_id] = item
-            self._op_counter += 1
-            is_async = body.get("async", True) if body else True
-            return (
-                200,
-                {
-                    "success": True,
-                    "items_count": len(items),
-                    "async": is_async,
-                    "operation_id": f"op-{self._op_counter}" if is_async else None,
-                },
-                None,
-            )
-
-        # POST .../banks/{bank_id}/memories/recall — recall
-        if method == "POST" and path.endswith("/memories/recall"):
-            docs = self.banks.get(bank_id, {})
-            results: list[dict[str, Any]] = []
-            for doc_id, item in docs.items():
-                results.append(
-                    {
-                        "text": item.get("content", ""),
-                        "document_id": doc_id,
-                        "type": "world",
-                        "score": 0.95,
-                    }
-                )
-            return 200, {"results": results}, None
-
-        # DELETE .../banks/{bank_id}/documents/{source_id} — forget one doc
-        if method == "DELETE" and "/documents/" in path:
-            source_id = path.rsplit("/documents/", 1)[-1]
-            docs = self.banks.get(bank_id, {})
-            cascade = 0
-            if source_id in docs:
-                del docs[source_id]
-                cascade = 3
-            return 200, {"deleted": True, "cascade_count": cascade}, None
-
-        # DELETE .../banks/{bank_id} — scope-wide bank delete
-        if method == "DELETE":
-            count = len(self.banks.get(bank_id, {}))
-            if bank_id in self.banks:
-                del self.banks[bank_id]
-            return 200, {"deleted_count": count}, None
-
-        return 404, {"error": "unknown endpoint"}, None
-
-
-# ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
@@ -154,21 +49,11 @@ def _mock_embed():
         yield
 
 
-@pytest.fixture(params=["native", "hindsight_mocked"])
-def engine(request: pytest.FixtureRequest, ephemeral_db, monkeypatch):
-    if request.param == "native":
-        from agent_notes.core.native_engine import NativeMemoryEngine
+@pytest.fixture
+def engine(ephemeral_db):
+    from agent_notes.core.native_engine import NativeMemoryEngine
 
-        return NativeMemoryEngine()
-    else:
-        from agent_notes.core.hindsight_adapter import HindsightEngine
-
-        mock = _StatefulHindsightMock()
-        monkeypatch.setattr(
-            "agent_notes.core.hindsight_adapter._http_request",
-            mock,
-        )
-        return HindsightEngine(url="https://hindsight.test.example")
+    return NativeMemoryEngine()
 
 
 @pytest.fixture
@@ -272,25 +157,6 @@ def _ingest(engine, scope: MemoryScope) -> None:
     assert result.error is None
 
 
-def _simulate_outage(engine) -> None:
-    if engine.engine_name == "hindsight":
-        import agent_notes.core.hindsight_adapter as ha
-
-        mock = ha._http_request
-        if hasattr(mock, "outage"):
-            mock.outage = True
-    # Native: handled by the caller via a local embed patch.
-
-
-def _end_outage(engine) -> None:
-    if engine.engine_name == "hindsight":
-        import agent_notes.core.hindsight_adapter as ha
-
-        mock = ha._http_request
-        if hasattr(mock, "outage"):
-            mock.outage = False
-
-
 # ---------------------------------------------------------------------------
 # Test 1: full golden journey lifecycle
 # ---------------------------------------------------------------------------
@@ -336,15 +202,6 @@ class TestGoldenJourneyFullLifecycle:
         assert forget_result.deleted_count >= 1
         assert forget_result.error is None
 
-        if engine.engine_name == "hindsight":
-            exact_after = memory_model.get_memory(
-                workspace_id=setup["ws"].id,
-                project_id=setup["proj"].id,
-                name=NOTE_NAME,
-            )
-            assert exact_after is not None
-            assert exact_after["body"] == SIGNED_BODY
-
         recall_after = engine.recall(RecallQuery(query="deployment pipeline rollback", scope=scope))
         refs_after = {r.source_ref for r in recall_after.results}
         assert NOTE_NAME not in refs_after
@@ -363,22 +220,13 @@ class TestProviderOutageProvesExactReadability:
         _file_exact_note(setup)
         _ingest(engine, scope)
 
-        if engine.engine_name == "hindsight":
-            _simulate_outage(engine)
-            try:
-                recall_resp = engine.recall(RecallQuery(query="deployment pipeline", scope=scope))
-            finally:
-                _end_outage(engine)
-            assert len(recall_resp.results) == 0
-            assert "error" in recall_resp.usage
-        else:
-            with patch(
-                "agent_notes.core.embed.embed",
-                side_effect=RuntimeError("model unavailable"),
-            ):
-                recall_resp = engine.recall(RecallQuery(query="deployment pipeline", scope=scope))
-            assert len(recall_resp.results) == 0
-            assert "error" in recall_resp.usage
+        with patch(
+            "agent_notes.core.embed.embed",
+            side_effect=RuntimeError("model unavailable"),
+        ):
+            recall_resp = engine.recall(RecallQuery(query="deployment pipeline", scope=scope))
+        assert len(recall_resp.results) == 0
+        assert "error" in recall_resp.usage
 
         exact = memory_model.get_memory(
             workspace_id=setup["ws"].id,

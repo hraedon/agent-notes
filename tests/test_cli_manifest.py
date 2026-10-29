@@ -26,7 +26,7 @@ _CLI = (sys.executable, "-m", "agent_notes.cli")
 
 # Top-level nouns that are suppressed or internal (not part of the public
 # contract surface). These are excluded from the "absent from manifest" check.
-_SUPPRESSED_NOUNS = frozenset({"codex-hook"})
+_SUPPRESSED_NOUNS = frozenset({"codex-hook", "outbox"})
 
 
 @pytest.fixture(scope="module")
@@ -181,17 +181,14 @@ def test_intermediate_group_is_covered_by_manifest_descendants() -> None:
     assert not _manifest_covers_path("work-item missing-group", names)
 
 
-def test_manifest_includes_recovery_commands(manifest: dict) -> None:
-    """The manifest must declare the memory rebuild-from-regista and
-    check-drift commands — these are the operator recovery surface for
-    the split-brain contract and must be discoverable."""
+def test_manifest_omits_retired_regista_and_engine_commands(manifest: dict) -> None:
+    """Plan 026 D1/D6 deleted the regista write-through and the external memory
+    engine; their commands must not be advertised (or parsed)."""
     names = {cmd["name"] for cmd in manifest["commands"]}
-    assert "memory rebuild-from-regista" in names, (
-        "manifest must declare 'memory rebuild-from-regista' (split-brain recovery)"
-    )
-    assert "memory check-drift" in names, (
-        "manifest must declare 'memory check-drift' (drift diagnostic)"
-    )
+    retired = ("outbox", "projection", "migrate-to-regista", "memory-provider")
+    assert not any(n == r or n.startswith(f"{r} ") for n in names for r in retired), names
+    assert "memory rebuild-from-regista" not in names
+    assert "memory check-drift" not in names
 
 
 def test_contract_json_emits_committed_manifest(manifest: dict) -> None:

@@ -1,10 +1,10 @@
 """Native op-log write path for work items (the default; Plan 025 D7).
 
 These functions implement the work-item mutations against the local op-log
-and ``work_items`` cache directly. They are used when ``face_factory.get_face()``
-returns ``None``, which is normal operation: regista write-through is retired
-and only runs when explicitly enabled. Each preserves the behavior of the
-original ``WorkItemModel`` native branches unless noted.
+and ``work_items`` cache directly. They are the only write path: regista
+write-through was retired (Plan 025 D7) and deleted (Plan 026 D1). Each
+preserves the behavior of the original ``WorkItemModel`` native branches
+unless noted.
 """
 
 from __future__ import annotations
@@ -15,7 +15,8 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
-from agent_notes.core import face_factory, kernel
+from agent_notes.core import actor as core_actor
+from agent_notes.core import kernel
 from agent_notes.core.change_log import write_change
 from agent_notes.core.db import _conn
 from agent_notes.core.lifecycle import (
@@ -51,7 +52,7 @@ def file_work_item(
     embedding: Any | None,
     frontmatter_version: int,
 ) -> dict:
-    actor_id = face_factory.write_actor().actor_id
+    actor_id = core_actor.write_actor().actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         _common.require_repo_project(conn, project_id)
@@ -149,7 +150,7 @@ def update_work_item(
     (WI-020): it writes ops, folds the cache, and writes the change_log row but
     never commits — the caller owns the transaction boundary.
     """
-    actor_id = face_factory.write_actor().actor_id
+    actor_id = core_actor.write_actor().actor_id
     workspace_id = _common.resolve_workspace_for_project(conn, project_id)
     _seal.seal_for_write(conn, project_id, identifier, actor_id)
     producer = _independence.resolve_producer(conn)
@@ -286,7 +287,7 @@ def update_work_item(
     # Backward-compat change_log — only when something actually changed.
     # ``folded`` is the work_items cache row (no ``body`` column — only
     # ``body_hash``), so resolve the new body from the blob for the diff,
-    # mirroring the regista path (``_update_change_log_payload``).
+    # matching the shape the old regista path logged.
     new_body = kernel.get_blob(conn, folded["body_hash"]) or ""
     cl_payload: dict = {}
     for field in ("title", "kind", "status", "severity"):
@@ -332,7 +333,7 @@ def close_work_item(
     """
     from datetime import datetime, timezone
 
-    actor_id = face_factory.write_actor().actor_id
+    actor_id = core_actor.write_actor().actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         _seal.seal_for_write(conn, project_id, identifier, actor_id)
@@ -402,7 +403,7 @@ def close_work_item_force(
     identifier: str,
 ) -> dict:
     """Native force-close: writes the legacy terminal ``close`` op (admin/repair)."""
-    actor_id = face_factory.write_actor().actor_id
+    actor_id = core_actor.write_actor().actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         _seal.seal_for_write(conn, project_id, identifier, actor_id)
@@ -494,7 +495,7 @@ def attest_gate_waiver(
                 "it is gate-verified by construction and needs no attestation."
             )
 
-        actor = face_factory.write_actor()
+        actor = core_actor.write_actor()
         attestation = {
             "status": "waived",
             "reason": reason,
@@ -570,7 +571,7 @@ def review_transition(
     """
     from datetime import datetime, timezone
 
-    actor = face_factory.write_actor()
+    actor = core_actor.write_actor()
     target_status = _REVIEW_TRANSITION_TO_STATUS[transition_name]
 
     with _conn() as conn:
@@ -689,7 +690,7 @@ def claim_work_item(
     identifier: str,
     ttl_seconds: int,
 ) -> dict:
-    stamped_actor = face_factory.write_actor().actor_id
+    stamped_actor = core_actor.write_actor().actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         _seal.seal_for_write(conn, project_id, identifier, stamped_actor)
@@ -800,7 +801,7 @@ def release_work_item(
     project_id: int,
     identifier: str,
 ) -> dict:
-    stamped_actor = face_factory.write_actor().actor_id
+    stamped_actor = core_actor.write_actor().actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         _seal.seal_for_write(conn, project_id, identifier, stamped_actor)
@@ -889,7 +890,7 @@ def heartbeat_work_item(
     identifier: str,
     ttl_seconds: int,
 ) -> dict:
-    stamped_actor = face_factory.write_actor().actor_id
+    stamped_actor = core_actor.write_actor().actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)
@@ -963,7 +964,7 @@ def delete_work_item(
     identifier: str,
 ) -> bool:
     """Native soft-delete via snapshot op with tombstone. Removes from cache."""
-    actor_id = face_factory.write_actor().actor_id
+    actor_id = core_actor.write_actor().actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)

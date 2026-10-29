@@ -2,7 +2,7 @@
 
 Mocks the memory engine to verify the learned-context seam degrades honestly
 and never blocks orient. Uses the ephemeral_db fixture and the same
-cmd_orient + argparse.Namespace pattern as test_p3_projection_sync.py.
+cmd_orient + argparse.Namespace pattern as the other orient tests.
 """
 
 from __future__ import annotations
@@ -139,10 +139,10 @@ class TestOrientRecallNative:
         assert "recall: skipped (native engine" in captured.out
 
 
-class TestOrientRecallHindsight:
+class TestOrientRecallExternalEngine:
     """External engine: recall returns learned context."""
 
-    def test_hindsight_returns_learned_context_json(self, default_project, capsys):
+    def test_external_engine_returns_learned_context_json(self, default_project, capsys):
         results = [
             _recall_result(
                 "Decided to use pgvector for memory search",
@@ -160,11 +160,11 @@ class TestOrientRecallHindsight:
             ),
         ]
         engine = _MockEngine(
-            engine_name="hindsight",
+            engine_name="mock-learned",
             health_state=EngineHealthState.HEALTHY,
             recall_response=RecallResponse(
                 results=results,
-                engine="hindsight",
+                engine="mock-learned",
                 usage={"count": 2},
             ),
         )
@@ -174,7 +174,7 @@ class TestOrientRecallHindsight:
         assert code == 0
         payload = json.loads(captured.out)
         lc = payload["learned_context"]
-        assert lc["engine"] == "hindsight"
+        assert lc["engine"] == "mock-learned"
         assert lc["error"] is None
         assert len(lc["results"]) == 2
         assert lc["results"][0]["text"] == "Decided to use pgvector for memory search"
@@ -182,7 +182,7 @@ class TestOrientRecallHindsight:
         assert lc["results"][1]["origin"] == "derived"
         assert lc["usage"]["count"] == 2
 
-    def test_hindsight_text_output_origin_labels(self, default_project, capsys):
+    def test_external_engine_text_output_origin_labels(self, default_project, capsys):
         results = [
             _recall_result("verbatim source text", origin=OriginClass.RAW),
             _recall_result("extracted fact text", origin=OriginClass.EXTRACTED),
@@ -190,11 +190,11 @@ class TestOrientRecallHindsight:
             _recall_result("synthesized text", origin=OriginClass.SYNTHESIZED),
         ]
         engine = _MockEngine(
-            engine_name="hindsight",
+            engine_name="mock-learned",
             health_state=EngineHealthState.HEALTHY,
             recall_response=RecallResponse(
                 results=results,
-                engine="hindsight",
+                engine="mock-learned",
                 usage={"count": 4},
             ),
         )
@@ -202,7 +202,7 @@ class TestOrientRecallHindsight:
             code = cmd_orient(_make_args(recall=True, json=False))
         captured = capsys.readouterr()
         assert code == 0
-        assert "Learned context (hindsight):" in captured.out
+        assert "Learned context (mock-learned):" in captured.out
         assert "[exact source (verbatim)]" in captured.out
         assert "[extracted fact]" in captured.out
         assert "[derived observation]" in captured.out
@@ -212,9 +212,9 @@ class TestOrientRecallHindsight:
 class TestOrientRecallDegradation:
     """Honest degradation: recall failures never block orient."""
 
-    def test_hindsight_unreachable_degrades(self, default_project, capsys):
+    def test_external_engine_unreachable_degrades(self, default_project, capsys):
         engine = _MockEngine(
-            engine_name="hindsight",
+            engine_name="mock-learned",
             health_state=EngineHealthState.UNREACHABLE,
         )
         with patch("agent_notes.core.memory_engine.get_engine", return_value=engine):
@@ -224,9 +224,9 @@ class TestOrientRecallDegradation:
         payload = json.loads(captured.out)
         assert "learned_context" not in payload
 
-    def test_hindsight_unreachable_text_message(self, default_project, capsys):
+    def test_external_engine_unreachable_text_message(self, default_project, capsys):
         engine = _MockEngine(
-            engine_name="hindsight",
+            engine_name="mock-learned",
             health_state=EngineHealthState.UNREACHABLE,
         )
         with patch("agent_notes.core.memory_engine.get_engine", return_value=engine):
@@ -235,9 +235,9 @@ class TestOrientRecallDegradation:
         assert code == 0
         assert "recall: engine unreachable" in captured.out
 
-    def test_hindsight_not_configured_skips_silently(self, default_project, capsys):
+    def test_external_engine_not_configured_skips_silently(self, default_project, capsys):
         engine = _MockEngine(
-            engine_name="hindsight",
+            engine_name="mock-learned",
             health_state=EngineHealthState.NOT_CONFIGURED,
         )
         with patch("agent_notes.core.memory_engine.get_engine", return_value=engine):
@@ -246,13 +246,13 @@ class TestOrientRecallDegradation:
         assert code == 0
         assert "recall:" not in captured.out
 
-    def test_hindsight_empty_results(self, default_project, capsys):
+    def test_external_engine_empty_results(self, default_project, capsys):
         engine = _MockEngine(
-            engine_name="hindsight",
+            engine_name="mock-learned",
             health_state=EngineHealthState.HEALTHY,
             recall_response=RecallResponse(
                 results=[],
-                engine="hindsight",
+                engine="mock-learned",
                 usage={"count": 0},
             ),
         )
@@ -262,13 +262,13 @@ class TestOrientRecallDegradation:
         assert code == 0
         assert "recall: no learned context found" in captured.out
 
-    def test_hindsight_usage_error_degrades(self, default_project, capsys):
+    def test_external_engine_usage_error_degrades(self, default_project, capsys):
         engine = _MockEngine(
-            engine_name="hindsight",
+            engine_name="mock-learned",
             health_state=EngineHealthState.HEALTHY,
             recall_response=RecallResponse(
                 results=[],
-                engine="hindsight",
+                engine="mock-learned",
                 usage={"error": "index timeout"},
             ),
         )
@@ -280,7 +280,7 @@ class TestOrientRecallDegradation:
 
     def test_recall_raises_exception_degrades(self, default_project, capsys):
         engine = _MockEngine(
-            engine_name="hindsight",
+            engine_name="mock-learned",
             health_state=EngineHealthState.HEALTHY,
             recall_raises=RuntimeError("connection reset"),
         )
@@ -293,12 +293,12 @@ class TestOrientRecallDegradation:
     def test_get_engine_value_error_degrades(self, default_project, capsys):
         with patch(
             "agent_notes.core.memory_engine.get_engine",
-            side_effect=ValueError("Unknown memory engine 'foo'"),
+            side_effect=ValueError("Memory engine 'foo' is not available"),
         ):
             code = cmd_orient(_make_args(recall=True, json=False))
         captured = capsys.readouterr()
         assert code == 0
-        assert "recall: skipped (unknown engine configuration)" in captured.out
+        assert "recall: skipped — Memory engine 'foo' is not available" in captured.out
 
 
 class TestOrientNoRecall:

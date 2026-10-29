@@ -18,7 +18,6 @@ from __future__ import annotations
 import pytest
 
 from agent_notes.core import db as coredb
-from agent_notes.core.face_factory import reset_face
 from agent_notes.core.verifier import verify_gate_integrity
 from agent_notes.core.work_item_model import WorkItemModel
 from tests.conftest import ephemeral_db  # noqa: F401
@@ -42,9 +41,8 @@ def _vec768():
 
 
 def _native(monkeypatch):
-    """Force the native (degrade) path: no regista face."""
+    """The native op-log path (the only one; Plan 026 D1)."""
     monkeypatch.delenv("AGENT_NOTES_REGISTA_WRITES", raising=False)
-    reset_face()
 
 
 def _gate_violations(result):

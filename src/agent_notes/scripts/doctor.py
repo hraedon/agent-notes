@@ -3,12 +3,17 @@
 Checks:
 1. DSN reachable
 2. Schema up to date (core tables + kernel tables present)
-3. Coordination mode (degrade contract — local-lease is default)
+3. Coordination mode (always local-lease: there is no coordinator)
 4. Embedding model loads (opt-in via --check-embed)
 5. Links audit (dangling links)
 6. Vocabulary integrity
 7. Bridge target reachable
 8. Stale MCP entries in harness configs
+9. Retired settings (regista write-through, Plan 026 D1)
+10. Legacy regista outbox queue left on disk (Plan 026 D5)
+
+Regista is not checked: write-through was deleted in Plan 026 D1, so an
+absent or unset regista is the normal state, never "degraded".
 
 Exit code: 0 if all healthy, 1 if any check failed.
 """
@@ -22,8 +27,6 @@ import time
 from pathlib import Path
 
 from agent_notes.core import config as reg_config
-from agent_notes.core import outbox, projection
-from agent_notes.core.db import _conn
 
 
 def _print_section(title: str) -> None:
@@ -112,20 +115,79 @@ def _check_vm_identity() -> tuple[str, str]:
         return "warn", str(exc)
 
 
-def _check_coordination_mode() -> tuple[bool, str]:
-    """Report the coordination mode (Plan 008 P4 degrade contract).
+_COORDINATION_MODE = "local-lease"
 
-    Coordinator-absent / local-lease is the default safe mode.
-    This check is always PASS because the absence of a coordinator is
-    a normal, first-class state — not a failure.
+
+def _check_coordination_mode() -> tuple[bool, str]:
+    """Report the coordination mode (Plan 008 P4).
+
+    Claims are local leases in the native op-log. The Tier B coordinator stub
+    was deleted in Plan 026 D1, so this is always ``local-lease`` and always
+    PASS: it is the only mode, not a degraded one.
+    """
+    return True, _COORDINATION_MODE
+
+
+_LEGACY_OUTBOX_DIR_ENV = "AGENT_NOTES_OUTBOX_DIR"
+
+
+def _legacy_outbox_dir() -> Path:
+    """Where the deleted regista outbox queued ops (``core/outbox.py``, Plan 009).
+
+    Same resolution as the old module: ``AGENT_NOTES_OUTBOX_DIR`` if set, else
+    ``platformdirs.user_state_dir("regista") / "outbox"``.
+    """
+    override = os.environ.get(_LEGACY_OUTBOX_DIR_ENV)
+    if override:
+        return Path(override)
+    import platformdirs
+
+    return Path(platformdirs.user_state_dir("regista")) / "outbox"
+
+
+def _check_legacy_outbox() -> tuple[bool, str]:
+    """Fail when the retired regista outbox still holds queued files (Plan 026 D5).
+
+    Read-only: it lists ``*.jsonl`` files under the old outbox directory and
+    checks their size. It never opens, parses or replays them; there is no
+    write-through left to replay into. A non-empty queue is something the
+    operator must archive by hand before the files are lost.
+    """
+    root = _legacy_outbox_dir()
+    try:
+        if not root.exists():
+            return True, f"no legacy outbox at {root}"
+        queued = sorted(p for p in root.rglob("*.jsonl") if p.is_file() and p.stat().st_size > 0)
+    except OSError as exc:
+        return False, f"legacy outbox at {root} unreadable: {type(exc).__name__}"
+    if not queued:
+        return True, f"legacy outbox at {root} is empty"
+    shown = ", ".join(str(p.relative_to(root)) for p in queued[:5])
+    more = f" (+{len(queued) - 5} more)" if len(queued) > 5 else ""
+    return False, (
+        f"{len(queued)} non-empty legacy regista outbox file(s) under {root}: {shown}{more}. "
+        "Regista write-through is gone (Plan 026 D1) and nothing will replay them; "
+        "archive the directory (e.g. to NFS), then remove it"
+    )
+
+
+def _check_retired_settings() -> tuple[bool, str]:
+    """Fail when a removed feature is still switched on (Plan 026 D1).
+
+    ``AGENT_NOTES_REGISTA_WRITES`` / ``regista.writes_enabled`` used to route
+    writes through regista. Every write now refuses to run while it is set, so
+    doctor names it rather than letting the first write discover it.
     """
     try:
-        from agent_notes.core.coordinator import get_coordination_mode
-
-        mode = get_coordination_mode()
-        return True, mode
+        if reg_config.regista_writes_requested():
+            return False, (
+                "AGENT_NOTES_REGISTA_WRITES or regista.writes_enabled is on, but regista "
+                "write-through was removed (Plan 026 D1); every write will refuse. "
+                "Unset it; see docs/spikes/025-regista-cutover.md"
+            )
+        return True, "no retired settings in use"
     except Exception as exc:
-        return False, _sanitize_conn_error(exc)
+        return False, f"retired-settings check error: {type(exc).__name__}"
 
 
 def _check_embedding() -> tuple[bool, str]:
@@ -420,56 +482,11 @@ def _component_version() -> str:
     return "unknown"
 
 
-def _check_regista_reachable(cfg: reg_config.RegistaConfig) -> tuple[bool | None, str]:
-    """Probe the regista DSN. Returns (reachable, detail).
-
-    ``reachable`` is ``None`` (not configured — degrade mode), ``True`` (connected),
-    or ``False`` (configured but unreachable). Per Plan 017 WI-3.1 AC, an
-    *unconfigured* regista is a clean state (coordinator-absent is the default
-    safe mode), not a failure. A *configured-but-unreachable* regista is a real
-    failure (the operator wired a store the face cannot reach).
-
-    Honor ``cfg.require_ssl``: if the DSN does not already specify an sslmode,
-    a connection that demands SSL is probed with ``sslmode=require`` so the
-    reachability result reflects the configured security posture (not a
-    silently-insecure handshake).
-    """
-    if not cfg.dsn:
-        return None, "regista DSN not configured (native op_log path — coordinator-absent)"
-    try:
-        import psycopg
-
-        from agent_notes.core import secrets as suite_secrets
-
-        # Resolve a backend ref (env:/vault:/...) to the real DSN before probing
-        # (Plan 017 WI-4.1) — cfg.dsn may hold the ref string, not the DSN.
-        dsn = suite_secrets.resolve_dsn(cfg.dsn)
-        if dsn is None:
-            return None, "regista DSN not configured (native op_log path — coordinator-absent)"
-        # Honor require_ssl without mutating the caller's DSN string parsing —
-        # only inject sslmode if the DSN does not already carry one.
-        if cfg.require_ssl and "sslmode=" not in dsn:
-            sep = "&" if "?" in dsn else "?"
-            dsn = f"{dsn}{sep}sslmode=require"
-        with psycopg.connect(dsn, connect_timeout=3) as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT 1")
-            cur.fetchone()
-        return True, "regista DSN reachable"
-    except Exception as exc:
-        return False, f"regista DSN configured but unreachable ({_sanitize_conn_error(exc)})"
-
-
 def _check_chain_ok() -> tuple[bool | None, str]:
     """Verify agent-notes' own op-log chain integrity.
 
-    agent-notes owns an append-only ``op_log`` (Plan 008) that is the chain it is
-    responsible for; when regista writes are on, this log is the source the
-    write-through face replays into the spine. Verifying regista's *own* event
-    log is regista's doctor job — agent-notes cannot reach it from here. So
-    ``regista.chain_ok`` reports the integrity of the op-log the agent face owns
-    (the chain that feeds the spine), not a re-verification of the spine's
-    internal chain.
+    agent-notes owns an append-only ``op_log`` (Plan 008), the native store of
+    record for work items.
 
     Returns ``(True, ...)`` for a valid (possibly empty) chain. A verifier error
     (missing key file, import failure) returns ``(False, ...)`` — a verifier
@@ -753,116 +770,24 @@ def _probe_codex_agent_notes_plugin() -> tuple[str, str]:
     return "disabled", "agent-notes plugin installed but disabled"
 
 
-def _check_secrets_backend(cfg: reg_config.RegistaConfig) -> tuple[bool | None, str]:
-    """Verify configured suite secret refs resolve (Plan 017 WI-4.1).
-
-    Only meaningful when a backend ref (``env:``/``vault:``/``azure:``/``file:``)
-    is configured for the regista DSN or signing key. A plaintext/file-path
-    deployment (the default) has nothing to verify → returns ``None`` (skipped,
-    not a failure). When a ref is present, this *contacts the backend* once to
-    confirm the secret is reachable and the material parses — a custody check a
-    regulated deployment wants before trusting writes. Failures surface the
-    exception type only (the message may echo partial material).
-
-    The key-set manifest, when materialized, leaves a 0600 temp file that is
-    scrubbed at interpreter exit; this check does not leave persistent state.
-    """
-    from agent_notes.core import secrets as suite_secrets
-
-    refs: list[tuple[str, str]] = []
-    if cfg.dsn and suite_secrets.is_backend_ref(cfg.dsn):
-        refs.append(("REGISTA_DSN", cfg.dsn))
-    if cfg.key_path and suite_secrets.is_backend_ref(cfg.key_path):
-        # Only remote refs (env/vault/azure) materialize a temp file; a file:
-        # ref is read directly. is_backend_ref covers both, which is fine — we
-        # resolve either way to confirm reachability.
-        refs.append(("REGISTA_KEY_PATH", cfg.key_path))
-    if not refs:
-        return None, "no backend refs configured (plaintext/file path)"
-
-    resolved = 0
-    for label, ref in refs:
-        try:
-            if label == "REGISTA_DSN":
-                suite_secrets.resolve_dsn(ref)
-            else:
-                path, cleanup = suite_secrets.materialize_key_manifest(ref)
-                # A bare/file: path is returned unread — confirm it actually
-                # exists so a missing manifest is a named failure, not a pass.
-                if cleanup is None and path is not None:
-                    if not Path(path).is_file():
-                        raise FileNotFoundError(path)
-                if cleanup is not None:
-                    cleanup()
-            resolved += 1
-        except Exception as exc:
-            return False, f"{label} ref unresolvable: {type(exc).__name__}"
-    names = ", ".join(label for label, _ in refs)
-    return True, f"{resolved} backend ref(s) resolved ({names})"
-
-
 def _check_memory_provider() -> tuple[bool | None, str]:
-    """Check the configured memory engine's health (Plan 020 WI-3.1).
+    """Check the memory engine setting (Plan 026 D6).
 
-    The native engine's health is covered by ``dsn_reachable`` — native uses
-    the same pgvector database — so a native engine reports as ``skip``
-    (informational, never a failure).  An external engine (hindsight, etc.)
-    that is configured-but-unreachable is a real failure: the operator wired
-    an engine the system cannot reach.  A not-configured external engine
-    (env var set, URL missing) is a ``skip`` — the operator's intent is clear
-    but incomplete, and native remains the fallback.
+    Native is the only engine and its health is covered by ``dsn_reachable``
+    (it uses the same pgvector database), so a native engine reports as
+    ``skip``. A setting that names any other engine is a failure: it is a
+    retired engine, and recall refuses it rather than silently falling back.
     """
     try:
-        from typing import assert_never
-
-        from agent_notes.core.memory_engine import EngineHealthState, get_engine
+        from agent_notes.core.memory_engine import get_engine
 
         engine = get_engine()
-        health = engine.describe()
-        state = health.state
-
-        if engine.engine_name == "native":
-            return None, f"native engine (state={state.value}; covered by dsn_reachable)"
-
-        match state:
-            case EngineHealthState.HEALTHY:
-                return True, f"{engine.engine_name} engine healthy: {health.detail}"
-            case EngineHealthState.DEGRADED:
-                return True, f"{engine.engine_name} engine degraded: {health.detail}"
-            case EngineHealthState.UNREACHABLE:
-                return False, f"{engine.engine_name} engine unreachable: {health.detail}"
-            case EngineHealthState.NOT_CONFIGURED:
-                return None, f"{engine.engine_name} engine not configured: {health.detail}"
-            case EngineHealthState.UNAVAILABLE:
-                return False, f"{engine.engine_name} engine unavailable: {health.detail}"
-            case other:
-                assert_never(other)
+        state = engine.describe().state.value
+        return None, f"{engine.engine_name} engine (state={state}; covered by dsn_reachable)"
+    except ValueError as exc:
+        return False, str(exc)
     except Exception as exc:
         return False, f"memory provider check error: {type(exc).__name__}"
-
-
-def _check_regista_face() -> tuple[bool, str]:
-    try:
-        cfg = reg_config.regista_config()
-        if not cfg.enabled:
-            return True, "regista writes disabled (legacy op_log path)"
-        pending = outbox.count_ops(cfg.project)
-        conflicts = outbox.count_sidecar(cfg.project, "conflicts.jsonl")
-        rejected = outbox.count_sidecar(cfg.project, "rejected.jsonl")
-        with _conn() as conn:
-            pending_rows = projection.count_pending(conn)
-        return (
-            True,
-            f"enabled (project={cfg.project}); outbox pending={pending}, "
-            f"conflicts={conflicts}, rejected={rejected}, "
-            f"pending_sync rows={pending_rows}",
-        )
-    except Exception as exc:
-        # An operational error (outbox unreadable, projection query failed,
-        # DB unreachable) is a real failure — surface it rather than masking
-        # the problem as a pass. Only the explicitly-disabled state above is a
-        # clean pass.
-        return False, f"regista face check error: {type(exc).__name__}"
 
 
 # Known console scripts shipped by this package (from pyproject.toml).
@@ -939,10 +864,10 @@ def _status_of(ok: bool | None) -> str:
     """Map a check result to a suite status string.
 
     ``True`` -> ``ok``, ``False`` -> ``fail``, ``None`` -> ``skip`` (the check
-    does not apply to this deployment shape — e.g. regista chain verify when
-    writes are off). A ``skip`` never fails the suite-doctor umbrella. The
-    ``ok``/``fail``/``skip`` vocabulary matches regista's canonical doctor
-    contract (blueprint §2.4).
+    does not apply to this deployment shape — e.g. the embedding check without
+    ``--check-embed``). A ``skip`` never fails the suite-doctor umbrella. The
+    ``ok``/``fail``/``skip`` vocabulary matches the suite doctor contract
+    (blueprint §2.4).
     """
     if ok is None:
         return "skip"
@@ -958,24 +883,15 @@ def run_json(check_embed: bool = False) -> tuple[dict, int]:
           "component": "agent-notes",
           "version": "<dist-version>",
           "ok": bool,          # umbrella-read: false only when unhealthy
-          "degraded": bool,    # umbrella-read: healthy-but-spine-absent
-          "status": "healthy" | "degraded" | "unhealthy",
-          "regista": {
-            "reachable": true|false|null,
-            "project": "<slug>",
-            "writes_enabled": bool,
-            "chain_ok": true|false|null,
-            "mode": "<coordination mode>"
-          },
+          "degraded": false,   # kept for the umbrella contract; never true now
+          "status": "healthy" | "unhealthy",
           "checks": [{"name": ..., "status": ..., "detail": ...}, ...]
         }
 
-    ``status`` is ``healthy`` when every check passed/skipped AND regista is
-    reachable; ``degraded`` when no check failed but the spine is absent
-    (coordinator-absent / regista DSN not configured) — degrade mode is a safe,
-    fully-functional state, just not the full-suite posture, so the umbrella
-    gets a distinct signal; ``unhealthy`` when any check failed. Per Plan 017
-    WI-3.1 AC, degrade mode never makes the suite *unhealthy*.
+    ``status`` is ``healthy`` when every check passed or was skipped and
+    ``unhealthy`` when any check failed. The ``regista`` block and the
+    ``degraded`` status are gone (Plan 026 D1): regista write-through was
+    deleted, so an absent regista is the normal state and reports nothing.
     """
     checks: list[dict] = []
     failed = False
@@ -986,8 +902,6 @@ def run_json(check_embed: bool = False) -> tuple[dict, int]:
         if status == "fail":
             failed = True
         checks.append({"name": name, "status": status, "detail": detail})
-
-    cfg = reg_config.regista_config()
 
     # --- native store checks (always run; the native op_log is the floor) ---
     ok, msg = _check_dsn()
@@ -1002,11 +916,10 @@ def run_json(check_embed: bool = False) -> tuple[dict, int]:
     add("coordination_mode", ok, msg)
     vm_status, vm_msg = _check_vm_identity()
     checks.append({"name": "vm_identity", "status": vm_status, "detail": vm_msg})
-    # Reuse the coordination-mode string for the regista block instead of
-    # calling get_coordination_mode() a second time.
-    mode = msg if ok else "unknown"
 
-    chain_ok: bool | None = None
+    ok, msg = _check_retired_settings()
+    add("retired_settings", ok, msg)
+
     if dsn_ok and schema_ok:
         if check_embed:
             ok, msg = _check_embedding()
@@ -1026,12 +939,8 @@ def run_json(check_embed: bool = False) -> tuple[dict, int]:
         ok, msg = _check_harness_configs()
         add("stale_mcp_entries", ok, msg)
 
-        ok, msg = _check_regista_face()
-        add("regista_face", ok, msg)
-
-        # agent-notes owns its op_log chain (the chain the write-through face
-        # replays into regista); verify it whenever the native store is up. It
-        # is independent of whether the regista face is wired.
+        # agent-notes owns its op_log chain; verify it whenever the native
+        # store is up.
         chain_ok, chain_msg = _check_chain_ok()
         add("chain_integrity", chain_ok, chain_msg)
     else:
@@ -1041,7 +950,6 @@ def run_json(check_embed: bool = False) -> tuple[dict, int]:
             "vocabulary_integrity",
             "bridge_target",
             "stale_mcp_entries",
-            "regista_face",
             "chain_integrity",
         ):
             add(name, None, "skipped (prerequisite dsn_reachable/schema_up_to_date failed)")
@@ -1058,31 +966,13 @@ def run_json(check_embed: bool = False) -> tuple[dict, int]:
 
     add("codex_harness", codex_ok, codex_msg)
 
-    ok, msg = _check_secrets_backend(cfg)
-    add("secrets_backend", ok, msg)
-
     ok, msg = _check_memory_provider()
     add("memory_provider", ok, msg)
 
-    # --- regista block (the suite-shared facts) ---
-    reachable, reach_msg = _check_regista_reachable(cfg)
-    if reachable is False:
-        # Configured but unreachable is a real failure.
-        add("regista_reachable", False, reach_msg)
-    elif reachable is None:
-        add("regista_reachable", None, reach_msg)
-    else:
-        add("regista_reachable", True, reach_msg)
+    ok, msg = _check_legacy_outbox()
+    add("legacy_outbox", ok, msg)
 
-    if failed:
-        overall = "unhealthy"
-    elif reachable is None:
-        # No check failed, but the spine is absent — degrade mode. Safe and
-        # functional, but not the full-suite posture; give the umbrella a
-        # distinct signal (Plan 017 WI-3.1 AC: not a failure).
-        overall = "degraded"
-    else:
-        overall = "healthy"
+    overall = "unhealthy" if failed else "healthy"
 
     payload = {
         "component": "agent-notes",
@@ -1091,15 +981,8 @@ def run_json(check_embed: bool = False) -> tuple[dict, int]:
         # ``ok``/``degraded`` booleans (blueprint §2.4 / bootstrap-contract §3);
         # ``status`` is kept as the richer human-facing tri-state.
         "ok": overall != "unhealthy",
-        "degraded": overall == "degraded",
+        "degraded": False,
         "status": overall,
-        "regista": {
-            "reachable": reachable,
-            "project": cfg.project,
-            "writes_enabled": cfg.writes_enabled,
-            "chain_ok": chain_ok,
-            "mode": mode,
-        },
         "checks": checks,
     }
     return payload, (1 if failed else 0)
@@ -1136,6 +1019,11 @@ def run(skip_embed: bool = False, check_embed: bool = False) -> int:
     vm_status, vm_msg = _check_vm_identity()
     _print_section("VM Identity")
     print(f"  {vm_status.upper()}: {vm_msg}")
+
+    ok, msg = _check_retired_settings()
+    _print_section("Retired Settings")
+    _print_result(ok, msg)
+    all_ok = all_ok and ok
 
     if not (dsn_ok and schema_ok):
         for name in (
@@ -1180,16 +1068,11 @@ def run(skip_embed: bool = False, check_embed: bool = False) -> int:
     _print_result(ok, msg)
     all_ok = all_ok and ok
 
-    ok, msg = _check_regista_face()
-    _print_section("9. Regista Face")
-    _print_result(ok, msg)
-    all_ok = all_ok and ok
-
     # Suite-layer checks (Plan 017 WI-3.1) — same surface as `doctor --json`,
     # so the human-readable report does not silently miss a gap the JSON
     # umbrella would catch.
     ok, msg = _check_chain_ok()
-    _print_section("10. Op-Log Chain Integrity")
+    _print_section("9. Op-Log Chain Integrity")
     if ok is None:
         print(f"  SKIP: {msg}")
     else:
@@ -1200,7 +1083,7 @@ def run(skip_embed: bool = False, check_embed: bool = False) -> int:
     codex_ok, codex_msg = _check_codex_harness(plugin_probe=plugin_probe)
     plugin_wired = codex_ok is True and plugin_probe[0] == "enabled"
     ok, msg = _check_skills_installed(codex_plugin_wired=plugin_wired)
-    _print_section("11. Skills Installed")
+    _print_section("10. Skills Installed")
     if ok is None:
         print(f"  SKIP: {msg}")
     else:
@@ -1208,29 +1091,12 @@ def run(skip_embed: bool = False, check_embed: bool = False) -> int:
         all_ok = all_ok and ok
 
     ok, msg = _check_harness_wired(codex_plugin_wired=plugin_wired)
-    _print_section("12. Harness Wired")
+    _print_section("11. Harness Wired")
     _print_result(ok, msg)
     all_ok = all_ok and ok
 
     ok, msg = codex_ok, codex_msg
-    _print_section("13. Codex Harness")
-    if ok is None:
-        print(f"  SKIP: {msg}")
-    else:
-        _print_result(ok, msg)
-        all_ok = all_ok and ok
-
-    cfg = reg_config.regista_config()
-    reachable, reach_msg = _check_regista_reachable(cfg)
-    _print_section("14. Regista Reachable")
-    if reachable is None:
-        print(f"  SKIP: {reach_msg}")
-    else:
-        _print_result(reachable, reach_msg)
-        all_ok = all_ok and reachable
-
-    ok, msg = _check_secrets_backend(cfg)
-    _print_section("15. Secrets Backend")
+    _print_section("12. Codex Harness")
     if ok is None:
         print(f"  SKIP: {msg}")
     else:
@@ -1238,12 +1104,17 @@ def run(skip_embed: bool = False, check_embed: bool = False) -> int:
         all_ok = all_ok and ok
 
     ok, msg = _check_memory_provider()
-    _print_section("16. Memory Provider")
+    _print_section("13. Memory Provider")
     if ok is None:
         print(f"  SKIP: {msg}")
     else:
         _print_result(ok, msg)
         all_ok = all_ok and ok
+
+    ok, msg = _check_legacy_outbox()
+    _print_section("14. Legacy Outbox")
+    _print_result(ok, msg)
+    all_ok = all_ok and ok
 
     _print_section("Summary")
     if all_ok:

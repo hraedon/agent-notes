@@ -14,18 +14,11 @@ from agent_notes.cli.common import (
     ScopeError,
     _add_common,
     _print_sub_help,
-    _resolve,
     add_scope_args,
     emit_error,
     report_resolution_failure,
     resolve_composed_scopes,
     resolve_memory_target,
-)
-from agent_notes.core.note_model import NoteProjectionError
-
-_RECOVERY_HINT = (
-    "Run 'agent-notes memory rebuild-from-regista --project {proj_slug}' "
-    "to re-derive the local projection from the regista authority."
 )
 
 
@@ -63,7 +56,7 @@ def cmd_mem_add(args: argparse.Namespace) -> int:
     target = _target(args, create=True)
     if isinstance(target, int):
         return target
-    ws_id, proj_id, proj_slug = target.ws_id, target.proj_id, target.proj_slug
+    ws_id, proj_id = target.ws_id, target.proj_id
 
     from agent_notes.core.embed import embed
     from agent_notes.core.memory_model import add_memory
@@ -79,20 +72,6 @@ def cmd_mem_add(args: argparse.Namespace) -> int:
             body=args.body,
             attributes=attributes,
             embedding=vec,
-        )
-    except NoteProjectionError as exc:
-        # The regista event committed; the local projection failed. Report
-        # this as a partial-commit error with a recovery hint — never as a
-        # clean success. The note IS in regista and recoverable.
-        return emit_error(
-            "PROJECTION_FAILED",
-            str(exc),
-            use_json=use_json,
-            detail=(
-                f"The note event is committed in regista "
-                f"(entity_id={exc.regista_note_id}). " + _RECOVERY_HINT.format(proj_slug=proj_slug)
-            ),
-            exit_code=EXIT_GENERIC,
         )
     except ValueError as exc:
         return emit_error(
@@ -287,7 +266,7 @@ def cmd_mem_search(args: argparse.Namespace) -> int:
 
 
 def cmd_mem_recall(args: argparse.Namespace) -> int:
-    """Recall from the configured memory engine across one or all memory tiers."""
+    """Recall from the native memory engine across one or all memory tiers."""
     use_json = getattr(args, "json", False)
     scope = getattr(args, "scope", "composed")
 
@@ -430,20 +409,7 @@ def cmd_mem_delete(args: argparse.Namespace) -> int:
 
     from agent_notes.core.memory_model import delete_memory
 
-    try:
-        row = delete_memory(target.ws_id, target.proj_id, args.name) if target.proj_id else None
-    except NoteProjectionError as exc:
-        return emit_error(
-            "PROJECTION_FAILED",
-            str(exc),
-            use_json=use_json,
-            detail=(
-                f"The note event is committed in regista "
-                f"(entity_id={exc.regista_note_id}). "
-                + _RECOVERY_HINT.format(proj_slug=target.proj_slug)
-            ),
-            exit_code=EXIT_GENERIC,
-        )
+    row = delete_memory(target.ws_id, target.proj_id, args.name) if target.proj_id else None
     if row is None:
         return emit_error(
             "NOT_FOUND",
@@ -497,18 +463,6 @@ def cmd_mem_update(args: argparse.Namespace) -> int:
             body=args.body,
             attributes=attributes,
         )
-    except NoteProjectionError as exc:
-        return emit_error(
-            "PROJECTION_FAILED",
-            str(exc),
-            use_json=use_json,
-            detail=(
-                f"The note event is committed in regista "
-                f"(entity_id={exc.regista_note_id}). "
-                + _RECOVERY_HINT.format(proj_slug=target.proj_slug)
-            ),
-            exit_code=EXIT_GENERIC,
-        )
     except ValueError as exc:
         return emit_error(
             "NOT_FOUND",
@@ -523,107 +477,6 @@ def cmd_mem_update(args: argparse.Namespace) -> int:
     else:
         print(f"Memory '{mem['name']}' updated (id={mem['id']}).")
     return EXIT_SUCCESS
-
-
-def cmd_mem_rebuild(args: argparse.Namespace) -> int:
-    """Rebuild the local memories projection from the regista note authority.
-
-    Uses the same document-task embedder and dimension semantics as the write
-    path (``embed(body, task="document")``), so rebuilt rows are search-ready
-    without a separate re-embed pass. This is the operator recovery path for
-    PROJECTION_FAILED split-brain states.
-    """
-    use_json = getattr(args, "json", False)
-    try:
-        ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
-    except SystemExit as exc:
-        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
-        report_resolution_failure(args, code)
-        return code
-
-    from agent_notes.core.face_factory import get_face
-    from agent_notes.core.note_model import rebuild_from_regista
-
-    face = get_face()
-    if face is None:
-        return emit_error(
-            "NOT_CONFIGURED",
-            "regista writes not enabled; set REGISTA_DSN and AGENT_NOTES_REGISTA_WRITES=1",
-            use_json=use_json,
-            exit_code=EXIT_NOT_CONFIGURED,
-        )
-
-    from agent_notes.core.embed import embed
-
-    def _embed_for_rebuild(body: str) -> list[float]:
-        vec: list[float] = embed(body, task="document").tolist()
-        return vec
-
-    report = rebuild_from_regista(face, project_id=proj_id, embed_fn=_embed_for_rebuild)
-
-    if use_json:
-        print(json.dumps(report, indent=2, default=str))
-    else:
-        print(
-            f"Rebuilt memories projection from regista: "
-            f"{report['mirrored']} mirrored, {report['created']} created, "
-            f"{report['skipped']} skipped, {report['failed']} failed."
-        )
-    if report["failed"] > 0:
-        return EXIT_GENERIC
-    return EXIT_SUCCESS
-
-
-def cmd_mem_check_drift(args: argparse.Namespace) -> int:
-    """Read-only drift check: compare regista note entities vs local memories.
-
-    Reports entities that exist in regista but are missing or stale in the
-    local projection (the hard-crash split-brain class). Never mutates —
-    this is a diagnostic, not a repair. Repair is ``memory rebuild-from-regista``.
-    """
-    use_json = getattr(args, "json", False)
-    try:
-        ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
-    except SystemExit as exc:
-        code = exc.code if isinstance(exc.code, int) else EXIT_NOT_CONFIGURED
-        report_resolution_failure(args, code)
-        return code
-
-    from agent_notes.core.face_factory import get_face
-    from agent_notes.core.note_model import check_projection_drift
-
-    face = get_face()
-    if face is None:
-        return emit_error(
-            "NOT_CONFIGURED",
-            "regista writes not enabled; set REGISTA_DSN and AGENT_NOTES_REGISTA_WRITES=1",
-            use_json=use_json,
-            exit_code=EXIT_NOT_CONFIGURED,
-        )
-
-    drift = check_projection_drift(face, project_id=proj_id)
-
-    if use_json:
-        print(json.dumps(drift, indent=2, default=str))
-    else:
-        if drift["drifted"] == 0:
-            print("No projection drift detected.")
-        else:
-            print(
-                f"DRIFT: {drift['drifted']} regista note entit(y/ies) diverge "
-                f"from the local projection."
-            )
-            for entity_id in drift["missing_entity_ids"]:
-                print(f"  missing locally: {entity_id}")
-            for entry in drift["stale"]:
-                print(
-                    f"  stale: {entry['entity_id']} ({entry['name']}): "
-                    f"{'; '.join(entry['reasons'])}"
-                )
-            print(f"Run 'agent-notes memory rebuild-from-regista --project {proj_slug}' to repair.")
-    # Exit nonzero when drift exists so monitoring can gate on the result.
-    # The structured JSON is still emitted (above) for programmatic consumption.
-    return EXIT_CONFLICT if drift["drifted"] > 0 else EXIT_SUCCESS
 
 
 def register_memory_parsers(sub: argparse._SubParsersAction) -> None:
@@ -660,7 +513,7 @@ def register_memory_parsers(sub: argparse._SubParsersAction) -> None:
     mem_search.set_defaults(func=cmd_mem_search)
 
     mem_recall = mem_sub.add_parser(
-        "recall", help="Recall from the configured memory engine across memory tiers"
+        "recall", help="Recall from the native memory engine across memory tiers"
     )
     mem_recall.add_argument("query")
     mem_recall.add_argument("--limit", type=int, default=10)
@@ -682,19 +535,5 @@ def register_memory_parsers(sub: argparse._SubParsersAction) -> None:
     add_scope_args(mem_update, default="repo")
     _add_common(mem_update)
     mem_update.set_defaults(func=cmd_mem_update)
-
-    mem_rebuild = mem_sub.add_parser(
-        "rebuild-from-regista",
-        help="Rebuild the local memories projection from the regista note authority",
-    )
-    _add_common(mem_rebuild)
-    mem_rebuild.set_defaults(func=cmd_mem_rebuild)
-
-    mem_drift = mem_sub.add_parser(
-        "check-drift",
-        help="Read-only check for regista-vs-local memory projection drift",
-    )
-    _add_common(mem_drift)
-    mem_drift.set_defaults(func=cmd_mem_check_drift)
 
     mem.set_defaults(func=lambda args: _print_sub_help(mem))

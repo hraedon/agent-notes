@@ -49,9 +49,9 @@ agent-notes work-item file --title "Found a bug" --type bug --status open
 agent-notes memory add --name "postgres-tuning" --body "..." --type note
 ```
 
-Regista write-through is retired (Plan 025 D7) and stays off unless
+Regista write-through was retired (Plan 025 D7) and deleted (Plan 026 D1).
 `AGENT_NOTES_REGISTA_WRITES=1` (or `regista.writes_enabled` in
-`~/.config/agent-notes/config.json`) is set explicitly, which is unsupported.
+`~/.config/agent-notes/config.json`) is now an error on every write.
 `install-harness` no longer writes any regista settings and removes the ones
 it wrote earlier. The cutover runbook is `docs/spikes/025-regista-cutover.md`.
 
@@ -125,7 +125,7 @@ below `plugins/agent-notes` prevents Codex from packaging the checkout's
 multi-gigabyte `.venv`. Both paths install the same narrow lifecycle
 adapter: `SessionStart` injects bounded metadata-only orientation and `Stop`
 is a no-op that never requests another turn (its regista outbox reconcile
-was retired in Plan 025; Phase 4 extends it).
+was retired in Plan 025 and the outbox deleted in Plan 026).
 The direct fallback hash-owns only its groups in `$CODEX_HOME/hooks.json` and
 preserves Cairn/user hooks. Review and trust command hooks explicitly with
 Codex `/hooks`; doctor reports that trust as unverified because Codex exposes no
