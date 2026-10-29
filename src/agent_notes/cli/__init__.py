@@ -48,45 +48,19 @@ from agent_notes.cli.workspace import register_workspace_parsers
 from agent_notes.codex_lifecycle import register_codex_hook_parser
 
 
-def _install_claude_session_hook(repo_root: str) -> tuple[str, bool]:
-    """Wire a SessionStart hook into <repo>/.claude/settings.json that runs
-    `agent-notes orient`, so orientation is injected every session without the
-    agent having to remember. Merges into existing settings; idempotent.
+def _repo_orient_hook(repo_root: str) -> str | None:
+    """The per-repo ``.claude/settings.json`` path if it still runs ``agent-notes orient``.
 
-    Upgrades old-format commands (with POSIX-only ``2>/dev/null || true``) to
-    the cross-platform bare command. Returns (settings_path, changed).
+    Older ``init`` runs wrote that SessionStart hook. Plan 025 Phase 4 moved
+    orientation to the user-level hook ``install-harness claude`` installs,
+    which skips its own orient summary while a per-repo one exists.
     """
+    from pathlib import Path
+
+    from agent_notes.hooks.claude import settings_run_orient
+
     settings_path = os.path.join(repo_root, ".claude", "settings.json")
-    os.makedirs(os.path.dirname(settings_path), exist_ok=True)
-    settings: dict = {}
-    if os.path.exists(settings_path):
-        try:
-            settings = json.loads(open(settings_path, encoding="utf-8").read()) or {}
-        except (json.JSONDecodeError, OSError):
-            settings = {}
-    hooks = settings.setdefault("hooks", {})
-    session_start = hooks.setdefault("SessionStart", [])
-    command = f"agent-notes orient --path {repo_root}"
-    changed = False
-    found = False
-    for entry in session_start:
-        if not isinstance(entry, dict):
-            continue
-        for h in entry.get("hooks", []):
-            if not isinstance(h, dict):
-                continue
-            cmd = h.get("command", "")
-            if cmd.startswith("agent-notes orient"):
-                found = True
-                if cmd != command:
-                    h["command"] = command
-                    changed = True
-    if not found:
-        session_start.append({"hooks": [{"type": "command", "command": command}]})
-        changed = True
-    with open(settings_path, "w", encoding="utf-8") as f:
-        f.write(json.dumps(settings, indent=2) + "\n")
-    return settings_path, changed
+    return settings_path if settings_run_orient(Path(settings_path)) else None
 
 
 def _remove_claude_stop_reconcile_hook(repo_root: str) -> tuple[str, bool]:
@@ -309,16 +283,20 @@ def cmd_init(
         print(f"Checkout recorded for VM '{vm_id}'.")
 
     if install_hooks:
-        settings_path, changed = _install_claude_session_hook(repo_root)
-        verb = "wired" if changed else "already present"
-        print(f"Claude Code SessionStart -> `agent-notes orient` {verb} in {settings_path}.")
+        legacy = _repo_orient_hook(repo_root)
+        if legacy:
+            print(
+                f"Note: {legacy} still runs `agent-notes orient` at SessionStart. The "
+                "user-level hook from `agent-notes install-harness claude` now does this "
+                "(and skips orient while the per-repo hook exists); you can remove it."
+            )
         stop_path, stop_changed = _remove_claude_stop_reconcile_hook(repo_root)
         if stop_changed:
             print(f"Removed the retired `agent-notes outbox reconcile` Stop hook from {stop_path}.")
 
     print(
-        "Next: `agent-notes install-skills --target claude` and `--target opencode` "
-        "(global, once); opencode SessionStart wiring is pending (see plans/007)."
+        "Next (once per machine): `agent-notes install-harness all` wires skills, "
+        "orientation and agent messages into Claude Code, OpenCode, Codex and agy."
     )
     return EXIT_SUCCESS
 
@@ -495,7 +473,9 @@ def main() -> int:
         ),
     )
     init_p.add_argument(
-        "--no-hooks", action="store_true", help="Register only; do not wire the SessionStart hook"
+        "--no-hooks",
+        action="store_true",
+        help="Register only; do not touch the repo's .claude/settings.json",
     )
 
     resolve_p = sub.add_parser("resolve", help="Resolve a filesystem path to a registered project")

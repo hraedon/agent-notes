@@ -1,9 +1,11 @@
-"""Narrow Codex lifecycle adapter for agent-notes (Plan 019 Phase 2).
+"""Narrow Codex lifecycle adapter for agent-notes (Plan 019 Phase 2, Plan 025 §6).
 
 Codex command hooks receive JSON on stdin and require event-specific JSON on
-stdout.  This module deliberately consumes only ``cwd``, ``hook_event_name``,
-and ``stop_hook_active``.  Transcript paths, prompts, assistant messages,
-model names, and credentials are neither read nor persisted.
+stdout.  The orientation path consumes only ``cwd`` and ``hook_event_name``.
+The mailbox hooks (:mod:`agent_notes.hooks.codex`) also read ``session_id``
+and, for the loop guard, whether the prompt starts with the peer-message
+marker.  Transcript paths, assistant messages, model names, and credentials
+are neither read nor persisted.
 
 The canonical hook definitions below are used by the direct installer and are
 also regression-checked against the component plugin's ``hooks/hooks.json``.
@@ -26,8 +28,15 @@ MAX_HOOK_INPUT_CHARS = 1_000_000
 MAX_ORIENTATION_CHARS = 7_000
 _MAX_FIELD_CHARS = 400
 
-SESSION_START_COMMAND = "agent-notes codex-hook session-start"
-STOP_COMMAND = "agent-notes codex-hook stop"
+SESSION_START_COMMAND = "agent-notes-hook codex session-start"
+USER_PROMPT_SUBMIT_COMMAND = "agent-notes-hook codex user-prompt-submit"
+STOP_COMMAND = "agent-notes-hook codex stop"
+# Commands earlier versions installed; the installer replaces owned groups
+# that still run them.
+LEGACY_COMMANDS: dict[str, tuple[str, ...]] = {
+    "SessionStart": ("agent-notes codex-hook session-start",),
+    "Stop": ("agent-notes codex-hook stop",),
+}
 
 _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
@@ -44,8 +53,8 @@ def codex_hook_document() -> dict[str, object]:
     """Return the canonical Codex hook document for plugin and direct wiring."""
     return {
         "description": (
-            "Agent-notes project orientation and a turn-end hook. "
-            "Review and trust these commands with /hooks before use."
+            "Agent-notes project orientation and agent messages (next prompt and "
+            "turn extension). Review and trust these commands with /hooks before use."
         ),
         "hooks": {
             "SessionStart": [
@@ -61,14 +70,25 @@ def codex_hook_document() -> dict[str, object]:
                     ],
                 }
             ],
+            "UserPromptSubmit": [
+                {
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": USER_PROMPT_SUBMIT_COMMAND,
+                            "timeout": 10,
+                        }
+                    ]
+                }
+            ],
             "Stop": [
                 {
                     "hooks": [
                         {
                             "type": "command",
                             "command": STOP_COMMAND,
-                            "timeout": 30,
-                            "statusMessage": "Reconciling the agent-notes outbox",
+                            "timeout": 10,
+                            "statusMessage": "Checking agent-notes for wake messages",
                         }
                     ]
                 }
@@ -229,53 +249,56 @@ def _success_output() -> dict[str, bool]:
     return {"continue": True}
 
 
-def run_session_start(payload: dict[str, Any]) -> dict[str, object]:
-    cwd = _cwd_for(payload, "SessionStart")
-    if cwd is None:
-        return _success_output()
+def _run_event(event: str, payload: dict[str, Any]) -> dict[str, object]:
+    import os
+
+    from agent_notes.hooks import codex
+
     try:
-        context = _orientation_for_cwd(cwd)
-    except (Exception, SystemExit):
+        return codex.handle(event, payload, os.environ)
+    except BaseException as exc:  # noqa: BLE001 - hooks fail open, always
+        from agent_notes.hooks.common import log
+
+        log("codex %s failed: %s: %s", event, type(exc).__name__, exc)
         return _success_output()
-    if not context:
-        return _success_output()
-    return {
-        "continue": True,
-        "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
-            "additionalContext": context,
-        },
-    }
+
+
+def run_session_start(payload: dict[str, Any]) -> dict[str, object]:
+    return _run_event("session-start", payload)
+
+
+def run_user_prompt_submit(payload: dict[str, Any]) -> dict[str, object]:
+    return _run_event("user-prompt-submit", payload)
 
 
 def run_stop(payload: dict[str, Any]) -> dict[str, object]:
-    """Stop handler: currently a no-op that lets the turn end.
+    """L2 turn extension (Plan 025 §6); the regista reconcile is retired (D7)."""
+    return _run_event("stop", payload)
 
-    The regista outbox reconcile it used to run is retired (Plan 025 D7).
-    The hook stays registered because Plan 025 Phase 4 extends it.
-    """
-    cwd = _cwd_for(payload, "Stop")
-    # Codex marks a repeated Stop pass explicitly; never act on it.
-    if cwd is None or payload.get("stop_hook_active") is True:
-        return _success_output()
-    return _success_output()
+
+_RUNNERS = {
+    "session-start": run_session_start,
+    "user-prompt-submit": run_user_prompt_submit,
+    "stop": run_stop,
+}
 
 
 def cmd_codex_hook(args: argparse.Namespace) -> int:
+    """``agent-notes codex-hook <event>``: the command older installs still trust."""
+    from agent_notes.hooks.common import write_json
+
     payload = _read_payload(sys.stdin)
     if payload is None:
         result: dict[str, object] = _success_output()
-    elif args.codex_hook_event == "session-start":
-        result = run_session_start(payload)
     else:
-        result = run_stop(payload)
-    print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+        result = _RUNNERS[args.codex_hook_event](payload)
+    write_json(result, sys.stdout)
     return 0
 
 
 def register_codex_hook_parser(sub: argparse._SubParsersAction) -> None:
     parser = sub.add_parser("codex-hook", help=argparse.SUPPRESS)
     events = parser.add_subparsers(dest="codex_hook_event", required=True)
-    for event in ("session-start", "stop"):
+    for event in _RUNNERS:
         event_parser = events.add_parser(event, help=argparse.SUPPRESS)
         event_parser.set_defaults(func=cmd_codex_hook)

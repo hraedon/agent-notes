@@ -489,11 +489,14 @@ def test_codex_install_writes_skills_and_owned_hooks_but_no_toml_config():
         # Decision 4: Codex config is never written (no secret/config leak).
         assert not (td / ".codex" / "config.toml").exists()
         hooks = json.loads((td / ".codex" / "hooks.json").read_text())
-        assert set(hooks["hooks"]) == {"SessionStart", "Stop"}
+        assert set(hooks["hooks"]) == {"SessionStart", "UserPromptSubmit", "Stop"}
         assert hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"] == (
-            "agent-notes codex-hook session-start"
+            "agent-notes-hook codex session-start"
         )
-        assert hooks["hooks"]["Stop"][0]["hooks"][0]["command"] == ("agent-notes codex-hook stop")
+        assert hooks["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"] == (
+            "agent-notes-hook codex user-prompt-submit"
+        )
+        assert hooks["hooks"]["Stop"][0]["hooks"][0]["command"] == "agent-notes-hook codex stop"
         # No env leaked into the agent-notes config file either.
         assert not config_path(home=td).exists()
         # Manifest stays under $CODEX_HOME as a stable ownership sidecar and
@@ -503,7 +506,7 @@ def test_codex_install_writes_skills_and_owned_hooks_but_no_toml_config():
         assert isinstance(man["skills"]["demo"], str)
         assert man["env_keys"] == []
         assert man["plugin"] is False
-        assert set(man["hooks"]) == {"SessionStart", "Stop"}
+        assert set(man["hooks"]) == {"SessionStart", "UserPromptSubmit", "Stop"}
         assert man["hooks_file_created"] is True
 
 
@@ -699,7 +702,10 @@ def test_codex_preexisting_same_command_hook_is_not_adopted():
         assert result.returncode == 1
         assert "pre-existing and not owned" in result.stderr
         manifest = json.loads((td / ".codex" / ".agent-notes-harness.json").read_text())
-        assert set(manifest["hooks"]) == {"SessionStart"}
+        # The legacy command still identifies the Stop group, which nobody
+        # recorded owning, so it is neither adopted nor duplicated.
+        assert set(manifest["hooks"]) == {"SessionStart", "UserPromptSubmit"}
+        assert len(json.loads(hooks_path.read_text())["hooks"]["Stop"]) == 1
 
 
 def test_empty_source_fails_not_false_green():

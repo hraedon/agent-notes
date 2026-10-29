@@ -15,14 +15,13 @@ from __future__ import annotations
 import json
 import os
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 import psycopg
 from psycopg.rows import dict_row
-
-from agent_notes.core.db import _conn
 
 CHANNEL = "agent_notes_messages"
 
@@ -66,6 +65,24 @@ _SESSION_SELECT = """
     FROM agent_sessions s
     LEFT JOIN projects p ON p.id = s.project_id
 """
+
+
+def _conn():
+    # Imported lazily: the per-prompt hooks use this module with their own
+    # short-lived connection and must not pay for the pool (Plan 025 §6).
+    from agent_notes.core.db import _conn as pooled
+
+    return pooled()
+
+
+@contextmanager
+def _use(conn: psycopg.Connection | None) -> Iterator[psycopg.Connection]:
+    """Use the caller's connection (a ``dict_row`` one) or a pooled one."""
+    if conn is not None:
+        yield conn
+    else:
+        with _conn() as pooled:
+            yield pooled
 
 
 class MessagingError(ValueError):
@@ -121,18 +138,20 @@ def resolve_vm_id() -> str:
     return _resolve_vm_id()
 
 
-def default_workspace_id() -> int:
+def default_workspace_id(*, conn: psycopg.Connection | None = None) -> int:
     """The ``default`` workspace, used when the caller is outside a registered repo."""
-    with _conn() as conn:
+    with _use(conn) as conn:
         row = conn.execute("SELECT id FROM workspaces WHERE slug = 'default'").fetchone()
     if row is None:
         raise MessagingError("no 'default' workspace; run agent-notes-migrate --all")
     return int(row["id"])
 
 
-def lookup_project(workspace_slug: str, project_slug: str) -> tuple[int, int] | None:
+def lookup_project(
+    workspace_slug: str, project_slug: str, *, conn: psycopg.Connection | None = None
+) -> tuple[int, int] | None:
     """Return ``(workspace_id, project_id)`` for a slug pair, or ``None``."""
-    with _conn() as conn:
+    with _use(conn) as conn:
         row = conn.execute(
             "SELECT p.workspace_id, p.id FROM projects p JOIN workspaces w "
             "ON w.id = p.workspace_id WHERE w.slug = %s AND p.slug = %s",
@@ -277,6 +296,7 @@ def register_session(
     paseo_agent_id: str | None = None,
     trust: str | None = None,
     replace_location: bool = True,
+    conn: psycopg.Connection | None = None,
 ) -> dict:
     """Upsert a session and heartbeat it.
 
@@ -296,7 +316,7 @@ def register_session(
     else:
         cwd_expr = "COALESCE(agent_sessions.cwd, EXCLUDED.cwd)"
         proj_expr = "COALESCE(agent_sessions.project_id, EXCLUDED.project_id)"
-    with _conn() as conn:
+    with _use(conn) as conn:
         conn.execute(
             f"""
             INSERT INTO agent_sessions
@@ -336,8 +356,8 @@ def register_session(
         return _get_session(conn, key)
 
 
-def get_session(key: str) -> dict | None:
-    with _conn() as conn:
+def get_session(key: str, *, conn: psycopg.Connection | None = None) -> dict | None:
+    with _use(conn) as conn:
         return _get_session(conn, key)
 
 
@@ -423,9 +443,9 @@ def set_paseo_agent_id(key: str, paseo_agent_id: str | None) -> dict:
         return _get_session(conn, key)
 
 
-def bump_auto_continue(key: str) -> int:
+def bump_auto_continue(key: str, *, conn: psycopg.Connection | None = None) -> int:
     """Count one L2 extension or L3 wake (§6 loop guard). Returns the new count."""
-    with _conn() as conn:
+    with _use(conn) as conn:
         row = conn.execute(
             "UPDATE agent_sessions SET auto_continues = auto_continues + 1 "
             "WHERE session_key = %s RETURNING auto_continues",
@@ -437,9 +457,9 @@ def bump_auto_continue(key: str) -> int:
     return int(row["auto_continues"])
 
 
-def reset_auto_continue(key: str) -> None:
+def reset_auto_continue(key: str, *, conn: psycopg.Connection | None = None) -> None:
     """Reset the loop guard; the per-prompt hook calls this on a human prompt."""
-    with _conn() as conn:
+    with _use(conn) as conn:
         conn.execute("UPDATE agent_sessions SET auto_continues = 0 WHERE session_key = %s", (key,))
         conn.commit()
 
@@ -736,12 +756,13 @@ def claim_deliverable(
     direct_only: bool = False,
     wake_only: bool = False,
     limit: int = 20,
+    conn: psycopg.Connection | None = None,
 ) -> list[dict]:
     """Claim unclaimed messages for a session's hook (L1/L2). Never notices.
 
     ``wake_only`` restricts to direct ``wake=true`` rows (the Stop hook).
     """
-    with _conn() as conn:
+    with _use(conn) as conn:
         who = _addressee(conn, session)
         where, params = _match_sql(who, direct_only=direct_only or wake_only)
         if wake_only:
@@ -749,6 +770,39 @@ def claim_deliverable(
         rows = _claim(conn, where, params, who.claimer, limit)
         conn.commit()
     return rows
+
+
+def count_deliverable(
+    session: str,
+    *,
+    wake_only: bool = False,
+    conn: psycopg.Connection | None = None,
+) -> int:
+    """Count what :func:`claim_deliverable` would claim, without claiming it."""
+    with _use(conn) as conn:
+        who = _addressee(conn, session)
+        where, params = _match_sql(who, direct_only=wake_only, include_notices=False)
+        if wake_only:
+            where += " AND m.wake AND m.to_session IS NOT NULL"
+        row = conn.execute(
+            f"SELECT count(*) AS n FROM agent_messages m WHERE m.claimed_by IS NULL AND {where}",  # noqa: S608
+            params,
+        ).fetchone()
+    return int(row["n"])
+
+
+def release_claims(ids: list[int], claimer: str, *, conn: psycopg.Connection | None = None) -> int:
+    """Unclaim rows a hook claimed but could not show, so ``msg inbox`` lists them."""
+    if not ids:
+        return 0
+    with _use(conn) as conn:
+        released = conn.execute(
+            "UPDATE agent_messages SET claimed_by = NULL, claimed_at = NULL "
+            "WHERE id = ANY(%s) AND claimed_by = %s",
+            (list(ids), claimer),
+        ).rowcount
+        conn.commit()
+    return released
 
 
 def claim_requests(vm: str, *, limit: int = 1, claimer: str | None = None) -> list[dict]:

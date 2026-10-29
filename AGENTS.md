@@ -154,13 +154,16 @@ install-skills --target {claude,opencode}` (skills only) or
 + opencode plugin + opencode subagent definitions — Plan 017 WI-2.1 and
 WI-2.3). Codex installs the canonical skills under `$HOME/.agents/skills` and
 records hash-tracked ownership under `$CODEX_HOME`. It also hash-owns narrow
-`SessionStart` orientation and `Stop` groups (the Stop handler is a no-op
-until Plan 025 Phase 4) in
+`SessionStart`, `UserPromptSubmit` and `Stop` groups (Plan 025 Phase 4:
+orientation, agent messages, turn extension) in
 `$CODEX_HOME/hooks.json`; the component plugin bundles the same canonical hook
 definitions below `plugins/agent-notes` (with drift checks against the canonical
 top-level skills). Hook trust remains an explicit operator action through `/hooks`.
-Stable `all` remains Claude + OpenCode
-and excludes candidate Codex and private Hermes. Both are
+`claude` also installs user-level hooks in `~/.claude/settings.json`, and `agy`
+merges a named hook into `~/.gemini/config/hooks.json`; all of them run the lean
+`agent-notes-hook <harness> <event>` entry point. `all` is Claude + OpenCode,
+plus Codex and agy where their home directory exists; private Hermes is
+excluded. All are
 idempotent; `--dry-run` / `--uninstall` supported. See
 Plan 017 §Implementation log for the opencode env-via-config-file
 decision (D1).

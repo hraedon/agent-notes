@@ -26,6 +26,7 @@ def test_component_owned_plugin_bundles_exact_canonical_skills() -> None:
     assert sorted(path.parent.name for path in skills_root.glob("*/SKILL.md")) == [
         "add-memory",
         "adversarial-review",
+        "agent-messages",
         "end",
         "file-breadcrumb",
         "find-breadcrumb",
