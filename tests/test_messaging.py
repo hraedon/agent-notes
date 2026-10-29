@@ -55,6 +55,14 @@ def _ids(rows: list[dict]) -> set[int]:
     return {r["id"] for r in rows}
 
 
+def _dsn() -> str:
+    # The DSN the module under test connects with. Other test modules swap the
+    # pool's database, so the session fixture's value can be stale.
+    from agent_notes.core.config import resolve_dsn
+
+    return resolve_dsn()
+
+
 def _sql(dsn: str, sql: str, params: tuple = ()) -> None:
     with psycopg.connect(dsn, autocommit=True) as conn:
         conn.execute(sql, params)
@@ -182,10 +190,10 @@ def test_concurrent_claim_has_exactly_one_winner(ws):
         assert len(winners) == 1, results
 
 
-def test_claim_skips_a_row_locked_by_another_connection(ws, vm, ephemeral_db):
+def test_claim_skips_a_row_locked_by_another_connection(ws, vm):
     s = _session(ws, vm)
     msg = _send(ws, to_session=s)["id"]
-    with psycopg.connect(ephemeral_db) as holder:
+    with psycopg.connect(_dsn()) as holder:
         holder.execute("SELECT id FROM agent_messages WHERE id = %s FOR UPDATE", (msg,))
         assert m.claim_deliverable(s) == []
         holder.rollback()
@@ -277,7 +285,7 @@ def test_resolve_harness_env(var, harness, vm):
     assert (got.source, got.paseo_agent_id) == ("env", "pa-1")
 
 
-def test_resolve_by_cwd(ws, vm, tmp_path, ephemeral_db):
+def test_resolve_by_cwd(ws, vm, tmp_path):
     repo = tmp_path / "repo"
     (repo / "sub").mkdir(parents=True)
     key = _session(ws, vm, harness="agy", cwd=str(repo))
@@ -289,7 +297,7 @@ def test_resolve_by_cwd(ws, vm, tmp_path, ephemeral_db):
     assert m.resolve_session(None, cwd=str(repo), env={}, vm=f"vm-{_uid()}") is None
 
     _sql(
-        ephemeral_db,
+        _dsn(),
         "UPDATE agent_sessions SET last_seen_at = now() - interval '11 minutes' "
         "WHERE session_key = %s",
         (key,),
@@ -435,7 +443,7 @@ def test_send_to_unregistered_session_is_allowed(ws, vm):
     assert msg["id"] in _ids(m.inbox(key))
 
 
-def test_expired_messages_are_filtered_and_pruned(ws, vm, ephemeral_db):
+def test_expired_messages_are_filtered_and_pruned(ws, vm):
     s = _session(ws, vm)
     live = _send(ws, to_session=s)["id"]
     dead = _send(ws, to_session=s, expires_in=timedelta(seconds=-1))["id"]
@@ -446,7 +454,7 @@ def test_expired_messages_are_filtered_and_pruned(ws, vm, ephemeral_db):
 
     stale = _session(ws, vm)
     _sql(
-        ephemeral_db,
+        _dsn(),
         "UPDATE agent_sessions SET last_seen_at = now() - interval '25 hours' "
         "WHERE session_key = %s",
         (stale,),
@@ -527,10 +535,10 @@ def test_await_times_out(ws, vm):
 # ---------------------------------------------------------------------------
 
 
-def test_insert_notifies_with_ids_and_addresses_only(ws, vm, ephemeral_db):
+def test_insert_notifies_with_ids_and_addresses_only(ws, vm):
     import json
 
-    with psycopg.connect(ephemeral_db, autocommit=True) as conn:
+    with psycopg.connect(_dsn(), autocommit=True) as conn:
         conn.execute(f"LISTEN {m.CHANNEL}")
         msg = _send(ws, to_session=f"{vm}/claude/n1", body="secret content", wake=True)
         notes = list(conn.notifies(timeout=3, stop_after=1))
