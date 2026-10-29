@@ -168,7 +168,10 @@ def verify_hash_chain(op: dict, existing_op_ids: set[str]) -> Violation | None:
     """
     parents = op.get("parent_op_ids") or []
     for parent in parents:
-        if parent not in existing_op_ids:
+        # Native writers parent the entity's identity (``entity_id``). That is
+        # not an op_id for entities whose id predates the current derivation,
+        # and op parents are hashed into op_id so cannot be rewritten.
+        if parent not in existing_op_ids and parent != op.get("entity_id"):
             return Violation(
                 op_id=op["op_id"],
                 rule="parent",
@@ -281,7 +284,8 @@ def _verify_entity(
     cur = conn.cursor(row_factory=dict_row)
     cur.execute(
         """
-        SELECT op_id, entity_type, op_type, lamport, payload, parent_op_ids, actor_id
+        SELECT op_id, entity_id, entity_type, op_type, lamport, payload,
+               parent_op_ids, actor_id
         FROM op_log
         WHERE entity_id = %s
         ORDER BY lamport ASC, op_id ASC
@@ -355,7 +359,8 @@ def verify_all(
         if entity_type:
             cur.execute(
                 """
-                SELECT op_id, entity_type, op_type, lamport, payload, parent_op_ids, actor_id
+                SELECT op_id, entity_id, entity_type, op_type, lamport, payload,
+                       parent_op_ids, actor_id
                 FROM op_log
                 WHERE entity_type = %s
                 ORDER BY lamport ASC, op_id ASC
@@ -365,7 +370,8 @@ def verify_all(
         else:
             cur.execute(
                 """
-                SELECT op_id, entity_type, op_type, lamport, payload, parent_op_ids, actor_id
+                SELECT op_id, entity_id, entity_type, op_type, lamport, payload,
+                       parent_op_ids, actor_id
                 FROM op_log
                 ORDER BY lamport ASC, op_id ASC
                 """

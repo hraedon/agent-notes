@@ -18,7 +18,7 @@ import pytest
 from agent_notes.core import db as coredb
 from agent_notes.core import kernel, projection
 from agent_notes.core.db import _conn
-from agent_notes.core.verifier import verify_cache
+from agent_notes.core.verifier import verify_cache, verify_entity
 from agent_notes.core.work_item import _common, _seal
 from agent_notes.core.work_item_model import WorkItemModel
 from agent_notes.scripts import backfill_native_op_log as backfill
@@ -154,6 +154,109 @@ class TestSeal:
         rebuilt = _cache_row(project, "P25-003")
         assert rebuilt["status"] == "done"
         assert rebuilt["title"] == "renamed in regista"
+
+
+class TestSealEdgeShapes:
+    """Shapes found in production by the first bulk backfill."""
+
+    def _mirror_back(self, project, native: dict, *, state: str) -> dict:
+        """Regista re-mirrors a natively deleted item: the cache row returns."""
+        with _conn() as conn:
+            projection.mirror_from_regista(
+                conn,
+                project_id=project.id,
+                identifier=native["identifier"],
+                entity_id=native["entity_id"],
+                regista_work_item_id=uuid.uuid4(),
+                state=state,
+                custom_fields={"title": "back from regista", "kind": "bug"},
+                embed=lambda _t: _vec(),
+            )
+            conn.commit()
+        return _cache_row(project, native["identifier"])
+
+    def test_tombstoned_entity_with_a_resurrected_cache_row_seals(self, project):
+        native = WorkItemModel.file_work_item(
+            project_id=project.id,
+            identifier="P25-020",
+            title="deleted natively",
+            status="open",
+            embedding=_vec(),
+        )
+        assert WorkItemModel.delete_work_item(project.id, "P25-020")
+        row = self._mirror_back(project, native, state="done")
+        with _conn() as conn:
+            # Native close after the delete, as on adcs-lens WI-029.
+            kernel.commit_op(
+                conn,
+                entity_id=row["entity_id"],
+                entity_type="work_item",
+                op_type="close",
+                payload={"reason": "manual_close"},
+                parent_op_ids=[row["entity_id"]],
+                actor_id="human:test",
+            )
+            conn.commit()
+            assert kernel.fold_work_item_state(conn, row["entity_id"]) is None
+
+        report = backfill.seal_pass(project="p25-proj", apply=True, actor_id="service:test")
+        assert report["failures"] == []
+        assert report["per_project"]["p25-proj"]["no_op_chain"] == 1
+
+        with _conn() as conn:
+            _folded, diffs = _seal.drift(conn, row)
+        assert diffs == []
+        with _conn() as conn:
+            kernel.fold_all_work_items(conn)
+            conn.commit()
+        assert _cache_row(project, "P25-020")["status"] == "done"
+        assert verify_entity(row["entity_id"]).ok()
+        assert verify_cache(entity_id=row["entity_id"]).ok()
+
+    def test_a_genuinely_deleted_entity_stays_absent(self, project):
+        native = WorkItemModel.file_work_item(
+            project_id=project.id,
+            identifier="P25-021",
+            title="really deleted",
+            status="open",
+            embedding=_vec(),
+        )
+        assert WorkItemModel.delete_work_item(project.id, "P25-021")
+        backfill.seal_pass(project=None, apply=True, actor_id="service:test")
+        with _conn() as conn:
+            assert kernel.fold_work_item_state(conn, native["entity_id"]) is None
+
+    def test_entity_id_that_is_not_an_op_id_seals_without_dangling_parents(self, project):
+        entity_id = "ab" * 32  # predates the current derivation: no op has this id
+        wid = uuid.uuid4()
+        with _conn() as conn:
+            projection.mirror_from_regista(
+                conn,
+                project_id=project.id,
+                identifier="P25-022",
+                entity_id=entity_id,
+                regista_work_item_id=wid,
+                state="in_progress",
+                custom_fields={"title": "legacy id", "kind": "todo"},
+                embed=lambda _t: _vec(),
+            )
+            conn.commit()
+        row = _cache_row(project, "P25-022")
+
+        report = backfill.seal_pass(project="p25-proj", apply=True, actor_id="service:test")
+        assert report["failures"] == []
+        with _conn() as conn:
+            ops = kernel._get_entity_ops(conn, entity_id)
+            drift = _seal.drift(conn, row)[1]
+        assert drift == []
+        assert [o["op_type"] for o in ops] == ["create", "snapshot"]
+        assert ops[1]["parent_op_ids"] == [ops[0]["op_id"]]
+        assert ops[0]["op_id"] != entity_id
+        assert verify_entity(entity_id).ok()
+
+        # Later native ops chain onto entity_id; the verifier accepts that anchor.
+        WorkItemModel.update_work_item(project.id, "P25-022", severity="low")
+        assert verify_entity(entity_id).ok()
 
 
 class TestLazySealOnNativeWrites:

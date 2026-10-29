@@ -361,6 +361,11 @@ def fold_work_item_state(conn: psycopg.Connection, entity_id: str) -> dict | Non
                 tombstoned = True
             else:
                 _apply_op_to_state(state, op)
+                if op["op_type"] == "snapshot" and (op.get("payload") or {}).get("sealed_state"):
+                    # A seal restates the whole live row, so it supersedes an
+                    # earlier tombstone (regista re-mirrored a natively
+                    # deleted item and the cache row outlived the delete).
+                    tombstoned = False
 
         if status_ops:
             state["status"] = _resolve_status_lattice(status_ops, state.get("status"))

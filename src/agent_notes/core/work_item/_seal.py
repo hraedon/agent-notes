@@ -7,9 +7,11 @@ the only authority, the next native write folds the entity: a chainless row
 fails to fold, and a stale chain silently reverts the row.
 
 ``seal`` appends the ops that make the fold reproduce the cached row exactly:
-a ``create`` stub for a chainless entity (its op_id is the regista-era
-entity_id, so later ``parent_op_ids=[entity_id]`` references resolve), then a
-``snapshot`` op carrying the cached state. It writes nothing when the fold
+a ``create`` stub for a chainless entity (usually its op_id is the regista-era
+entity_id; the snapshot parents the create's real op_id either way, so it never
+dangles), then a ``snapshot`` op carrying the cached state. The snapshot also
+supersedes an earlier tombstone: regista re-mirrored some natively deleted
+items, so the cache row is the live truth. It writes nothing when the fold
 already matches, so it is safe to call before every native mutation and from
 the bulk backfill (``scripts/backfill_native_op_log``).
 """
@@ -73,13 +75,16 @@ def drift(conn: psycopg.Connection, row: dict) -> tuple[dict | None, list[str]]:
     return folded, diffs
 
 
-def _has_create(conn: psycopg.Connection, entity_id: str) -> bool:
-    cur = conn.cursor()
+def _create_op_id(conn: psycopg.Connection, entity_id: str) -> str | None:
+    """The op_id of the entity's earliest ``create`` op, if it has one."""
+    cur = conn.cursor(row_factory=dict_row)
     cur.execute(
-        "SELECT 1 FROM op_log WHERE entity_id = %s AND op_type = 'create' LIMIT 1",
+        "SELECT op_id FROM op_log WHERE entity_id = %s AND op_type = 'create' "
+        "ORDER BY lamport, op_id LIMIT 1",
         (entity_id,),
     )
-    return cur.fetchone() is not None
+    row = cur.fetchone()
+    return row["op_id"] if row is not None else None
 
 
 def _max_lamport(conn: psycopg.Connection, entity_id: str) -> int:
@@ -106,15 +111,16 @@ def seal(conn: psycopg.Connection, row: dict, actor_id: str) -> list[str]:
     entity_id = row["entity_id"]
     regista_id = row.get("regista_work_item_id")
     regista_id = str(regista_id) if regista_id is not None else None
-    if not _has_create(conn, entity_id):
-        kernel.commit_op(
+    anchor = _create_op_id(conn, entity_id)
+    if anchor is None:
+        anchor = kernel.commit_op(
             conn,
             entity_id=entity_id,
             entity_type=ENTITY_TYPE,
             op_type="create",
             payload={"identifier": row["identifier"], "regista_work_item_id": regista_id},
             actor_id=actor_id,
-        )
+        )["op_id"]
 
     sealed = {f: row.get(f) for f in SEALED_FIELDS}
     sealed["external_refs"] = dict(sealed["external_refs"] or {})
@@ -135,7 +141,7 @@ def seal(conn: psycopg.Connection, row: dict, actor_id: str) -> list[str]:
             # Distinguishes a re-seal of an identical state at a later point.
             "after_lamport": _max_lamport(conn, entity_id),
         },
-        parent_op_ids=[entity_id],
+        parent_op_ids=[anchor],
         actor_id=actor_id,
     )
 
