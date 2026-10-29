@@ -512,7 +512,7 @@ lineage.
   everything as `no-recorded-implementers`. `_independence` now has its own
   query, and the tests pin the implementer set's contents.
 
-### 2026-10-29: Phases 2 and 2b (D1, D6), not yet deployed
+### 2026-10-29: Phases 2 and 2b (D1, D6), deployed
 
 - **Deleted.** `core/regista_face.py`, `core/work_item/_regista.py`,
   `core/outbox.py`, `cli/outbox.py`, `core/reconcile.py`, `core/projection.py`,
@@ -562,3 +562,33 @@ lineage.
   removes the hook; delete the stub once none remain. The protocol in
   `core/memory_engine.py` stays, because `native_engine`, `orient` and
   `search` use its types.
+
+### 2026-10-29: Phases 2/2b deployed (`f5762a6`), with UTC log stamps (`f033221`)
+
+- **Before deploying.**
+  - No host had a legacy outbox, so there was nothing to archive (D5).
+  - `AGENT_NOTES_REGISTA_WRITES=1` was still set, alongside `REGISTA_DSN`
+    and `REGISTA_KEY_PATH`, in mvmhermes01's `~/.claude/settings.json` env.
+    It would have made every write there fail with `RETIRED_SETTING`.
+    Removed; the backup is `settings.json.bak-20261029-regista`.
+    `install-harness claude` was **not** run there: it would have newly
+    installed the whole Claude harness on that host.
+- **Deploy.** Reinstalled with `--reinstall` on mvmcc02, Windows and
+  mvmhermes01, refreshed the harnesses, and restarted the dispatchers. On
+  Windows, the wrapper and dispatcher processes were stopped first.
+- **Checks.**
+  - `doctor`: `healthy`, `degraded: false` on mvmcc02 and mvmhermes01.
+  - Windows fails only `codex_harness`. `codex plugin list` itself fails
+    there, because two configured Codex marketplaces point at directories
+    with no manifest; that's local config.
+  - Dispatcher logs now read `2026-10-29T20:48:10.071Z`.
+  - Production smoke test: a work-item file/update/delete cycle (WI-084), a
+    memory add/delete cycle, and `memory recall`, which used the native
+    engine and returned 10 results.
+  - The Hermes `pre_llm_call` hook returns orientation with Hermes's own
+    `PYTHONPATH` set.
+- **Still open from Phase 2's exit:**
+  - the week with `REGISTA_DSN` unset (no code reads it any more);
+  - deleting the `outbox` stub once `agent-notes init` has removed the 51
+    per-repo Stop hooks (41 on mvmcc02, 5 on Windows, 5 on mvmhermes01).
+
