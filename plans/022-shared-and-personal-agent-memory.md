@@ -1,6 +1,8 @@
 # Plan 022 — Shared and personal agent memory
 
-**Status:** Proposed 2026-07-18.
+**Status:** Superseded 2026-10-29. Plan 025 shipped the scope tiers, and Plan 027
+is the memory roadmap. Its regista, signed-note and provider-bank dependencies
+are retired (Plan 026). Proposed 2026-07-18.
 **Owner:** agent-notes owns exact-memory authoring, learned-memory scope mapping,
 authorized recall composition, publication, deletion, and provider conformance.
 **Depends:** Plan 018 (signed note entities), Plan 020 (pluggable learned-memory

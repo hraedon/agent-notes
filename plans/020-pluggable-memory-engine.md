@@ -1,6 +1,7 @@
 # Plan 020 — Pluggable memory engine: preserve signed knowledge, delegate learned recall
 
-**Status:** Proposed 2026-07-11.
+**Status:** Superseded 2026-10-29 by Plans 026 (D6, Hindsight retired) and 027
+(memory roadmap). Proposed 2026-07-11.
 **Author:** GPT-5.6 Sol, after review of Hindsight, Mem0, Letta, Cognee,
 Zep/Graphiti, MemPalace, and the existing agent-notes implementation.
 **Depends:** Plan 018 (signed knowledge entities), Plan 017 (suite config and
