@@ -61,17 +61,25 @@ def resolve_git_target(
     repository: Path,
     base_revision: str,
     head_revision: str,
+    *,
+    require_clean: bool = True,
 ) -> ResolvedGitTarget:
-    """Resolve a clean, local, ancestor-based review range to immutable IDs."""
+    """Resolve a clean, local, ancestor-based review range to immutable IDs.
+
+    ``require_clean=False`` skips the operator-worktree check for callers that
+    review fetched commits by SHA in a shared checkout (the Plan 025
+    dispatcher); the review still runs in a detached worktree at ``head``.
+    """
     requested = repository.resolve()
     root_text = _decode_line(_git(requested, "rev-parse", "--show-toplevel"), "repository root")
     root = Path(root_text).resolve()
     if requested != root:
         raise ReviewGitError(f"repository path must be the Git root: {root}")
 
-    dirty = _git(root, "status", "--porcelain=v1", "--untracked-files=normal")
-    if dirty:
-        raise ReviewGitError("operator worktree is dirty")
+    if require_clean:
+        dirty = _git(root, "status", "--porcelain=v1", "--untracked-files=normal")
+        if dirty:
+            raise ReviewGitError("operator worktree is dirty")
 
     base_sha = _resolve_commit(root, base_revision, "base")
     head_sha = _resolve_commit(root, head_revision, "head")
