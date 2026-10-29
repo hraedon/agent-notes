@@ -21,6 +21,7 @@ from agent_notes.core.work_item._delegated_review import (
     brief_review_request,
     evaluate_review,
     parse_review_result,
+    prepare_review,
     render_review_prompt,
 )
 
@@ -96,11 +97,11 @@ def review_repo(tmp_path: Path) -> tuple[Path, str, str]:
     _git(root, "init")
     _git(root, "config", "user.name", "Test Reviewer")
     _git(root, "config", "user.email", "reviewer@example.test")
-    (root / "code.py").write_text("value = 1\n", encoding="utf-8")
+    (root / "code.py").write_text("value = 1\n", encoding="utf-8", newline="\n")
     _git(root, "add", "code.py")
     _git(root, "commit", "-m", "base")
     base = _git(root, "rev-parse", "HEAD")
-    (root / "code.py").write_text("value = 2\n", encoding="utf-8")
+    (root / "code.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
     _git(root, "commit", "-am", "head")
     head = _git(root, "rev-parse", "HEAD")
     return root, base, head
@@ -347,3 +348,194 @@ def test_dirty_checkout_is_allowed_only_when_requested(review_repo) -> None:
     evaluation = evaluate_review(_brief(root, base, head, allow_dirty_checkout=True), FakeRunner())
     assert evaluation.artifact.target.head_sha == head
     assert (root / "untracked.txt").read_text(encoding="utf-8") == "dirty"
+
+
+# ---------------------------------------------------------------------------
+# Plan 025 6a: the reviewer sees the bounded diff, not just the changed paths
+# ---------------------------------------------------------------------------
+
+
+def _commit_all(root: Path, message: str) -> str:
+    _git(root, "add", "-A")
+    _git(root, "commit", "-m", message)
+    return _git(root, "rev-parse", "HEAD")
+
+
+@pytest.fixture
+def multi_repo(tmp_path: Path) -> tuple[Path, str, str]:
+    root = tmp_path / "multi"
+    root.mkdir()
+    _git(root, "init")
+    _git(root, "config", "user.name", "Test Reviewer")
+    _git(root, "config", "user.email", "reviewer@example.test")
+    (root / "keep.txt").write_text("unchanged\n", encoding="utf-8", newline="\n")
+    (root / "a_big.txt").write_text(
+        "".join(f"old {i}\n" for i in range(400)), encoding="utf-8", newline="\n"
+    )
+    (root / "b_small.py").write_text("x = 1\n", encoding="utf-8", newline="\n")
+    (root / "c_small.py").write_text("y = 1\n", encoding="utf-8", newline="\n")
+    base = _commit_all(root, "base")
+    (root / "a_big.txt").write_text(
+        "".join(f"new {i}\n" for i in range(400)), encoding="utf-8", newline="\n"
+    )
+    (root / "b_small.py").write_text("x = 2\n", encoding="utf-8", newline="\n")
+    (root / "c_small.py").write_text("y = 2\n", encoding="utf-8", newline="\n")
+    (root / "blob.bin").write_bytes(b"\x00\x01\x02binary\xff" * 50)
+    head = _commit_all(root, "head")
+    return root, base, head
+
+
+def _prepare(request: ReviewRequest, monkeypatch, budget: int | None = None):
+    if budget is None:
+        monkeypatch.delenv("AGENT_NOTES_REVIEW_DIFF_BUDGET", raising=False)
+    else:
+        monkeypatch.setenv("AGENT_NOTES_REVIEW_DIFF_BUDGET", str(budget))
+    return prepare_review(request)
+
+
+def test_small_diff_is_included_in_full(review_repo, monkeypatch) -> None:
+    root, base, head = review_repo
+    prepared = _prepare(_request(root, base, head), monkeypatch)
+    prompt = prepared.prompt
+    assert "BEGIN UNTRUSTED DIFF sha256:" in prompt
+    assert "-value = 1\n+value = 2\n" in prompt
+    assert "code.py | 2 +-" in prompt
+    assert "Omitted from the diff above" not in prompt
+    assert "You have no Git tool" in prompt
+    diff = prepared.target.diff
+    assert diff is not None
+    assert diff.included_paths == ("code.py",) and diff.omitted == ()
+    assert diff.patch == _git(root, "diff", "-U3", base, head) + "\n"
+
+
+def test_work_item_and_brief_prompts_carry_the_same_diff_section(review_repo, monkeypatch) -> None:
+    root, base, head = review_repo
+    item = _prepare(_request(root, base, head), monkeypatch).prompt
+    brief = _prepare(_brief(root, base, head), monkeypatch).prompt
+    start = "Change summary from base to head"
+    assert item[item.index(start) :] == brief[brief.index(start) :]
+
+
+def test_over_budget_truncation_is_deterministic_and_lists_omitted(multi_repo, monkeypatch) -> None:
+    root, base, head = multi_repo
+    request = _request(root, base, head)
+    first = _prepare(request, monkeypatch, budget=2048)
+    second = _prepare(request, monkeypatch, budget=2048)
+    assert first.prompt == second.prompt
+    assert first.prompt_digest == second.prompt_digest
+
+    diff = first.target.diff
+    assert diff is not None
+    # The 400-line file is skipped whole; later small files still fit.
+    assert diff.included_paths == ("b_small.py", "blob.bin", "c_small.py")
+    assert [item.path for item in diff.omitted] == ["a_big.txt"]
+    assert diff.patch_bytes <= 2048
+    assert "-x = 1\n+x = 2\n" in diff.patch and "+y = 2" in diff.patch
+    assert "old 0" not in first.prompt
+    assert "Omitted from the diff above (over the byte budget): 1 file(s)" in first.prompt
+    assert "- a_big.txt +400 -400\n" in first.prompt
+    assert "Read each one at head" in first.prompt
+
+
+def test_truncation_never_splits_a_file_diff(multi_repo, monkeypatch) -> None:
+    root, base, head = multi_repo
+    for budget in (0, 200, 600, 2048, 6000, 48 * 1024):
+        diff = _prepare(_request(root, base, head), monkeypatch, budget=budget).target.diff
+        assert diff is not None
+        assert diff.patch_bytes <= budget
+        assert len(diff.included_paths) + len(diff.omitted) == 4
+        for path in diff.included_paths:
+            if path == "blob.bin":
+                continue
+            whole = _git(root, "diff", "-U3", base, head, "--", path) + "\n"
+            assert whole in diff.patch
+    # With a budget that fits everything nothing is omitted.
+    full = _prepare(_request(root, base, head), monkeypatch).target.diff
+    assert full is not None and full.omitted == ()
+
+
+def test_binary_files_are_summarized_not_dumped(multi_repo, monkeypatch) -> None:
+    root, base, head = multi_repo
+    prepared = _prepare(_request(root, base, head), monkeypatch)
+    assert "Binary file changed (content not shown): blob.bin\n" in prepared.prompt
+    assert "\x00" not in prepared.prompt and "binary\xff" not in prepared.prompt
+    assert "blob.bin" in prepared.prompt.split("BEGIN DIFF STAT")[1]
+    # A binary file that cannot fit is listed as omitted without line counts.
+    tiny = _prepare(_request(root, base, head), monkeypatch, budget=0)
+    assert "- blob.bin\n" in tiny.prompt
+    assert tiny.target.diff is not None and tiny.target.diff.patch == ""
+
+
+def test_prompt_digest_is_stable_and_tracks_the_diff(review_repo, monkeypatch) -> None:
+    root, base, head = review_repo
+    request = _request(root, base, head)
+    first = _prepare(request, monkeypatch)
+    again = _prepare(request, monkeypatch)
+    assert first.prompt_digest == again.prompt_digest
+
+    (root / "code.py").write_text("value = 3\n", encoding="utf-8", newline="\n")
+    other_head = _commit_all(root, "other head")
+    other = _prepare(_request(root, base, other_head), monkeypatch)
+    assert other.prompt_digest != first.prompt_digest
+
+    # Same commits, different budget: the prompt only differs when the diff does.
+    assert _prepare(request, monkeypatch, budget=0).prompt_digest != first.prompt_digest
+    assert _prepare(request, monkeypatch, budget=10**6).prompt_digest == first.prompt_digest
+
+
+def test_invalid_budget_env_falls_back_to_default(review_repo, monkeypatch) -> None:
+    root, base, head = review_repo
+    default = _prepare(_request(root, base, head), monkeypatch)
+    for value in ("many", "-5", ""):
+        monkeypatch.setenv("AGENT_NOTES_REVIEW_DIFF_BUDGET", value)
+        assert prepare_review(_request(root, base, head)).prompt_digest == default.prompt_digest
+    assert default.target.diff is not None and default.target.diff.budget_bytes == 48 * 1024
+
+
+def test_artifact_records_diff_digests_but_not_the_diff(review_repo, monkeypatch) -> None:
+    root, base, head = review_repo
+    monkeypatch.delenv("AGENT_NOTES_REVIEW_DIFF_BUDGET", raising=False)
+    first = evaluate_review(_request(root, base, head), FakeRunner())
+    second = evaluate_review(_request(root, base, head), FakeRunner())
+    recorded = first.artifact.to_dict()["git"]["diff"]
+    diff = first.artifact.target.diff
+    assert diff is not None
+    assert recorded == {
+        "stat_digest": diff.stat_digest,
+        "patch_digest": diff.patch_digest,
+        "patch_bytes": diff.patch_bytes,
+        "included_file_count": 1,
+        "omitted_paths": [],
+    }
+    assert first.artifact.digest == second.artifact.digest
+    assert b"value = 2" not in first.artifact.canonical_bytes()
+
+    monkeypatch.setenv("AGENT_NOTES_REVIEW_DIFF_BUDGET", "0")
+    truncated = evaluate_review(_request(root, base, head), FakeRunner())
+    assert truncated.artifact.to_dict()["git"]["diff"]["omitted_paths"] == ["code.py"]
+    assert truncated.artifact.digest != first.artifact.digest
+
+
+def test_diff_uses_literal_paths_and_ignores_diff_config(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "odd"
+    root.mkdir()
+    _git(root, "init")
+    _git(root, "config", "user.name", "Test Reviewer")
+    _git(root, "config", "user.email", "reviewer@example.test")
+    odd = root / "dir with space" / "[x] y.py"
+    odd.parent.mkdir()
+    odd.write_text("a = 1\n", encoding="utf-8", newline="\n")
+    (root / "x.py").write_text("untouched\n", encoding="utf-8", newline="\n")
+    base = _commit_all(root, "base")
+    odd.write_text("a = 2\n", encoding="utf-8", newline="\n")
+    head = _commit_all(root, "head")
+    # Config that would change the diff text if the flags did not pin it.
+    _git(root, "config", "diff.noprefix", "true")
+    _git(root, "config", "color.ui", "always")
+    _git(root, "config", "diff.external", "false")
+
+    diff = _prepare(_request(root, base, head), monkeypatch).target.diff
+    assert diff is not None
+    assert diff.included_paths == ("dir with space/[x] y.py",)
+    assert "--- a/dir with space/[x] y.py" in diff.patch
+    assert "+a = 2\n" in diff.patch and "\x1b[" not in diff.patch
