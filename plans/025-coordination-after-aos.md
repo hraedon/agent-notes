@@ -484,7 +484,7 @@ codex session W/codex/T                                               dispatcher
    |---|---|
    | Paseo-hosted and idle | **L3**: the Windows dispatcher runs `paseo send`, and Codex starts a turn with the verdict. Fully unattended, so this is the configuration the scenario is designed for |
    | Still in a turn and chose to wait | **L0**: `msg await --reply-to <id>` returns it |
-   | Turn ending with no `await` | **L2**: the Stop hook claims it and extends the turn |
+   | Turn ending with no `await` | **L2**: the Stop hook claims it and extends the turn, if the session's `wake_policy` allows waking (Paseo-hosted sessions by default; others after `agent-notes session policy --wake-policy direct`). Otherwise it arrives with the next prompt (L1) |
    | Started by hand and idle | **L1**: it arrives with your next prompt. To make such a session wakeable, `paseo import` it (Phase 0 h) |
 
 The reverse direction (Claude asks Codex for a review) needs a Codex runner in
