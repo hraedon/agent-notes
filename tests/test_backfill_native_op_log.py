@@ -9,6 +9,7 @@ native write path) make the op-log fold reproduce the cache.
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 
 import psycopg
@@ -240,3 +241,94 @@ class TestImportUnmirrored:
 
         rerun = backfill.import_pass(apply=True, skip={"P25-022"}, **kwargs)
         assert "imported" not in rerun["summary"]
+
+
+class TestSealRaces:
+    """A seal must never write a cache row that another writer has superseded.
+
+    Each test lets writer B commit a title change after the sealing path has
+    started. Without a row lock the sealer folds B's op, compares it with the
+    row it read before B committed, and seals the stale title over B's edit.
+    """
+
+    @pytest.fixture
+    def race_project(self):
+        ws = coredb.get_or_create_workspace("default", "Default Workspace")
+        return coredb.get_or_create_project(
+            ws.id, slug="p25-race", name="p25-race", repo_root="/projects/p25-race"
+        )
+
+    @staticmethod
+    def _file(project, identifier):
+        WorkItemModel.file_work_item(
+            project_id=project.id,
+            identifier=identifier,
+            title="original",
+            status="open",
+            embedding=_vec(0.5),
+        )
+
+    @staticmethod
+    def _rename_in_thread(project, identifier):
+        errors: list[BaseException] = []
+
+        def run():
+            try:
+                WorkItemModel.update_work_item(project.id, identifier, title="renamed by B")
+            except BaseException as exc:  # surfaced by the test
+                errors.append(exc)
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        return thread, errors
+
+    def _interleave_on_first_drift(self, monkeypatch, identifier):
+        """Run writer B (bounded wait) the first time the sealer checks drift."""
+        real_drift = _seal.drift
+        state: dict = {}
+
+        def drift(conn, row):
+            if row["identifier"] == identifier and "thread" not in state:
+                thread, errors = self._rename_in_thread(state["project"], identifier)
+                state["thread"], state["errors"] = thread, errors
+                # A locked row makes B wait for us; give up after a bound.
+                thread.join(timeout=2.0)
+            return real_drift(conn, row)
+
+        monkeypatch.setattr(_seal, "drift", drift)
+        return state
+
+    def test_concurrent_native_write_is_not_reverted(self, race_project, monkeypatch):
+        self._file(race_project, "RACE-001")
+        state = self._interleave_on_first_drift(monkeypatch, "RACE-001")
+        state["project"] = race_project
+
+        WorkItemModel.update_work_item(race_project.id, "RACE-001", severity="low")
+        state["thread"].join(timeout=30)
+        assert not state["thread"].is_alive()
+        assert state["errors"] == []
+
+        row = _cache_row(race_project, "RACE-001")
+        assert row["title"] == "renamed by B"
+        assert row["severity"] == "low"
+        with _conn() as conn:
+            kernel.fold_all_work_items(conn)
+            conn.commit()
+        assert _cache_row(race_project, "RACE-001")["title"] == "renamed by B"
+
+    def test_backfill_does_not_reseal_a_superseded_row(self, race_project, monkeypatch):
+        self._file(race_project, "RACE-002")
+        state = self._interleave_on_first_drift(monkeypatch, "RACE-002")
+        state["project"] = race_project
+
+        report = backfill.seal_pass(project="p25-race", apply=True, actor_id="service:test")
+        state["thread"].join(timeout=30)
+        assert not state["thread"].is_alive()
+        assert state["errors"] == []
+        assert report["failures"] == []
+
+        assert _cache_row(race_project, "RACE-002")["title"] == "renamed by B"
+        with _conn() as conn:
+            kernel.fold_all_work_items(conn)
+            conn.commit()
+        assert _cache_row(race_project, "RACE-002")["title"] == "renamed by B"
