@@ -39,9 +39,16 @@ are no longer propagated, and a re-install removes them wherever the manifest
   value are warned and skipped. Skills use the same ``SKILL.md`` directory layout
   as claude. No plugin or agents for hermes.
 
+Lifecycle hooks (Plan 025 Phase 4, ``agent-notes-hook``): **claude** gets
+user-level SessionStart / UserPromptSubmit / Stop groups in ``settings.json``;
+**codex** gets SessionStart / UserPromptSubmit / Stop groups in
+``$CODEX_HOME/hooks.json``; **agy** gets one named hook (``agent-notes``) in
+``~/.gemini/config/hooks.json`` and skills under ``~/.gemini/config/skills``.
+``all`` adds codex and agy only where their home directory exists.
+
 Idempotency + uninstall: a sidecar manifest (``.agent-notes-harness.json`` next
 to each harness config) records exactly what install-harness wrote (env keys,
-skill names, plugin bool, and Codex hook-group hashes). ``--uninstall`` removes
+skill names, plugin bool, and hook-group hashes). ``--uninstall`` removes
 only those entries — user-authored config, Cairn hooks, and pre-existing secrets
 are never clobbered (contract §3 rules 2–4).
 """
