@@ -2151,7 +2151,8 @@ def _harness_detected(harness: str, home: Path | None = None) -> bool:
     if harness == "agy":
         return _agy_config_dir(home).parent.is_dir()
     if harness == "hermes":
-        return ((home or Path.home()) / ".hermes").is_dir()
+        # A bare ~/.hermes (e.g. an empty plugins/ left behind) isn't an install.
+        return ((home or Path.home()) / ".hermes" / "config.yaml").is_file()
     return True
 
 

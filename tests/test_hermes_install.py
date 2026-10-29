@@ -266,6 +266,10 @@ def test_approval_note_depends_on_hermes_allowlist(tmp_path):
 
 def test_all_includes_hermes_only_where_it_is_installed(tmp_path):
     assert "hermes" not in _targets_for("all", tmp_path)
-    (tmp_path / ".hermes").mkdir()
+    (tmp_path / ".hermes" / "plugins").mkdir(parents=True)
+    # An empty ~/.hermes left behind isn't an install.
+    assert "hermes" not in _targets_for("all", tmp_path)
+    (tmp_path / ".hermes" / "config.yaml").write_text("model: x
+", encoding="utf-8")
     assert _targets_for("all", tmp_path) == ["claude", "opencode", "hermes"]
     assert _targets_for("hermes", tmp_path.parent) == ["hermes"]
