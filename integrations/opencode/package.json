@@ -1,7 +1,7 @@
 {
   "name": "agent-notes-opencode",
   "version": "0.2.0",
-  "description": "agent-notes lifecycle plugin for OpenCode 2 — orientation on session start, reconciliation on compaction",
+  "description": "agent-notes lifecycle plugin for OpenCode 2 — orientation on session start, mailbox delivery per prompt, reconciliation on compaction",
   "main": "index.js",
   "type": "module",
   "engines": {
