@@ -15,6 +15,7 @@ import sys
 import uuid
 from pathlib import Path
 
+import psycopg
 import pytest
 
 from agent_notes.core import db as coredb
@@ -383,6 +384,31 @@ def test_stop_extends_turn_until_the_cap_and_human_prompt_resets(monkeypatch, ws
     assert m.get_session(key)["auto_continues"] == 3
     _run_hook(monkeypatch, "claude", "user-prompt-submit", _claude(sid, tmp_path, prompt="human"))
     assert m.get_session(key)["auto_continues"] == 0
+
+
+def test_stop_wake_resumes_once_the_counter_has_decayed(monkeypatch, ws, tmp_path):
+    """A harness with no per-prompt hook (Codex) never resets; time must."""
+    from agent_notes.core.config import resolve_dsn
+
+    sid = _uid()
+    key = _key("codex", sid)
+    _run_hook(monkeypatch, "codex", "user-prompt-submit", _claude(sid, tmp_path, prompt="go"))
+    m.set_session_policy(key, wake_policy="direct")
+    for _ in range(3):
+        m.bump_auto_continue(key)
+    wake = _send(ws, key, "after the window", wake=True)
+    assert _run_hook(monkeypatch, "codex", "stop", _claude(sid, tmp_path)) == {"continue": True}
+    assert m.get_message(wake["id"])["claimed_by"] is None
+
+    with psycopg.connect(resolve_dsn(), autocommit=True) as conn:
+        conn.execute(
+            "UPDATE agent_sessions SET auto_continue_at = now() - interval '2 hours' "
+            "WHERE session_key = %s",
+            (key,),
+        )
+    out = _run_hook(monkeypatch, "codex", "stop", _claude(sid, tmp_path))
+    assert out["decision"] == "block" and "after the window" in out["reason"]
+    assert m.get_session(key)["auto_continues"] == 1
 
 
 def test_stop_wake_can_be_disabled_and_cap_configured(monkeypatch, ws, tmp_path):

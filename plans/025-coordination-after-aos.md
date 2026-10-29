@@ -279,7 +279,8 @@ CREATE TABLE agent_sessions (
                   CHECK (wake_policy IN ('none','direct','any-direct-from-project')),
     trust         TEXT NOT NULL DEFAULT 'normal'
                   CHECK (trust IN ('normal','untrusted-input')),
-    auto_continues INTEGER NOT NULL DEFAULT 0, -- reset on each human prompt (§6)
+    auto_continues INTEGER NOT NULL DEFAULT 0, -- reset on each human prompt, decays (§6)
+    auto_continue_at TIMESTAMPTZ,              -- last bump; added by 854
     started_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -389,6 +390,16 @@ waking, and the message waits for L1. Two agents can't ping-pong
 indefinitely. The cap is ours, and it applies on top of the harnesses' own
 caps (Claude's 8, agy's unknown one), because those reset whenever a tool is
 called. Two agents trading messages through tool calls would never hit them.
+
+The counter also decays, because a harness without a per-prompt hook (the
+installed Codex plugin has no UserPromptSubmit hook) never gets the reset, and
+would otherwise be unwakeable for good after the cap. `agent_sessions.
+auto_continue_at` (migration 854) is set to `now()` by every bump. The cap check
+(Stop hooks and dispatcher) reads the counter as 0 once `auto_continue_at` is
+older than `AGENT_NOTES_AUTO_CONTINUE_WINDOW` seconds (default 1800), and the
+next bump then starts from 1; that is one `UPDATE ... CASE`, so it is
+race-free. A NULL `auto_continue_at` with a nonzero counter counts as lapsed.
+A ping-pong loop runs within seconds or minutes, so the cap still stops it.
 
 The per-prompt hook can't tell a human prompt from a wake. Claude fires
 UserPromptSubmit on turns it starts on its own, and a Paseo `send` looks like

@@ -8,7 +8,7 @@ tool-specific config file. The precedence (blueprint §2.6 / bootstrap-contract
     process env  >  per-user suite.env  >  system suite.env  >  tool default
 
 The per-user file is at ``~/.config/agent-suite/suite.env`` (Linux) or
-``%APPDATA%/agent-suite/suite.env`` (Windows), overridable via
+``%LOCALAPPDATA%/agent-suite/agent-suite/suite.env`` (Windows), overridable via
 ``AGENT_SUITE_CONFIG``. The system file is at ``/etc/agent-suite/suite.env``
 (Linux) or ``%ProgramData%/agent-suite/suite.env`` (Windows).
 
@@ -44,7 +44,8 @@ def user_suite_env_path() -> Path:
 
     ``AGENT_SUITE_CONFIG`` overrides; otherwise the platformdirs default
     (``~/.config/agent-suite/suite.env`` on Linux,
-    ``%APPDATA%/agent-suite/suite.env`` on Windows).
+    ``%LOCALAPPDATA%/agent-suite/agent-suite/suite.env`` on Windows: platformdirs
+    repeats the app name as the author directory).
     """
     override = os.environ.get(_SUITE_USER_CONFIG_ENV)
     if override:

@@ -62,12 +62,14 @@ class L3Waker:
         paseo: PaseoClient | None,
         paseo_home: Path,
         max_auto_continues: int = DEFAULT_MAX_AUTO_CONTINUES,
+        auto_continue_window: float = messaging.DEFAULT_AUTO_CONTINUE_WINDOW,
         claimer: str | None = None,
     ) -> None:
         self.vm = vm
         self.paseo = paseo
         self.paseo_home = paseo_home
         self.max_auto_continues = max_auto_continues
+        self.auto_continue_window = auto_continue_window
         self.claimer = claimer or f"{vm}/dispatcher"
 
     # -- helpers ----------------------------------------------------------
@@ -139,11 +141,11 @@ class L3Waker:
             return WakeResult(
                 REFUSED, "no message may wake this session", session_key, ids, agent_id, refused
             )
-        if session["auto_continues"] >= self.max_auto_continues:
+        count = messaging.effective_auto_continues(session, self.auto_continue_window)
+        if count >= self.max_auto_continues:
             return WakeResult(
                 REFUSED,
-                f"auto_continues {session['auto_continues']} is at the cap "
-                f"{self.max_auto_continues}",
+                f"auto_continues {count} is at the cap {self.max_auto_continues}",
                 session_key,
                 ids,
                 agent_id,
@@ -175,7 +177,7 @@ class L3Waker:
             messaging.release_claims([claimed["id"]], self.claimer)
             reason = str(exc) if isinstance(exc, PaseoError) else type(exc).__name__
             return WakeResult(FAILED, f"{reason}; left for L1", session_key, ids, agent_id, refused)
-        count = messaging.bump_auto_continue(session_key)
+        count = messaging.bump_auto_continue(session_key, window=self.auto_continue_window)
         return WakeResult(
             SENT,
             f"sent #{claimed['id']}; auto_continues={count}",
