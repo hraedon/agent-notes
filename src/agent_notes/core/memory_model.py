@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 from typing import Any
 
 import psycopg
@@ -467,6 +468,170 @@ def search_memory_with_body(
             [query_vec] + params + [query_vec, min(limit, 50)],
         )
         return [dict(r) for r in cur.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# Composed scopes (Plan 025 section 4): repo > vm > global
+# ---------------------------------------------------------------------------
+
+_PREVIEW_CHARS = 120
+
+
+@dataclass(frozen=True)
+class ScopeRef:
+    """One memory tier backing a composed query. ``project_id`` is its project row."""
+
+    scope: str  # 'repo' | 'vm' | 'global'
+    scope_key: str  # repo project slug, VM ID, or 'global'
+    project_id: int
+
+
+def _shadows_for(
+    cur: Any,
+    workspace_id: int,
+    scopes: list[ScopeRef],
+    winners: list[dict],
+) -> dict[tuple[str, int], list[dict]]:
+    """Same-name rows hidden behind each winner, keyed by (name, winner id)."""
+    by_project = {s.project_id: s for s in scopes}
+    names = sorted({w["name"] for w in winners})
+    if not names:
+        return {}
+    cur.execute(
+        """
+        SELECT id, project_id, name, LEFT(body, %s) AS body_preview
+        FROM memories
+        WHERE active = true AND workspace_id = %s
+          AND project_id = ANY(%s) AND name = ANY(%s)
+        ORDER BY array_position(%s::int[], project_id)
+        """,
+        (
+            _PREVIEW_CHARS,
+            workspace_id,
+            [s.project_id for s in scopes],
+            names,
+            [s.project_id for s in scopes],
+        ),
+    )
+    winner_ids = {w["id"] for w in winners}
+    out: dict[tuple[str, int], list[dict]] = {}
+    rows = [r for r in cur.fetchall() if r["id"] not in winner_ids]
+    for w in winners:
+        out[(w["name"], w["id"])] = [
+            {
+                "scope": by_project[r["project_id"]].scope,
+                "scope_key": by_project[r["project_id"]].scope_key,
+                "body_preview": r["body_preview"],
+            }
+            for r in rows
+            if r["name"] == w["name"]
+        ]
+    return out
+
+
+def _tag_scoped(
+    cur: Any, workspace_id: int, scopes: list[ScopeRef], rows: list[dict]
+) -> list[dict]:
+    by_project = {s.project_id: s for s in scopes}
+    shadows = _shadows_for(cur, workspace_id, scopes, rows)
+    tagged = []
+    for r in rows:
+        ref = by_project[r["project_id"]]
+        r = dict(r)
+        r["scope"] = ref.scope
+        r["scope_key"] = ref.scope_key
+        r["shadows"] = shadows.get((r["name"], r["id"]), [])
+        tagged.append(r)
+    return tagged
+
+
+def search_memory_composed(
+    workspace_id: int,
+    query_vec: Any,
+    scopes: list[ScopeRef],
+    memory_type: str | None = None,
+    limit: int = 10,
+) -> list[dict]:
+    """One similarity query over several scopes, ranked with no tier boost.
+
+    ``scopes`` is ordered most specific first. When a name exists in more than
+    one scope only the most specific row is returned; the others ride along
+    in ``shadows``.
+    """
+    if not scopes:
+        return []
+    project_ids = [s.project_id for s in scopes]
+    conditions = [
+        "active = true",
+        "workspace_id = %s",
+        "embedding IS NOT NULL",
+        "project_id = ANY(%s)",
+    ]
+    params: list[Any] = [workspace_id, project_ids]
+    if memory_type:
+        conditions.append("memory_type = %s")
+        params.append(memory_type)
+    with _conn() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT * FROM (
+                SELECT id, project_id, name, memory_type, body,
+                       1 - (embedding <=> %s::vector) AS score,
+                       created_at, updated_at,
+                       row_number() OVER (
+                           PARTITION BY name ORDER BY array_position(%s::int[], project_id)
+                       ) AS rn
+                FROM memories
+                WHERE {" AND ".join(conditions)}
+            ) ranked
+            WHERE rn = 1
+            ORDER BY score DESC
+            LIMIT %s
+            """,
+            [query_vec, project_ids, *params, min(limit, 50)],
+        )
+        rows = [{k: v for k, v in r.items() if k != "rn"} for r in cur.fetchall()]
+        return _tag_scoped(cur, workspace_id, scopes, rows)
+
+
+def list_memories_composed(
+    workspace_id: int,
+    scopes: list[ScopeRef],
+    memory_type: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """Most recently updated memories across scopes, with the same shadowing rule."""
+    if not scopes:
+        return []
+    project_ids = [s.project_id for s in scopes]
+    conditions = ["active = true", "workspace_id = %s", "project_id = ANY(%s)"]
+    params: list[Any] = [workspace_id, project_ids]
+    if memory_type:
+        conditions.append("memory_type = %s")
+        params.append(memory_type)
+    with _conn() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            f"""
+            SELECT * FROM (
+                SELECT id, project_id, name, memory_type,
+                       LEFT(body, {_PREVIEW_CHARS}) AS body_preview,
+                       created_at, updated_at,
+                       row_number() OVER (
+                           PARTITION BY name ORDER BY array_position(%s::int[], project_id)
+                       ) AS rn
+                FROM memories
+                WHERE {" AND ".join(conditions)}
+            ) ranked
+            WHERE rn = 1
+            ORDER BY updated_at DESC
+            LIMIT %s
+            """,
+            [project_ids, *params, min(limit, 200)],
+        )
+        rows = [{k: v for k, v in r.items() if k != "rn"} for r in cur.fetchall()]
+        return _tag_scoped(cur, workspace_id, scopes, rows)
 
 
 def delete_memory(workspace_id: int, project_id: int, name: str) -> dict | None:

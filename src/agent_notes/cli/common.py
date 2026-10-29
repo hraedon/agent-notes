@@ -3,7 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from typing import Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from agent_notes.core.memory_model import ScopeRef
 
 EXIT_SUCCESS = 0
 EXIT_GENERIC = 1
@@ -109,7 +113,13 @@ def _resolve(
 def _resolve_impl(
     ws_slug: str | None, proj_slug: str | None, path: str | None
 ) -> tuple[int, int, str, str]:
-    from agent_notes.core.db import list_projects, list_workspaces
+    from agent_notes.core.db import (
+        SCOPE_GLOBAL,
+        find_scope_project,
+        get_project,
+        list_projects,
+        list_workspaces,
+    )
 
     if path:
         from agent_notes.core.db import resolve_project as db_resolve_project
@@ -121,9 +131,7 @@ def _resolve_impl(
         ws = next((w for w in list_workspaces() if w.slug == result["workspace"]), None)
         if ws is None:
             raise SystemExit(EXIT_NOT_CONFIGURED)
-        proj = next(
-            (p for p in list_projects(workspace_id=ws.id) if p.slug == result["project"]), None
-        )
+        proj = get_project(ws.id, result["project"])
         if proj is None:
             raise SystemExit(EXIT_NOT_CONFIGURED)
         return ws.id, proj.id, ws.slug, proj.slug
@@ -136,10 +144,12 @@ def _resolve_impl(
             suggestion = " Use --path for auto-resolution or run 'agent-notes workspace list'."
             print(f"Workspace '{ws_slug}' not found.{hint}{suggestion}", file=sys.stderr)
             raise SystemExit(EXIT_NOT_FOUND)
-        proj = next((p for p in list_projects(workspace_id=ws.id) if p.slug == proj_slug), None)
+        proj = get_project(ws.id, proj_slug)
         if proj is None:
             available = [p.slug for p in list_projects(workspace_id=ws.id)]
             hint = f" Available in '{ws_slug}': {', '.join(available)}" if available else ""
+            if proj_slug == "global" or proj_slug.startswith("vm:"):
+                hint += " (memory tiers are not projects; use 'memory ... --scope vm|global')"
             print(f"Project '{proj_slug}' not found.{hint}", file=sys.stderr)
             raise SystemExit(EXIT_NOT_FOUND)
         return ws.id, proj.id, ws.slug, proj.slug
@@ -152,7 +162,8 @@ def _resolve_impl(
             suggestion = " Use --path for auto-resolution or run 'agent-notes workspace list'."
             print(f"Workspace '{ws_slug}' not found.{hint}{suggestion}", file=sys.stderr)
             raise SystemExit(EXIT_NOT_FOUND)
-        proj = next((p for p in list_projects(workspace_id=ws.id) if p.slug == "global"), None)
+        # Workspace-level operations land in the workspace's global memory tier.
+        proj = find_scope_project(ws.id, SCOPE_GLOBAL)
         if proj is None:
             print(
                 f"Workspace '{ws_slug}' has no 'global' project for workspace-level "
@@ -173,14 +184,209 @@ def _resolve_impl(
     if discovered is not None:
         ws = next((w for w in list_workspaces() if w.slug == discovered.workspace), None)
         if ws is not None:
-            proj = next(
-                (p for p in list_projects(workspace_id=ws.id) if p.slug == discovered.project),
-                None,
-            )
+            proj = get_project(ws.id, discovered.project)
             if proj is not None:
                 return ws.id, proj.id, ws.slug, proj.slug
 
     raise SystemExit(EXIT_NOT_CONFIGURED)
+
+
+# ---------------------------------------------------------------------------
+# Memory scopes (Plan 025 §4): repo / vm / global / composed
+# ---------------------------------------------------------------------------
+
+MEMORY_SCOPES = ("repo", "vm", "global")
+
+
+class ScopeError(Exception):
+    """A memory scope could not be resolved; carries the CLI error envelope fields."""
+
+    def __init__(self, code: str, message: str, exit_code: int) -> None:
+        super().__init__(message)
+        self.code = code
+        self.exit_code = exit_code
+
+
+@dataclass(frozen=True)
+class MemoryTarget:
+    """One memory scope resolved to a project row (``proj_id`` None: not created yet)."""
+
+    ws_id: int
+    ws_slug: str
+    proj_id: int | None
+    proj_slug: str
+    scope: str
+    scope_key: str
+
+
+@dataclass(frozen=True)
+class ScopeContext:
+    """The workspace a scope command runs in, plus the repo it is standing in (if any)."""
+
+    ws_id: int
+    ws_slug: str
+    repo_proj_id: int | None = None
+    repo_slug: str | None = None
+
+
+def add_scope_args(p: argparse.ArgumentParser, *, composed: bool = False, default: str) -> None:
+    choices = [*MEMORY_SCOPES, "composed"] if composed else list(MEMORY_SCOPES)
+    p.add_argument(
+        "--scope",
+        choices=choices,
+        default=default,
+        help="Memory tier: repo (this project), vm (this machine), global (cross-host)"
+        + (", or composed (all three, repo > vm > global)" if composed else "")
+        + f". Default: {default}.",
+    )
+    p.add_argument(
+        "--vm",
+        default=None,
+        help="VM ID for vm scope (default: AGENT_NOTES_VM, else the short hostname)",
+    )
+
+
+def scope_workspace(args: argparse.Namespace, *, strict_path: bool = False) -> ScopeContext:
+    """Pick the workspace for a scope command without requiring a registered repo.
+
+    ``strict_path`` makes an explicit ``--path`` that is not inside a registered
+    repo an error (``SystemExit``), for composed queries where a silently absent
+    repo tier would read as "no repo memories".
+    """
+    from agent_notes.core.db import get_project, list_workspaces
+
+    ws_slug = getattr(args, "workspace", None)
+    if getattr(args, "project", None):
+        ws_id, proj_id, ws_slug_out, proj_slug = _resolve(ws_slug, args.project, None)
+        return ScopeContext(ws_id, ws_slug_out, proj_id, proj_slug)
+
+    workspaces = list_workspaces()
+    if ws_slug:
+        ws = next((w for w in workspaces if w.slug == ws_slug), None)
+        if ws is None:
+            available = ", ".join(w.slug for w in workspaces)
+            raise ScopeError(
+                "WORKSPACE_NOT_FOUND",
+                f"Workspace '{ws_slug}' not found. Available: {available or '(none)'}",
+                EXIT_NOT_FOUND,
+            )
+        return ScopeContext(ws.id, ws.slug)
+
+    from agent_notes.core.project_discovery import discover_project
+
+    discovered = discover_project(getattr(args, "path", None))
+    if discovered is not None:
+        ws = next((w for w in workspaces if w.slug == discovered.workspace), None)
+        proj = get_project(ws.id, discovered.project) if ws else None
+        if ws is not None and proj is not None:
+            return ScopeContext(ws.id, ws.slug, proj.id, proj.slug)
+
+    if strict_path and getattr(args, "path", None):
+        raise SystemExit(EXIT_NOT_CONFIGURED)
+
+    ws = next((w for w in workspaces if w.slug == "default"), None)
+    if ws is None:
+        raise ScopeError(
+            "PROJECT_NOT_RESOLVED",
+            "no registered repo here and no 'default' workspace; pass --workspace.",
+            EXIT_NOT_CONFIGURED,
+        )
+    return ScopeContext(ws.id, ws.slug)
+
+
+def _vm_id(args: argparse.Namespace) -> str:
+    from agent_notes.core.config import VmIdError, resolve_vm_id
+
+    try:
+        return resolve_vm_id(getattr(args, "vm", None))
+    except VmIdError as exc:
+        raise ScopeError("VM_ID_UNRESOLVED", str(exc), EXIT_NOT_CONFIGURED) from exc
+
+
+def _bind_regista_project(slug: str) -> None:
+    from agent_notes.core import face_factory
+
+    try:
+        face_factory.set_current_project(face_factory.regista_project_name(slug.replace(":", "_")))
+    except Exception:
+        face_factory.set_current_project(None)
+
+
+def resolve_memory_target(args: argparse.Namespace, *, create: bool = False) -> MemoryTarget:
+    """Resolve ``--scope`` (repo|vm|global) to one project row.
+
+    ``repo`` keeps the historical resolution (and raises ``SystemExit`` on
+    failure, which callers report via :func:`report_resolution_failure`).
+    ``vm`` and ``global`` need no registered repo. ``create`` makes a missing
+    tier row (writes); reads leave ``proj_id`` None instead.
+    """
+    from agent_notes.core.db import (
+        SCOPE_GLOBAL,
+        SCOPE_VM,
+        find_scope_project,
+        get_or_create_scope_project,
+        vm_project_slug,
+    )
+
+    scope = getattr(args, "scope", None) or "repo"
+    if scope == "repo":
+        ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
+        return MemoryTarget(ws_id, ws_slug, proj_id, proj_slug, "repo", proj_slug)
+
+    if getattr(args, "project", None):
+        raise ScopeError(
+            "VALIDATION_FAILED",
+            f"--project selects a repo and cannot be combined with --scope {scope}",
+            EXIT_CONFLICT,
+        )
+    ctx = scope_workspace(args)
+    vm_id: str | None = None
+    if scope == SCOPE_GLOBAL:
+        key, slug = "global", "global"
+    elif scope == SCOPE_VM:
+        vm_id = _vm_id(args)
+        key, slug = vm_id, vm_project_slug(vm_id)
+    else:
+        raise ScopeError("VALIDATION_FAILED", f"unknown scope {scope!r}", EXIT_CONFLICT)
+
+    if create:
+        proj = get_or_create_scope_project(ctx.ws_id, scope, vm_id)
+    else:
+        proj = find_scope_project(ctx.ws_id, scope, vm_id)
+    _bind_regista_project(slug)
+    return MemoryTarget(ctx.ws_id, ctx.ws_slug, proj.id if proj else None, slug, scope, key)
+
+
+def resolve_composed_scopes(
+    args: argparse.Namespace,
+) -> tuple[ScopeContext, list[ScopeRef], list[str]]:
+    """Scopes for a composed query, most specific first, plus skip warnings.
+
+    Tiers that do not exist (no repo here, no memory ever filed for this VM)
+    are simply absent. An unresolvable VM ID drops the vm tier with a warning
+    rather than failing the whole query.
+    """
+    from agent_notes.core.config import VmIdError, resolve_vm_id
+    from agent_notes.core.db import SCOPE_GLOBAL, SCOPE_VM, find_scope_project
+    from agent_notes.core.memory_model import ScopeRef
+
+    ctx = scope_workspace(args, strict_path=True)
+    refs: list[ScopeRef] = []
+    warnings: list[str] = []
+    if ctx.repo_proj_id is not None and ctx.repo_slug is not None:
+        refs.append(ScopeRef("repo", ctx.repo_slug, ctx.repo_proj_id))
+    try:
+        vm_id = resolve_vm_id(getattr(args, "vm", None))
+    except VmIdError as exc:
+        warnings.append(f"vm scope skipped: {exc}")
+    else:
+        vm_proj = find_scope_project(ctx.ws_id, SCOPE_VM, vm_id)
+        if vm_proj is not None:
+            refs.append(ScopeRef("vm", vm_id, vm_proj.id))
+    global_proj = find_scope_project(ctx.ws_id, SCOPE_GLOBAL)
+    if global_proj is not None:
+        refs.append(ScopeRef("global", "global", global_proj.id))
+    return ctx, refs, warnings
 
 
 def report_resolution_failure(
