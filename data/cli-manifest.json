@@ -516,6 +516,27 @@
       "aliases": []
     },
     {
+      "name": "checkout list",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "checkout add",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "checkout scan",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
       "name": "msg send",
       "mutability": "mutating",
       "json": true,

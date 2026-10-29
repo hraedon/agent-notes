@@ -170,8 +170,8 @@ def test_resolve_reports_resolved_via():
         (repo / ".git").mkdir()
         # --relocate because the slug is the basename ("myrepo") while the temp
         # path differs every run: this genuinely re-points the same project.
-        # Without it, init now refuses (EXIT_CONFLICT) rather than silently
-        # stealing a registered root — see test_project_repo_root_collision.
+        # Without it, init would attach this path as a per-VM checkout and
+        # leave the registered root alone (WI-2.6) — see test_project_checkouts.
         assert _run("init", str(repo), "--relocate", check=False).returncode == 0
         exact = json.loads(_run("resolve", "--path", str(repo), "--json", check=False).stdout)
         assert exact["resolved_via"] == "exact"

@@ -20,6 +20,7 @@ from regista._errors import ErrorCode, RegistaError
 from agent_notes.cli.admin import register_admin_parsers
 from agent_notes.cli.breadcrumbs import register_breadcrumb_parsers
 from agent_notes.cli.changes import register_changes_parsers
+from agent_notes.cli.checkout import register_checkout_parsers
 from agent_notes.cli.common import (
     EXIT_CONFLICT,
     EXIT_GENERIC,
@@ -181,6 +182,15 @@ def _regista_schema_missing(slug: str) -> str | None:
     return None
 
 
+def _checkout_vm_id() -> str | None:
+    from agent_notes.core.config import VmIdError, resolve_vm_id
+
+    try:
+        return resolve_vm_id()
+    except VmIdError:
+        return None
+
+
 def cmd_init(
     path: str | None,
     workspace_slug: str | None = None,
@@ -231,38 +241,64 @@ def cmd_init(
             )
         return EXIT_NOT_CONFIGURED
 
+    from agent_notes.core import checkouts
     from agent_notes.core.db import get_or_create_project, get_or_create_workspace
 
     ws_slug = workspace_slug or "default"
+    vm_id = _checkout_vm_id()
+    if vm_id is not None:
+        owner = checkouts.find_project_by_checkout(repo_root, vm_id)
+        if (
+            owner
+            and owner["resolved_via"] == "exact"
+            and (owner["workspace"], owner["project"]) != (ws_slug, name)
+        ):
+            print(
+                f"Error: {repo_root!r} is already registered on {vm_id} as a checkout of "
+                f"project {owner['project']!r} (workspace {owner['workspace']}). Nothing "
+                f"was changed. Pass --slug {owner['project']} to use that project, or "
+                "`agent-notes checkout add` to move it deliberately.",
+                file=sys.stderr,
+            )
+            return EXIT_CONFLICT
+
     ws_name = ws_slug.replace("-", " ").title()
     ws = get_or_create_workspace(ws_slug, ws_name)
     proj = get_or_create_project(
         ws.id, slug=name, name=name, repo_root=repo_root, relocate=relocate
     )
-    if proj.repo_root != repo_root:
-        # Slug collision: another checkout of the same-named repo already owns
-        # this slug. Repointing would drag every work item and memory to the
-        # new path, so refuse and say so — silently succeeding here is what
-        # stranded usage-dashboard behind a deleted /tmp clone.
+    attached = proj.repo_root != repo_root
+    if vm_id is None and attached:
         print(
-            f"Error: project '{name}' is already registered at {proj.repo_root!r}, "
-            f"not {repo_root!r}. Nothing was changed.",
-            file=sys.stderr,
-        )
-        print(
-            "  Two checkouts of the same repo share a slug (it defaults to the "
-            "directory basename). If this checkout is scratch (a /tmp clone, a "
-            "worktree, a CI checkout), register it under a different --slug or "
-            "leave it unregistered.",
-            file=sys.stderr,
-        )
-        print(
-            f"  If the project genuinely moved, re-run with: "
-            f"agent-notes init {repo_root} --relocate",
+            f"Error: project '{name}' is already registered at {proj.repo_root!r}, not "
+            f"{repo_root!r}, and this machine's VM ID cannot be derived to record "
+            "a checkout. Nothing was changed. Set AGENT_NOTES_VM and re-run.",
             file=sys.stderr,
         )
         return EXIT_CONFLICT
+    if vm_id is not None:
+        # A slug collision is not an error: a second path for the same slug is
+        # this VM's checkout (a Windows clone, a scratch clone). It never moves
+        # repo_root, which keeps first-registration-wins (and --relocate) intact.
+        checkouts.register_checkout(proj.id, vm_id, repo_root)
+    else:
+        print(
+            "Warning: no stable VM ID (set AGENT_NOTES_VM); no per-VM checkout recorded.",
+            file=sys.stderr,
+        )
+    if attached:
+        print(
+            f"Project '{name}' already exists (repo_root={proj.repo_root}); recorded "
+            f"{repo_root} as the checkout for VM '{vm_id}' (workspace={ws_slug}). "
+            "repo_root is unchanged; use --relocate to move it."
+        )
+        # The per-repo hook file is committed and shared by every checkout;
+        # rewriting it with this machine's path would flip it back and forth.
+        print("Hooks not wired for an attached checkout (the repo's hook file is shared).")
+        return EXIT_SUCCESS
     print(f"Project '{name}' registered (workspace={ws_slug}, repo_root={repo_root}).")
+    if vm_id is not None:
+        print(f"Checkout recorded for VM '{vm_id}'.")
 
     if install_hooks:
         settings_path, changed = _install_claude_session_hook(repo_root)
@@ -437,9 +473,9 @@ def main() -> int:
         "--relocate",
         action="store_true",
         help=(
-            "Repoint an already-registered project at this path. Required when "
-            "the slug is taken, because moving the root moves every work item "
-            "and memory with it"
+            "Repoint an already-registered project's repo_root at this path. Without "
+            "it, an existing slug keeps its root and this path is recorded as this "
+            "VM's checkout; moving the root moves every work item and memory with it"
         ),
     )
     init_p.add_argument(
@@ -494,6 +530,7 @@ def main() -> int:
     register_msg_parsers(sub)
     register_session_parsers(sub)
     register_who_parser(sub)
+    register_checkout_parsers(sub)
 
     contract_p = sub.add_parser(
         "contract",
