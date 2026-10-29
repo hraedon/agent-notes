@@ -90,9 +90,8 @@ def test_init_wires_session_hook_and_preserves_settings():
         settings = json.loads((repo / ".claude" / "settings.json").read_text())
         assert settings["model"] == "x"
         assert any(c.startswith("agent-notes orient") for c in _session_orient_cmds(settings))
-        assert any(
-            c.startswith("agent-notes outbox reconcile") for c in _stop_reconcile_cmds(settings)
-        )
+        # Plan 025 D7: no regista outbox reconcile Stop hook any more.
+        assert _stop_reconcile_cmds(settings) == []
         # Hook commands must be cross-platform (no POSIX-only shell syntax).
         for c in _session_orient_cmds(settings) + _stop_reconcile_cmds(settings):
             assert "2>/dev/null" not in c, f"POSIX-only redirect in hook: {c}"
@@ -102,13 +101,7 @@ def test_init_wires_session_hook_and_preserves_settings():
         _run("init", str(repo), check=False)
         settings2 = json.loads((repo / ".claude" / "settings.json").read_text())
         assert sum(c.startswith("agent-notes orient") for c in _session_orient_cmds(settings2)) == 1
-        assert (
-            sum(
-                c.startswith("agent-notes outbox reconcile")
-                for c in _stop_reconcile_cmds(settings2)
-            )
-            == 1
-        )
+        assert _stop_reconcile_cmds(settings2) == []
 
 
 def test_init_no_hooks_skips_settings():
@@ -121,8 +114,9 @@ def test_init_no_hooks_skips_settings():
 
 
 def test_init_upgrades_old_posix_hook_commands():
-    """Old-format hook commands (with POSIX-only shell syntax) are upgraded
-    to the cross-platform bare command on re-init."""
+    """Old-format orient commands (with POSIX-only shell syntax) are upgraded
+    to the cross-platform bare command on re-init, and the retired outbox
+    reconcile Stop hook is removed while other Stop hooks survive."""
     with tempfile.TemporaryDirectory() as td:
         repo = Path(td) / "repo3"
         (repo / ".claude").mkdir(parents=True)
@@ -134,7 +128,10 @@ def test_init_upgrades_old_posix_hook_commands():
                 {
                     "hooks": {
                         "SessionStart": [{"hooks": [{"type": "command", "command": old_orient}]}],
-                        "Stop": [{"hooks": [{"type": "command", "command": old_reconcile}]}],
+                        "Stop": [
+                            {"hooks": [{"type": "command", "command": old_reconcile}]},
+                            {"hooks": [{"type": "command", "command": "user-stop-hook"}]},
+                        ],
                     }
                 }
             )
@@ -144,11 +141,9 @@ def test_init_upgrades_old_posix_hook_commands():
         orient_cmds = _session_orient_cmds(settings)
         reconcile_cmds = _stop_reconcile_cmds(settings)
         assert len(orient_cmds) == 1
-        assert len(reconcile_cmds) == 1
+        assert reconcile_cmds == ["user-stop-hook"]
         assert "2>/dev/null" not in orient_cmds[0]
         assert "|| true" not in orient_cmds[0]
-        assert ">/dev/null" not in reconcile_cmds[0]
-        assert "|| true" not in reconcile_cmds[0]
 
 
 def test_resolve_not_configured():

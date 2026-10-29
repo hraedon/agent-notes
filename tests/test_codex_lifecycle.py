@@ -88,7 +88,6 @@ def test_orientation_renderer_redacts_and_bounds_metadata() -> None:
         "memories": [{"name": "password=do-not-print", "type": "decision"}],
         "learned_context": {"results": [{"text": "token=also-do-not-print"}]},
         "resolved_in_git": [],
-        "regista_sync": {"enabled": False},
     }
 
     context = lifecycle._format_orientation(payload)
@@ -127,24 +126,19 @@ def test_orientation_freshness_is_visible_without_exposing_handoff_text() -> Non
     assert "must-not-enter-hook" not in context
 
 
-def test_stop_reconciles_once_and_never_requests_continuation(monkeypatch, tmp_path) -> None:
-    calls = []
-    monkeypatch.setattr(lifecycle, "_reconcile_cwd", lambda cwd: calls.append(cwd))
+def test_stop_is_a_no_op_that_never_requests_continuation(monkeypatch, tmp_path) -> None:
+    # Plan 025 D7 retired the outbox reconcile; Stop stays registered for Phase 4.
+    assert not hasattr(lifecycle, "_reconcile_cwd")
 
+    def no_face():
+        raise AssertionError("Stop must not construct a regista face")
+
+    monkeypatch.setattr("agent_notes.core.face_factory.get_face", no_face)
     assert lifecycle.run_stop(_stop_payload(tmp_path)) == {"continue": True}
-    assert calls == [tmp_path]
-
     assert lifecycle.run_stop(_stop_payload(tmp_path, stop_hook_active=True)) == {"continue": True}
-    assert calls == [tmp_path]
 
 
-def test_stop_failure_and_malformed_input_always_emit_valid_json(
-    monkeypatch, capsys, tmp_path
-) -> None:
-    def fail(_cwd):
-        raise RuntimeError("password=must-not-escape")
-
-    monkeypatch.setattr(lifecycle, "_reconcile_cwd", fail)
+def test_stop_malformed_input_always_emits_valid_json(monkeypatch, capsys, tmp_path) -> None:
     assert lifecycle.run_stop(_stop_payload(tmp_path)) == {"continue": True}
 
     monkeypatch.setattr(sys, "stdin", io.StringIO("not-json"))

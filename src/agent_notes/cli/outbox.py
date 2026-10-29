@@ -8,9 +8,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 
-from agent_notes.cli.common import EXIT_GENERIC, EXIT_NOT_CONFIGURED, EXIT_SUCCESS
+from agent_notes.cli.common import EXIT_GENERIC, EXIT_SUCCESS
 from agent_notes.core import outbox
 
 
@@ -85,12 +84,14 @@ def cmd_outbox_reconcile(args: argparse.Namespace) -> int:
 
     face = get_face()
     if face is None:
-        msg = "regista writes not enabled; set AGENT_NOTES_REGISTA_WRITES=1"
+        # Plan 025 D7: write-through is retired, so there is nothing to replay.
+        # Exit 0 so Stop hooks that older `init` runs wired stay quiet.
+        msg = "regista write-through is off; nothing to reconcile"
         if use_json:
-            print(json.dumps({"error": msg}))
+            print(json.dumps({"replayed": 0, "rejected": 0, "conflicts": 0, "skipped": msg}))
         else:
-            print(msg, file=sys.stderr)
-        return EXIT_NOT_CONFIGURED
+            print(msg)
+        return EXIT_SUCCESS
 
     if hasattr(face, "_base"):
         face = face._base

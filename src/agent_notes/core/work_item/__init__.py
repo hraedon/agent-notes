@@ -7,8 +7,8 @@ operations. The public surface is still ``WorkItemModel`` in
 Modules:
 - ``_common``   — shared helpers (workspace/vocab lookup, embedding diff,
                   regista-snapshot mirroring, change-log payload builder).
-- ``_regista``  — regista-face write path (the converged store is SoT).
-- ``_native``   — native op-log write path (degrade mode, no regista).
+- ``_regista``  — retired regista write-through (only when explicitly enabled).
+- ``_native``   — native op-log write path (the authority; Plan 025 D7).
 - ``_queries``  — read-only queries + delete + diagnose.
 - ``_cross_project`` — P3 request / wait / cross-project links.
 """

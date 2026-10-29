@@ -44,7 +44,7 @@ def codex_hook_document() -> dict[str, object]:
     """Return the canonical Codex hook document for plugin and direct wiring."""
     return {
         "description": (
-            "Agent-notes project orientation and best-effort outbox reconciliation. "
+            "Agent-notes project orientation and a turn-end hook. "
             "Review and trust these commands with /hooks before use."
         ),
         "hooks": {
@@ -162,20 +162,6 @@ def _format_orientation(payload: dict[str, Any]) -> str:
         ]
         lines.append("Resolved in git but still open: " + ", ".join(identifiers))
 
-    sync = payload.get("regista_sync")
-    if isinstance(sync, dict) and sync.get("enabled"):
-        pending = sum(
-            int(sync.get(key, 0))
-            for key in (
-                "outbox_pending",
-                "outbox_conflicts",
-                "outbox_rejected",
-                "pending_sync_rows",
-            )
-            if isinstance(sync.get(key, 0), int)
-        )
-        lines.append(f"Pending synchronization findings: {pending}")
-
     context = "\n".join(lines)
     if len(context) > MAX_ORIENTATION_CHARS:
         context = context[: MAX_ORIENTATION_CHARS - 24] + "\n[orientation truncated]"
@@ -211,26 +197,6 @@ def _orientation_for_cwd(cwd: Path) -> str | None:
         # injects project orientation only.
         return None
     return _format_orientation(parsed)
-
-
-def _reconcile_cwd(cwd: Path) -> None:
-    """Best-effort outbox reconciliation for the project containing *cwd*."""
-    from agent_notes.cli.common import _resolve
-    from agent_notes.core import outbox
-    from agent_notes.core.face_factory import (
-        get_face,
-        regista_project_name,
-    )
-    from agent_notes.core.reconcile import reconcile
-
-    _ws_id, _proj_id, _workspace, project_slug = _resolve(None, None, str(cwd))
-    project = regista_project_name(project_slug)
-    face = get_face()
-    if face is None:
-        return
-    if hasattr(face, "_base"):
-        face = face._base
-    reconcile(project, face=face, signer=outbox.get_signer())
 
 
 def _read_payload(stdin: TextIO) -> dict[str, Any] | None:
@@ -283,16 +249,15 @@ def run_session_start(payload: dict[str, Any]) -> dict[str, object]:
 
 
 def run_stop(payload: dict[str, Any]) -> dict[str, object]:
+    """Stop handler: currently a no-op that lets the turn end.
+
+    The regista outbox reconcile it used to run is retired (Plan 025 D7).
+    The hook stays registered because Plan 025 Phase 4 extends it.
+    """
     cwd = _cwd_for(payload, "Stop")
-    # Codex marks a repeated Stop pass explicitly.  This adapter never requests
-    # continuation, but skipping the repeated pass also prevents duplicate I/O
-    # if another concurrently-running hook does request one.
+    # Codex marks a repeated Stop pass explicitly; never act on it.
     if cwd is None or payload.get("stop_hook_active") is True:
         return _success_output()
-    try:
-        _reconcile_cwd(cwd)
-    except (Exception, SystemExit):
-        pass
     return _success_output()
 
 

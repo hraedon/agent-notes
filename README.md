@@ -2,12 +2,16 @@
 
 Desktop Codex: [install the local plugin and configure the runtime](docs/desktop-codex.md).
 
-> **Frozen 2026-10-04 — maintenance only.** This project still works and stays
-> in use where it is already wired in, but it gets security and break-fix
-> changes only: no new features and no new plans. Active development on
-> delegated agent work has moved to a successor control plane that doesn't
-> depend on this suite. The core library, regista, ships one final reduced
-> 0.8.0 release and then parks too.
+> **Active again (2026-10-28): the post-AOS coordination home.** The
+> 2026-10-04 freeze is lifted. AOS, the control plane that took over delegated
+> agent work, is being retired, so cross-agent coordination comes back here:
+> memory tiers (project, VM, global), a Postgres mailbox for agent-to-agent
+> messages, and wake through Paseo ([Plan 025](plans/025-coordination-after-aos.md)).
+> It lives here because every machine already shares this Postgres database and
+> every harness already runs `agent-notes` hooks. **Native Postgres is the
+> authority for work items.** Regista write-through is retired: it is off by
+> default, unsupported going forward, and regista remains only a library
+> dependency.
 
 Pgvector-backed memory layer for agent harnesses: breadcrumbs (issue tracker), memories (cross-session facts), and reflections (session retrospectives) — shared across Claude Code, opencode, and any harness that can shell to a CLI.
 
@@ -17,7 +21,7 @@ Consolidates and supersedes the standalone `breadcrumb-mcp` and `memory-mcp` pro
 
 - **Plan 004** (MCP→CLI flattening): Phases 9a–9d complete. CLI is the primary sync surface; skills installed across Claude Code and opencode; MCP servers removed.
 - **Plan 007** (lifecycle enforcement spine): Piece 0 (error contract), Piece 1 (`init` + `orient` + Claude Code `SessionStart` hook), and Piece 2 (opencode plugin with `experimental.chat.system.transform` orientation + `experimental.session.compacting` reconciliation) complete. Both harnesses now enforce the lifecycle spine.
-- **Plan 008** (work-log coordination kernel): **P0–P4 complete; Tier A shipped.** The op-CRDT kernel (`op_log`, `work_items` cache, `content_blobs`, verifier), status lattice, merge/reconcile, cross-project derived index (registry, export/ingest, reverse-edge map), cross-project trigger loop, local lease table, and claim/heartbeat/release CLI are all shipped. **Tier A degrade contract is the default safe mode** — `doctor` reports `coordinator-absent / local-lease`; the `breadcrumb → work-item` migration has been executed and verified (cache rebuild from op-log matches). The regista face is an optional write-through authority for projects that have been externally provisioned with the canonical workflow and v6 epoch. The `requeue_expired` daemon timer is also Tier B.
+- **Plan 008** (work-log coordination kernel): **P0–P4 complete; Tier A shipped.** The op-CRDT kernel (`op_log`, `work_items` cache, `content_blobs`, verifier), status lattice, merge/reconcile, cross-project derived index (registry, export/ingest, reverse-edge map), cross-project trigger loop, local lease table, and claim/heartbeat/release CLI are all shipped. **Tier A degrade contract is the default safe mode** — `doctor` reports `coordinator-absent / local-lease`; the `breadcrumb → work-item` migration has been executed and verified (cache rebuild from op-log matches). The regista write-through face is retired (Plan 025 D7): off by default and unsupported. The `requeue_expired` daemon timer is also Tier B.
 
 ## Quickstart
 
@@ -31,12 +35,6 @@ export AGENT_NOTES_ACTOR_ID="agent:operator"
 export REGISTA_PRODUCER_HARNESS="your-harness"
 export REGISTA_PRODUCER_HARNESS_VERSION="your-harness-version"
 
-# Optional regista write-through face (canonical suite contract)
-export REGISTA_DSN="postgresql://user:pass@host:5432/regista"
-export REGISTA_KEY_PATH="$HOME/.config/regista/keys.json"
-export REGISTA_REQUIRE_SSL="true"
-export AGENT_NOTES_PROJECT="project-slug"
-export AGENT_NOTES_REGISTA_WRITES="1"
 
 # Create schema
 agent-notes-setup
@@ -51,13 +49,11 @@ agent-notes work-item file --title "Found a bug" --type bug --status open
 agent-notes memory add --name "postgres-tuning" --body "..." --type note
 ```
 
-Regista configuration is intentionally breaking and canonical: use only
-`REGISTA_DSN`, `REGISTA_KEY_PATH`, `REGISTA_REQUIRE_SSL`, and
-`AGENT_NOTES_PROJECT` for those four values. The optional
-`~/.config/agent-notes/config.json` fallback uses a `regista` block with
-`dsn`, `key_path`, `require_ssl`, and `writes_enabled`; unknown or retired
-names are ignored. `AGENT_NOTES_REGISTA_WRITES` remains the tool-specific write
-gate.
+Regista write-through is retired (Plan 025 D7) and stays off unless
+`AGENT_NOTES_REGISTA_WRITES=1` (or `regista.writes_enabled` in
+`~/.config/agent-notes/config.json`) is set explicitly, which is unsupported.
+`install-harness` no longer writes any regista settings and removes the ones
+it wrote earlier. The cutover runbook is `docs/spikes/025-regista-cutover.md`.
 
 ### CLI surface
 
@@ -128,7 +124,8 @@ drift-checked bundle for suite marketplace composition. Keeping the plugin
 below `plugins/agent-notes` prevents Codex from packaging the checkout's
 multi-gigabyte `.venv`. Both paths install the same narrow lifecycle
 adapter: `SessionStart` injects bounded metadata-only orientation and `Stop`
-performs best-effort outbox reconciliation without requesting another turn.
+is a no-op that never requests another turn (its regista outbox reconcile
+was retired in Plan 025; Phase 4 extends it).
 The direct fallback hash-owns only its groups in `$CODEX_HOME/hooks.json` and
 preserves Cairn/user hooks. Review and trust command hooks explicitly with
 Codex `/hooks`; doctor reports that trust as unverified because Codex exposes no

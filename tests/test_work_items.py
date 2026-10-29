@@ -9,6 +9,7 @@ import pytest
 
 from agent_notes.core import db as coredb
 from agent_notes.core import kernel
+from agent_notes.core.db import _conn
 from agent_notes.core.work_item_model import WorkItemModel
 
 # Import the fixture so pytest discovers it
@@ -417,8 +418,7 @@ class TestWorkItemUpdateNoOp:
 
 class TestWorkItemClose:
     def test_close_work_item(self, default_project):
-        # Plan 014 A(b): native (degrade) close DEFERS to in_review, not terminal
-        # — completion needs the review gate. force=True is the terminal escape hatch.
+        # Plan 025 D7: native close completes the item; review is explicit.
         WorkItemModel.file_work_item(
             project_id=default_project.id,
             identifier="WI-007",
@@ -426,9 +426,9 @@ class TestWorkItemClose:
             status="open",
             embedding=_vec768(),
         )
-        deferred = WorkItemModel.close_work_item(default_project.id, "WI-007")
-        assert deferred["status"] == "in_review"
-        assert deferred["closed_at"] is None
+        closed = WorkItemModel.close_work_item(default_project.id, "WI-007")
+        assert closed["status"] == "done"
+        assert closed["closed_at"] is not None
 
     def test_force_close_work_item_terminal(self, default_project):
         WorkItemModel.file_work_item(
@@ -446,15 +446,11 @@ class TestWorkItemClose:
         with pytest.raises(ValueError, match="not found"):
             WorkItemModel.close_work_item(default_project.id, "WI-NONEXISTENT")
 
-    def test_native_deferred_close_is_atomic(self, default_project, monkeypatch):
-        """WI-020: the open→in_progress→in_review close commits once.
+    def test_native_close_is_atomic(self, default_project, monkeypatch):
+        """WI-020: the close op, lease release, and fold commit once.
 
-        The native deferred close moves an open item through ``in_progress`` on
-        its way to ``in_review``. Before the fix each step was its own committed
-        transaction, so a failure between them stranded the item in
-        ``in_progress``. Simulate a crash on the second transition and assert the
-        first one rolled back (item still ``open``) — only possible if both share
-        a single transaction.
+        Simulate a crash after the status op is written and assert nothing
+        committed: the item is still open and its lease is still held.
         """
         from agent_notes.core.work_item import _native
 
@@ -465,25 +461,88 @@ class TestWorkItemClose:
             status="open",
             embedding=_vec768(),
         )
+        WorkItemModel.claim_work_item(default_project.id, "WI-ATOMIC")
 
-        real_update = _native.update_work_item
-        calls = {"n": 0}
+        def boom(conn, entity_id):
+            raise RuntimeError("simulated failure during fold")
 
-        def crash_on_second(conn, *args, **kwargs):
-            calls["n"] += 1
-            if calls["n"] == 2:
-                raise RuntimeError("simulated failure on second transition")
-            return real_update(conn, *args, **kwargs)
+        with monkeypatch.context() as m:
+            m.setattr(_native.kernel, "fold_work_item", boom)
+            with pytest.raises(RuntimeError, match="simulated failure"):
+                WorkItemModel.close_work_item(default_project.id, "WI-ATOMIC")
 
-        monkeypatch.setattr(_native, "update_work_item", crash_on_second)
+        wi = WorkItemModel.get_work_item(default_project.id, "WI-ATOMIC")
+        assert wi["status"] == "claimed"
+        with _conn() as conn:
+            row = conn.execute(
+                "SELECT count(*) AS n FROM work_item_leases WHERE entity_id = %s",
+                (wi["entity_id"],),
+            ).fetchone()
+        assert row["n"] == 1
+        # A retry completes cleanly (and releases the lease).
+        assert WorkItemModel.close_work_item(default_project.id, "WI-ATOMIC")["status"] == "done"
 
-        with pytest.raises(RuntimeError, match="simulated failure"):
-            WorkItemModel.close_work_item(default_project.id, "WI-ATOMIC")
+    @pytest.mark.parametrize("path", [(), ("in_progress",), ("in_progress", "in_review")])
+    def test_close_reaches_done_from_active_states(self, default_project, path):
+        ident = "WI-CL-" + str(len(path))
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier=ident,
+            title="close me",
+            status="open",
+            embedding=_vec768(),
+        )
+        for st in path:
+            WorkItemModel.update_work_item(default_project.id, ident, status=st)
+        assert WorkItemModel.close_work_item(default_project.id, ident)["status"] == "done"
 
-        # Both transitions ran, but the shared transaction rolled back: the item
-        # is still open, not stranded in_progress by a half-committed close.
-        assert calls["n"] == 2
-        assert WorkItemModel.get_work_item(default_project.id, "WI-ATOMIC")["status"] == "open"
+    def test_file_claim_close_reaches_done_and_releases_lease(self, default_project):
+        # Plan 025 Phase 1 exit: file → claim → close reaches done natively.
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-FCC",
+            title="file claim close",
+            status="open",
+            embedding=_vec768(),
+        )
+        claimed = WorkItemModel.claim_work_item(default_project.id, "WI-FCC")
+        assert claimed["status"] == "claimed"
+        closed = WorkItemModel.close_work_item(default_project.id, "WI-FCC")
+        assert closed["status"] == "done"
+        with _conn() as conn:
+            row = conn.execute(
+                "SELECT count(*) AS n FROM work_item_leases WHERE entity_id = %s",
+                (closed["entity_id"],),
+            ).fetchone()
+        assert row["n"] == 0
+
+    def test_close_twice_refused_and_reclose_after_reopen(self, default_project):
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-RECLOSE",
+            title="reclose",
+            status="open",
+            embedding=_vec768(),
+        )
+        WorkItemModel.close_work_item(default_project.id, "WI-RECLOSE")
+        with pytest.raises(ValueError, match="already done"):
+            WorkItemModel.close_work_item(default_project.id, "WI-RECLOSE")
+        WorkItemModel.update_work_item(default_project.id, "WI-RECLOSE", status="open")
+        again = WorkItemModel.close_work_item(default_project.id, "WI-RECLOSE")
+        assert again["status"] == "done"
+
+    def test_close_refuses_blocked(self, default_project):
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-BLK",
+            title="blocked",
+            status="open",
+            embedding=_vec768(),
+        )
+        WorkItemModel.update_work_item(default_project.id, "WI-BLK", status="in_progress")
+        WorkItemModel.update_work_item(default_project.id, "WI-BLK", status="blocked")
+        with pytest.raises(ValueError, match="blocked"):
+            WorkItemModel.close_work_item(default_project.id, "WI-BLK")
 
 
 # ---------------------------------------------------------------------------
