@@ -15,3 +15,4 @@ githooks/* text eol=lf
 *.gif binary
 *.webp binary
 *.ico binary
+*.sql text eol=lf
