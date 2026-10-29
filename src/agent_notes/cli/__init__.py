@@ -64,36 +64,48 @@ def _repo_orient_hook(repo_root: str) -> str | None:
     return settings_path if settings_run_orient(Path(settings_path)) else None
 
 
-def _remove_claude_stop_reconcile_hook(repo_root: str) -> tuple[str, bool]:
+# The exact Stop commands earlier `init` runs wrote (77de21c, then 8530f29).
+_LEGACY_RECONCILE_COMMANDS = frozenset(
+    {"agent-notes outbox reconcile >/dev/null || true", "agent-notes outbox reconcile"}
+)
+_RECONCILE_PREFIX = "agent-notes outbox reconcile"
+
+
+def _remove_claude_stop_reconcile_hook(repo_root: str) -> tuple[str, bool, list[str]]:
     """Remove the `agent-notes outbox reconcile` Stop hook earlier `init` runs
     wired into <repo>/.claude/settings.json (Plan 009 §12.4). Regista
     write-through is retired (Plan 025 D7), so there is no outbox to replay.
-    Only that command is removed; other Stop hooks are kept. Returns
-    (path, changed).
+
+    Only a handler whose command is exactly one `init` wrote is removed. Any
+    other command that mentions `outbox reconcile` is someone's own and is
+    kept; those are returned so the caller can report them. Returns
+    (path, changed, kept_commands).
     """
     settings_path = os.path.join(repo_root, ".claude", "settings.json")
     if not os.path.exists(settings_path):
-        return settings_path, False
+        return settings_path, False, []
     try:
         settings = json.loads(open(settings_path, encoding="utf-8").read()) or {}
     except (json.JSONDecodeError, OSError):
-        return settings_path, False
-    hooks = settings.get("hooks")
+        return settings_path, False, []
+    hooks = settings.get("hooks") if isinstance(settings, dict) else None
     stop = hooks.get("Stop") if isinstance(hooks, dict) else None
     if not isinstance(stop, list):
-        return settings_path, False
+        return settings_path, False, []
     changed = False
+    left: list[str] = []
     kept_entries: list = []
     for entry in stop:
         if isinstance(entry, dict) and isinstance(entry.get("hooks"), list):
-            kept = [
-                h
-                for h in entry["hooks"]
-                if not (
-                    isinstance(h, dict)
-                    and str(h.get("command", "")).startswith("agent-notes outbox reconcile")
-                )
-            ]
+            kept = []
+            for h in entry["hooks"]:
+                command = h.get("command") if isinstance(h, dict) else None
+                if isinstance(command, str):
+                    if command in _LEGACY_RECONCILE_COMMANDS:
+                        continue
+                    if _RECONCILE_PREFIX in command:
+                        left.append(command)
+                kept.append(h)
             if len(kept) != len(entry["hooks"]):
                 changed = True
                 if not kept:
@@ -101,14 +113,14 @@ def _remove_claude_stop_reconcile_hook(repo_root: str) -> tuple[str, bool]:
                 entry = {**entry, "hooks": kept}
         kept_entries.append(entry)
     if not changed:
-        return settings_path, False
+        return settings_path, False, left
     if kept_entries:
         hooks["Stop"] = kept_entries
     else:
         hooks.pop("Stop")
     with open(settings_path, "w", encoding="utf-8") as f:
         f.write(json.dumps(settings, indent=2) + "\n")
-    return settings_path, True
+    return settings_path, True, left
 
 
 def _regista_schema_missing(slug: str) -> str | None:
@@ -291,9 +303,15 @@ def cmd_init(
                 "user-level hook from `agent-notes install-harness claude` now does this "
                 "(and skips orient while the per-repo hook exists); you can remove it."
             )
-        stop_path, stop_changed = _remove_claude_stop_reconcile_hook(repo_root)
+        stop_path, stop_changed, stop_left = _remove_claude_stop_reconcile_hook(repo_root)
         if stop_changed:
             print(f"Removed the retired `agent-notes outbox reconcile` Stop hook from {stop_path}.")
+        for command in stop_left:
+            print(
+                f"Note: {stop_path} has a Stop hook `{command}` that runs the retired "
+                "`agent-notes outbox reconcile`. It isn't one `init` wrote, so it was left "
+                "as is; remove it yourself if you no longer need it."
+            )
 
     print(
         "Next (once per machine): `agent-notes install-harness all` wires skills, "

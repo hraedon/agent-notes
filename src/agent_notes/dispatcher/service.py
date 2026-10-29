@@ -22,13 +22,25 @@ from psycopg.rows import dict_row
 
 from agent_notes.core import messaging
 
-from .jobs import JOB_INTERRUPTED, JobContext, JobHandler, failure_reply, post_reply, run_request
+from .jobs import (
+    JOB_INTERRUPTED,
+    JobContext,
+    JobHandler,
+    JobReply,
+    execute_request,
+    failure_reply,
+    job_name,
+    post_reply,
+)
 from .wake import DEFERRED, L3Waker
 
 DEFAULT_SWEEP_INTERVAL = 30.0
 DEFAULT_WAKE_DELAY = 1.0
 DEFAULT_DEFER_WINDOW = 600.0
 DEFAULT_MAX_JOBS = 2
+# How long a stopping dispatcher waits for running jobs before it releases the
+# VM lock (the systemd unit's TimeoutStopSec is 30 s).
+DEFAULT_SHUTDOWN_GRACE = 25.0
 _MAX_BACKOFF = 60.0
 _LOCK_PREFIX = "agent-notes-dispatch:"
 
@@ -58,6 +70,7 @@ class Dispatcher:
         sweep_interval: float = DEFAULT_SWEEP_INTERVAL,
         wake_delay: float = DEFAULT_WAKE_DELAY,
         defer_window: float = DEFAULT_DEFER_WINDOW,
+        shutdown_grace: float = DEFAULT_SHUTDOWN_GRACE,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.vm = vm
@@ -68,6 +81,7 @@ class Dispatcher:
         self.sweep_interval = sweep_interval
         self.wake_delay = wake_delay
         self.defer_window = defer_window
+        self.shutdown_grace = shutdown_grace
         self.clock = clock
         self.claimer = f"{vm}/dispatcher"
         self.ctx = JobContext(vm=vm)
@@ -75,6 +89,10 @@ class Dispatcher:
         self._settled: dict[int, float] = {}
         self._jobs: set[Future] = set()
         self._jobs_lock = threading.Lock()
+        # Request IDs with a job in flight, and finished jobs whose reply could
+        # not be posted yet (retried every sweep). Both under _jobs_lock.
+        self._active: set[int] = set()
+        self._unposted: dict[int, tuple[dict, JobReply]] = {}
         self._requests_dirty = True
         self._executor: ThreadPoolExecutor | None = None
         self._next_sweep = 0.0
@@ -152,30 +170,36 @@ class Dispatcher:
                     self._settle(mid)
                 continue
             results.append(result)
+            # One send per session per pass: what was allowed but not sent is
+            # rechecked like a deferral.
+            retry = set(ids) if result.outcome == DEFERRED else set(result.remaining)
+            for mid in sorted(retry):
+                pending = self._pending.get(mid)
+                if pending is None:
+                    continue
+                if now - pending.first_seen >= self.defer_window:
+                    _log.info(
+                        "wake #%s for %s: %s for %.0fs; leaving it for L1",
+                        mid,
+                        session_key,
+                        result.reason,
+                        now - pending.first_seen,
+                    )
+                    self._settle(mid)
+                else:
+                    pending.due = now + self.sweep_interval
             if result.outcome == DEFERRED:
-                for mid in ids:
-                    pending = self._pending[mid]
-                    if now - pending.first_seen >= self.defer_window:
-                        _log.info(
-                            "wake #%s for %s: %s for %.0fs; leaving it for L1",
-                            mid,
-                            session_key,
-                            result.reason,
-                            now - pending.first_seen,
-                        )
-                        self._settle(mid)
-                    else:
-                        pending.due = now + self.sweep_interval
                 continue
+            settled = [mid for mid in ids if mid not in retry]
             _log.info(
                 "wake %s -> %s (agent %s): %s%s",
-                ",".join(f"#{m}" for m in ids),
+                ",".join(f"#{m}" for m in settled),
                 result.outcome,
                 result.agent_id or "-",
                 result.reason,
                 "".join(f"; #{m} {why}" for m, why in result.refused.items()),
             )
-            for mid in ids:
+            for mid in settled:
                 self._settle(mid)
         return results
 
@@ -197,7 +221,7 @@ class Dispatcher:
             _log.info(
                 "claimed request #%s (%s) from %s",
                 row["id"],
-                (row.get("payload") or {}).get("job"),
+                job_name(row),
                 messaging.sender_label(row),
             )
             self._start_job(row)
@@ -210,10 +234,23 @@ class Dispatcher:
             self._executor = ThreadPoolExecutor(
                 max_workers=self.max_jobs, thread_name_prefix="agent-notes-job"
             )
-        future = self._executor.submit(run_request, row, self.handlers or {}, self.ctx)
+        with self._jobs_lock:
+            self._active.add(row["id"])
+        future = self._executor.submit(self._run_job, row)
         with self._jobs_lock:
             self._jobs.add(future)
         future.add_done_callback(self._job_done)
+
+    def _run_job(self, row: dict) -> None:
+        try:
+            reply = execute_request(row, self.handlers or {}, self.ctx)
+            if not post_reply(row, reply, self.ctx):
+                with self._jobs_lock:
+                    self._unposted[row["id"]] = (row, reply)
+                _log.warning("request #%s: reply kept in memory; retried each sweep", row["id"])
+        finally:
+            with self._jobs_lock:
+                self._active.discard(row["id"])
 
     def _job_done(self, future: Future) -> None:
         with self._jobs_lock:
@@ -235,34 +272,52 @@ class Dispatcher:
             except FuturesTimeout:
                 return False
 
-    def recover_interrupted(self) -> int:
-        """Answer requests this VM's dispatcher claimed but never replied to.
+    def answer_unreplied(self) -> int:
+        """Make sure every request this VM's dispatcher claimed gets a reply.
 
-        A dispatcher that died mid-job (crash, kill, reboot) leaves its claimed
-        request with no reply. Only one dispatcher runs per VM, so at startup
-        every such row is ours and is answered with ``JOB_INTERRUPTED``.
+        Run at startup and on every sweep. A finished job whose reply could not
+        be posted is retried from memory. A claimed request with no reply and
+        no job running here was left by a dispatcher that stopped mid-job
+        (crash, kill, reboot), and is answered with ``JOB_INTERRUPTED``. Only
+        one dispatcher runs per VM, and a request is answered at most once,
+        so a late verdict never follows the interruption notice.
         """
         if self.handlers is None:
             return 0
-        rows = _orphaned_requests(self.claimer)
-        for row in rows:
+        with self._jobs_lock:
+            unposted = dict(self._unposted)
+            busy = self._active | set(unposted)
+        answered = 0
+        for rid, (row, reply) in unposted.items():
+            if post_reply(row, reply, self.ctx, attempts=1):
+                with self._jobs_lock:
+                    self._unposted.pop(rid, None)
+                answered += 1
+        for row in _orphaned_requests(self.claimer):
+            if row["id"] in busy:
+                continue
             reply = failure_reply(
                 row, JOB_INTERRUPTED, f"the dispatcher on {self.vm} stopped before finishing"
             )
-            post_reply(row, reply, self.ctx)
-        if rows:
-            _log.info("answered %d interrupted request(s)", len(rows))
-        return len(rows)
+            if post_reply(row, reply, self.ctx, attempts=1):
+                answered += 1
+            else:
+                with self._jobs_lock:
+                    self._unposted[row["id"]] = (row, reply)
+        if answered:
+            _log.info("answered %d request(s) that had no reply", answered)
+        return answered
 
     def tick(self) -> None:
         if self.clock() >= self._next_sweep:
             self.sweep()
+            self.answer_unreplied()
         self.process_wakes()
         self.poll_requests()
 
     def run_once(self) -> None:
         """One sweep, every wake now, and the queued jobs to completion."""
-        self.recover_interrupted()
+        self.answer_unreplied()
         self.sweep()
         self.process_wakes(force=True)
         while self.poll_requests():
@@ -292,9 +347,25 @@ class Dispatcher:
             raise
         return conn
 
+    def _drain(self) -> None:
+        """Before the VM lock goes: let running jobs finish (bounded) and post
+        what they left unposted."""
+        if not self.wait_for_jobs(self.shutdown_grace):
+            with self._jobs_lock:
+                running = len(self._active)
+            _log.warning(
+                "releasing the VM lock with %d job(s) still running after %.0fs; "
+                "each request still gets at most one reply",
+                running,
+                self.shutdown_grace,
+            )
+        try:
+            self.answer_unreplied()
+        except Exception as exc:  # noqa: BLE001 - best effort on the way out
+            _log.warning("could not post pending replies at shutdown: %s", type(exc).__name__)
+
     def run(self, stop: threading.Event) -> None:
         backoff = 1.0
-        recovered = False
         try:
             while not stop.is_set():
                 try:
@@ -309,21 +380,23 @@ class Dispatcher:
                 _log.info("listening on %s for %s", messaging.CHANNEL, self.vm)
                 self.listening.set()
                 backoff = 1.0
+                reconnect = False
                 try:
-                    if not recovered:
-                        self.recover_interrupted()
-                        recovered = True
-                    self._next_sweep = 0.0
+                    self._next_sweep = 0.0  # the first tick answers interrupted requests
                     while not stop.is_set():
                         self.tick()
                         wait = max(0.05, min(1.0, self.next_deadline() - self.clock()))
                         for note in conn.notifies(timeout=wait):
                             self.on_notify(note.payload)
                 except psycopg.Error as exc:
+                    reconnect = True
                     _log.warning("lost the database connection (%s); reconnecting", exc)
                     stop.wait(backoff)
                     backoff = min(_MAX_BACKOFF, backoff * 2)
                 finally:
+                    # The lock lives on this connection: hold it while jobs run.
+                    if not reconnect or stop.is_set():
+                        self._drain()
                     conn.close()
         finally:
             if self._executor is not None:

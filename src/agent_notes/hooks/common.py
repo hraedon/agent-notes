@@ -314,30 +314,60 @@ def wake_allowed(row: Mapping[str, Any] | None, env: Mapping[str, str]) -> bool:
 # ---------------------------------------------------------------------------
 
 
+_TRUNCATED_NOTE = "\n[truncated; full text: agent-notes msg inbox --all]"
+# Self-asserted header fields are cut to these lengths when a message has to
+# be shortened, so the body keeps most of the room.
+_FIELD_LIMITS = {"subject": 200, "from_project": 100, "from_session": 200}
+
+
+def _shorten(value: object, limit: int) -> object:
+    if isinstance(value, str) and len(value) > limit:
+        return value[: limit - 3] + "..."
+    return value
+
+
+def _fit(row: Mapping[str, Any], room: int) -> str | None:
+    """Frame ``row`` in at most ``room`` characters, cutting the header fields
+    and then the body. ``None`` when even the framing doesn't fit."""
+    from agent_notes.core.messaging import format_peer_message
+
+    short = {**row, **{k: _shorten(row.get(k), n) for k, n in _FIELD_LIMITS.items()}}
+    body = str(row["body"])
+    block = format_peer_message(short)
+    if len(block) <= room:
+        return block
+    keep = len(body) - (len(block) - room) - len(_TRUNCATED_NOTE)
+    if keep < 0:
+        return None
+    block = format_peer_message({**short, "body": body[:keep] + _TRUNCATED_NOTE})
+    return block if len(block) <= room else None
+
+
 def render_messages(
     rows: list[dict], budget: int = MESSAGE_BUDGET
 ) -> tuple[str, list[dict], list[dict]]:
     """Frame messages (D6) within ``budget`` characters.
 
-    Returns ``(text, shown, overflow)``. The first message is always shown,
-    with its body cut if it alone is too long; later ones stop at the budget.
+    Returns ``(text, shown, overflow)``. Every message in ``shown`` is in
+    ``text``, whole or (only the first) cut with a pointer to ``msg inbox``;
+    the rest are ``overflow``, for the caller to unclaim. ``text`` leaves
+    ``_TAIL_RESERVE`` characters of ``budget`` for a hint line.
     """
     from agent_notes.core.messaging import format_peer_message
 
-    room = max(400, budget - _TAIL_RESERVE)
+    room = max(0, budget - _TAIL_RESERVE)
     blocks: list[str] = []
     shown: list[dict] = []
     used = 0
     for index, row in enumerate(rows):
-        block = format_peer_message(row)
+        block: str | None = format_peer_message(row)
         sep = 2 if blocks else 0
         if used + sep + len(block) > room:
             if blocks:
                 return "\n\n".join(blocks), shown, rows[index:]
-            note = "\n[truncated; full text: agent-notes msg inbox --all]"
-            body = str(row["body"])
-            keep = max(0, len(body) - (len(block) - room) - len(note))
-            block = format_peer_message({**row, "body": body[:keep] + note})
+            block = _fit(row, room)
+            if block is None:
+                return "", [], list(rows)
         blocks.append(block)
         shown.append(row)
         used += sep + len(block)
@@ -345,20 +375,26 @@ def render_messages(
 
 
 def deliver(conn: Any, key: str, budget: int = MESSAGE_BUDGET) -> str | None:
-    """Claim direct and inbox messages (never notices or requests) and frame them."""
+    """Claim direct and inbox messages (never notices or requests) and frame them.
+
+    The claim, the release of what doesn't fit and the pending count are one
+    transaction on the hook's connection. If any step fails, nothing stays
+    claimed and the messages wait for the next delivery.
+    """
     from agent_notes.core import messaging
 
-    rows = messaging.claim_deliverable(key, limit=CLAIM_LIMIT, conn=conn)
-    if not rows:
-        return None
-    text, _shown, overflow = render_messages(rows, budget)
-    if overflow:
-        messaging.release_claims([r["id"] for r in overflow], key, conn=conn)
-    if overflow or len(rows) >= CLAIM_LIMIT:
-        more = messaging.count_deliverable(key, conn=conn)
-        if more:
-            text += f"\n\n+{more} more: run `agent-notes msg inbox`"
-    return text
+    with conn.transaction():
+        rows = messaging.claim_deliverable(key, limit=CLAIM_LIMIT, conn=conn)
+        if not rows:
+            return None
+        text, _shown, overflow = render_messages(rows, budget)
+        if overflow:
+            messaging.release_claims([r["id"] for r in overflow], key, conn=conn)
+        if overflow or len(rows) >= CLAIM_LIMIT:
+            more = messaging.count_deliverable(key, conn=conn)
+            if more:
+                text += f"\n\n+{more} more: run `agent-notes msg inbox`"
+    return text.strip() or None
 
 
 _WAKE_HINT = (
@@ -369,19 +405,29 @@ _WAKE_HINT = (
 
 
 def claim_wake(conn: Any, row: Mapping[str, Any] | None, env: Mapping[str, str]) -> str | None:
-    """L2: claim one direct ``wake=true`` message and count the extension."""
+    """L2: claim one message that may wake this session, and count the extension.
+
+    The wake rule is :func:`agent_notes.core.messaging.may_wake`, the same one
+    the dispatcher applies. The claim and the count land together or not at all.
+    """
+    import psycopg
+
     from agent_notes.core import messaging
 
     if not wake_allowed(row, env):
         return None
     assert row is not None
-    key = row["session_key"]
-    rows = messaging.claim_deliverable(key, wake_only=True, limit=1, conn=conn)
-    if not rows:
-        return None
-    messaging.bump_auto_continue(key, conn=conn)
-    text, _shown, _overflow = render_messages(rows, MESSAGE_BUDGET)
-    return f"{text}\n\n{_WAKE_HINT}"
+    with conn.transaction():
+        msg = messaging.next_wakeable(row, claim=True, conn=conn)
+        if msg is None:
+            return None
+        text, shown, _overflow = render_messages([msg], MESSAGE_BUDGET)
+        if not shown:
+            log("%s: wake message #%s does not fit; left for L1", row["session_key"], msg["id"])
+            raise psycopg.Rollback()
+        messaging.bump_auto_continue(row["session_key"], conn=conn)
+        return f"{text}\n\n{_WAKE_HINT}"
+    return None
 
 
 def session_key_line(key: str) -> str:

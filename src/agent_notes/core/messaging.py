@@ -29,6 +29,7 @@ KINDS = ("message", "question", "reply", "handoff", "notice", "request")
 WAKE_POLICIES = ("none", "direct", "any-direct-from-project")
 TRUST_LEVELS = ("normal", "untrusted-input")
 MAX_BODY = 32768
+MAX_SUBJECT = 512
 
 # D5 step 2, checked in this order.
 HARNESS_ENV_VARS: tuple[tuple[str, str], ...] = (
@@ -83,6 +84,19 @@ def _use(conn: psycopg.Connection | None) -> Iterator[psycopg.Connection]:
     else:
         with _conn() as pooled:
             yield pooled
+
+
+def _commit(conn: psycopg.Connection) -> None:
+    """Commit a pooled connection. An autocommit one needs nothing, and may be
+    inside the caller's ``conn.transaction()`` block, where commit() is an error."""
+    if not conn.autocommit:
+        conn.commit()
+
+
+def payload_of(msg: Mapping[str, Any]) -> dict[str, Any]:
+    """A message's payload as a dict. Rows written before 853 may hold any JSON."""
+    payload = msg.get("payload")
+    return payload if isinstance(payload, dict) else {}
 
 
 class MessagingError(ValueError):
@@ -455,7 +469,7 @@ def bump_auto_continue(key: str, *, conn: psycopg.Connection | None = None) -> i
             "WHERE session_key = %s RETURNING auto_continues",
             (key,),
         ).fetchone()
-        conn.commit()
+        _commit(conn)
     if row is None:
         raise SessionNotFoundError(f"session {key!r} is not registered")
     return int(row["auto_continues"])
@@ -465,7 +479,7 @@ def reset_auto_continue(key: str, *, conn: psycopg.Connection | None = None) -> 
     """Reset the loop guard; the per-prompt hook calls this on a human prompt."""
     with _use(conn) as conn:
         conn.execute("UPDATE agent_sessions SET auto_continues = 0 WHERE session_key = %s", (key,))
-        conn.commit()
+        _commit(conn)
 
 
 # ---------------------------------------------------------------------------
@@ -489,6 +503,7 @@ def send_message(
     payload: dict | None = None,
     wake: bool = False,
     expires_in: timedelta | None = None,
+    conn: psycopg.Connection | None = None,
 ) -> dict:
     """Insert one message and return it, plus ``recipient_registered``.
 
@@ -501,6 +516,10 @@ def send_message(
         raise MessagingError("body must be non-empty")
     if len(body) > MAX_BODY:
         raise MessagingError(f"body is {len(body)} characters; the limit is {MAX_BODY}")
+    if subject is not None and len(subject) > MAX_SUBJECT:
+        raise MessagingError(f"subject is {len(subject)} characters; the limit is {MAX_SUBJECT}")
+    if payload is not None and not isinstance(payload, dict):
+        raise MessagingError("payload must be a JSON object")
     if to_session is not None:
         parse_session_key(to_session)
         if to_project is not None or to_vm is not None:
@@ -514,7 +533,7 @@ def send_message(
     if wake and to_session is None:
         raise MessagingError("wake applies only to direct messages (D4)")
 
-    with _conn() as conn:
+    with _use(conn) as conn:
         if kind == "request" and from_session is not None:
             sender = _get_session(conn, from_session)
             if sender is not None and sender["trust"] == "untrusted-input":
@@ -553,7 +572,7 @@ def send_message(
                 ).fetchone()
                 is not None
             )
-        conn.commit()
+        _commit(conn)
     msg = dict(row)
     msg["recipient_registered"] = registered
     return msg
@@ -588,6 +607,17 @@ def reply(
     original = get_message(message_id)
     if original is None:
         raise LookupError(f"message {message_id} not found")
+    fields, routed = _reply_fields(original, subject=subject, payload=payload, wake=wake)
+    msg = send_message(
+        from_session=from_session, from_vm=from_vm, from_project=from_project, body=body, **fields
+    )
+    msg["routed"] = routed
+    return msg
+
+
+def _reply_fields(
+    original: Mapping[str, Any], *, subject: str | None, payload: dict | None, wake: bool
+) -> tuple[dict[str, Any], str]:
     out_payload = dict(payload or {})
     to_session = original["from_session"]
     to_project = to_vm = None
@@ -603,23 +633,60 @@ def reply(
     if subject is None and original["subject"]:
         prior = original["subject"]
         subject = prior if prior.lower().startswith("re:") else f"Re: {prior}"
-    msg = send_message(
-        workspace_id=original["workspace_id"],
-        from_session=from_session,
-        from_vm=from_vm,
-        from_project=from_project,
-        to_session=to_session,
-        to_project=to_project,
-        to_vm=to_vm,
-        kind="reply",
-        subject=subject,
-        reply_to=message_id,
-        body=body,
-        payload=out_payload,
-        wake=wake,
-    )
+        if len(subject) > MAX_SUBJECT:
+            subject = subject[: MAX_SUBJECT - 3] + "..."
+    fields = {
+        "workspace_id": original["workspace_id"],
+        "to_session": to_session,
+        "to_project": to_project,
+        "to_vm": to_vm,
+        "kind": "reply",
+        "subject": subject,
+        "reply_to": original["id"],
+        "payload": out_payload,
+        "wake": wake,
+    }
+    return fields, routed
+
+
+def answer_request(
+    request_id: int,
+    *,
+    from_vm: str,
+    body: str,
+    from_project: str | None = None,
+    subject: str | None = None,
+    payload: dict | None = None,
+    wake: bool = True,
+) -> tuple[dict | None, bool]:
+    """Reply to a ``request`` at most once (the dispatcher, D8).
+
+    The request row is locked while checking for an existing reply, so two
+    dispatchers (or a retry racing a recovery) never both answer it. Returns
+    ``(reply, created)``: the new reply, or the existing one with ``created``
+    False (``None`` if the request is gone).
+    """
+    with _conn() as conn:
+        original = conn.execute(
+            f"SELECT {_MESSAGE_COLUMNS} FROM agent_messages WHERE id = %s FOR UPDATE",  # noqa: S608
+            (request_id,),
+        ).fetchone()
+        if original is None:
+            return None, False
+        existing = conn.execute(
+            f"SELECT {_MESSAGE_COLUMNS} FROM agent_messages "  # noqa: S608
+            "WHERE reply_to = %s AND kind = 'reply' ORDER BY id LIMIT 1",
+            (request_id,),
+        ).fetchone()
+        if existing is not None:
+            conn.commit()
+            return dict(existing), False
+        fields, routed = _reply_fields(dict(original), subject=subject, payload=payload, wake=wake)
+        msg = send_message(
+            from_vm=from_vm, from_project=from_project, body=body, conn=conn, **fields
+        )
     msg["routed"] = routed
-    return msg
+    return msg, True
 
 
 # ---------------------------------------------------------------------------
@@ -779,7 +846,7 @@ def claim_deliverable(
         if wake_only:
             where += " AND m.wake AND m.to_session IS NOT NULL"
         rows = _claim(conn, where, params, who.claimer, limit)
-        conn.commit()
+        _commit(conn)
     return rows
 
 
@@ -812,7 +879,7 @@ def release_claims(ids: list[int], claimer: str, *, conn: psycopg.Connection | N
             "WHERE id = ANY(%s) AND claimed_by = %s",
             (list(ids), claimer),
         ).rowcount
-        conn.commit()
+        _commit(conn)
     return released
 
 
@@ -856,6 +923,102 @@ def claim_message(message_id: int, claimer: str) -> dict | None:
         ).fetchone()
         conn.commit()
     return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Waking (D4, D6): one rule for the Stop hooks (L2) and the dispatcher (L3)
+# ---------------------------------------------------------------------------
+
+
+def wake_refusal(
+    session: Mapping[str, Any] | None,
+    message: Mapping[str, Any],
+    *,
+    sender_trust: str | None = None,
+) -> str | None:
+    """Why ``message`` may not wake ``session``, or ``None`` when it may.
+
+    Only a direct ``wake=true`` message for that session wakes (D4). The
+    session's ``wake_policy`` must allow it, and a sender registered as
+    ``untrusted-input`` never wakes anyone (D6). A refused message is still
+    delivered at the session's next turn (L1). The loop-guard cap is checked
+    by each caller.
+    """
+    if session is None:
+        return "the session is not registered"
+    if (
+        not message.get("wake")
+        or message.get("to_session") != session.get("session_key")
+        or message.get("kind") in ("request", "notice")
+    ):
+        return "not a direct wake message for this session"
+    if sender_trust == "untrusted-input":
+        return "sender is untrusted-input (D6)"
+    policy = session.get("wake_policy")
+    if policy == "direct":
+        return None
+    if policy == "any-direct-from-project":
+        project = session.get("project")
+        if project is not None and message.get("from_project") == project:
+            return None
+        return "wake_policy any-direct-from-project: the sender is on another project"
+    return f"wake_policy {policy} does not allow it"
+
+
+def may_wake(
+    session: Mapping[str, Any] | None,
+    message: Mapping[str, Any],
+    *,
+    sender_trust: str | None = None,
+) -> bool:
+    return wake_refusal(session, message, sender_trust=sender_trust) is None
+
+
+def next_wakeable(
+    session: Mapping[str, Any],
+    *,
+    claim: bool,
+    conn: psycopg.Connection | None = None,
+) -> dict | None:
+    """The oldest unclaimed message that :func:`may_wake` ``session``, or ``None``.
+
+    With ``claim`` it is claimed for the session (the Claude and Codex Stop
+    hooks); without, it is only found (agy's Stop, after which PreInvocation
+    delivers it). Refused messages stay unclaimed for L1.
+    """
+    key = session["session_key"]
+    columns = ", ".join(f"m.{c.strip()}" for c in _MESSAGE_COLUMNS.split(","))
+    with _use(conn) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT {columns}, snd.trust AS sender_trust
+            FROM agent_messages m
+            LEFT JOIN agent_sessions snd ON snd.session_key = m.from_session
+            WHERE m.to_session = %s AND m.claimed_by IS NULL AND m.wake
+              AND m.kind NOT IN ('request', 'notice') AND m.expires_at > now()
+            ORDER BY m.id
+            LIMIT 50
+            """,  # noqa: S608 - column list is a module constant
+            (key,),
+        ).fetchall()
+        found = None
+        for row in rows:
+            msg = dict(row)
+            if not may_wake(session, msg, sender_trust=msg.pop("sender_trust")):
+                continue
+            if not claim:
+                found = msg
+                break
+            claimed = conn.execute(
+                "UPDATE agent_messages SET claimed_by = %s, claimed_at = now() "  # noqa: S608
+                f"WHERE id = %s AND claimed_by IS NULL RETURNING {_MESSAGE_COLUMNS}",
+                (key, msg["id"]),
+            ).fetchone()
+            if claimed is not None:
+                found = dict(claimed)
+                break
+        _commit(conn)
+    return found
 
 
 def replies_to(message_id: int) -> list[dict]:

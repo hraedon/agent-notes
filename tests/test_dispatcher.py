@@ -91,7 +91,7 @@ def test_idle_agent_is_sent_the_framed_message(ws, vm, paseo, home):
     assert [c["args"][0] for c in calls] == ["inspect", "send"]
     assert calls[0]["args"] == ["inspect", "agent-1", "--json"]
     send = calls[1]
-    assert send["args"][:3] == ["send", "agent-1", "--no-wait"]
+    assert send["args"][:5] == ["send", "agent-1", "--no-wait", "--behavior", "steer"]
     assert "--host" not in send["args"]
     assert send["prompt"].startswith(m.PEER_MESSAGE_MARKER + "other-vm/claude/abc")
     assert "the verdict is in" in send["prompt"]
@@ -100,16 +100,27 @@ def test_idle_agent_is_sent_the_framed_message(ws, vm, paseo, home):
     assert m.get_session(key)["auto_continues"] == 1
 
 
-def test_several_messages_for_one_session_go_in_one_send(ws, vm, paseo, home):
+def test_one_message_per_wake_and_the_rest_stay_pending(ws, vm, paseo, home):
+    # Finding 2: at most one message per agent per pass; the second is never
+    # sent while the woken turn runs.
     key = _session(ws, vm, paseo_agent_id="agent-1")
     paseo.set_agent("agent-1", "idle")
     a, b = _wake_msg(ws, key, body="first"), _wake_msg(ws, key, body="second")
-    result = _waker(vm, paseo, home).wake(key, [a["id"], b["id"]])
-    assert result.outcome == dw.SENT
-    sends = paseo.sends()
-    assert len(sends) == 1
-    assert sends[0]["prompt"].index("first") < sends[0]["prompt"].index("second")
+    d = Dispatcher(vm=vm, waker=_waker(vm, paseo, home), handlers=None)
+    d.sweep()
+    (result,) = d.process_wakes(force=True)
+    assert result.outcome == dw.SENT and result.message_ids == (a["id"],)
+    assert result.remaining == (b["id"],)
+    (send,) = paseo.sends()
+    assert "first" in send["prompt"] and "second" not in send["prompt"]
+    assert m.get_message(b["id"])["claimed_by"] is None
+    assert b["id"] in d._pending and a["id"] not in d._pending
     assert m.get_session(key)["auto_continues"] == 1
+
+    paseo.set_agent("agent-1", "running")
+    (result,) = d.process_wakes(force=True)
+    assert result.outcome == dw.DEFERRED
+    assert len(paseo.sends()) == 1 and b["id"] in d._pending
 
 
 @pytest.mark.parametrize("status", ["running", "initializing"])
@@ -516,3 +527,190 @@ def test_listen_loop_wakes_and_holds_the_vm_lock(ws, vm, paseo, home):
     assert not thread.is_alive()
     with psycopg.connect(_dsn(), autocommit=True) as conn:
         conn.execute("SELECT 1")
+
+
+# ---------------------------------------------------------------------------
+# Review fixes, round 2 (Codex findings 5, 6, 7, 8)
+# ---------------------------------------------------------------------------
+
+
+def _fail(*_a, **_k):
+    raise RuntimeError("injected failure")
+
+
+def _oserror(*_a, **_k):
+    raise OSError("injected disk failure")
+
+
+@pytest.mark.parametrize("where", ["mkstemp", "write", "send"])
+def test_any_send_failure_releases_the_claim(ws, vm, paseo, home, monkeypatch, where):
+    # Finding 5: an OSError from the prompt file used to escape the release.
+    from agent_notes.dispatcher import paseo as dp
+
+    key = _session(ws, vm, paseo_agent_id="agent-1")
+    paseo.set_agent("agent-1", "idle")
+    msg = _wake_msg(ws, key)
+    if where == "mkstemp":
+        monkeypatch.setattr(dp.tempfile, "mkstemp", _oserror)
+    elif where == "write":
+        monkeypatch.setattr(dp.os, "fdopen", _oserror)
+    else:
+        monkeypatch.setattr(PaseoClient, "send", _fail)
+    result = _waker(vm, paseo, home).wake(key, [msg["id"]])
+    assert result.outcome == dw.FAILED
+    assert m.get_message(msg["id"])["claimed_by"] is None
+    assert m.get_session(key)["auto_continues"] == 0
+    assert paseo.sends() == []
+
+
+_SHAPE_CHECKS = ("agent_messages_payload_object", "agent_messages_subject_length")
+_MIGRATION_853 = Path(__file__).resolve().parents[1] / "schema" / "853_agent_messages_shape.sql"
+
+
+@pytest.fixture
+def pre_853():
+    """The database as it was before migration 853; 853 is re-applied after."""
+    with psycopg.connect(_dsn(), autocommit=True) as conn:
+        for name in _SHAPE_CHECKS:
+            conn.execute(f"ALTER TABLE agent_messages DROP CONSTRAINT IF EXISTS {name}")
+    try:
+        yield
+    finally:
+        with psycopg.connect(_dsn(), autocommit=True) as conn:
+            conn.execute(_MIGRATION_853.read_text(encoding="utf-8"))
+
+
+def _raw_request(ws: int, vm: str, requester: str, payload: str, subject: str | None = None) -> int:
+    with psycopg.connect(_dsn(), autocommit=True) as conn:
+        return conn.execute(
+            "INSERT INTO agent_messages (workspace_id, from_session, from_vm, to_vm, kind, "
+            "subject, body, payload) VALUES (%s, %s, 'req-vm', %s, 'request', %s, 'please', "
+            "%s::jsonb) RETURNING id",
+            (ws, requester, vm, subject, payload),
+        ).fetchone()[0]
+
+
+def _review_dispatcher(vm: str) -> Dispatcher:
+    return Dispatcher(vm=vm, waker=None, handlers={"review": lambda r, c: dj.JobReply(body="x")})
+
+
+@pytest.mark.parametrize("payload", ['["review"]', '"just a string"', '{"job": 7}'])
+def test_malformed_payload_gets_bad_request_instead_of_a_crash(ws, vm, pre_853, payload):
+    # Finding 6: a non-object payload raised AttributeError before the job ran.
+    requester = _session(ws, "req-vm")
+    rid = _raw_request(ws, vm, requester, payload)
+    _review_dispatcher(vm).run_once()
+    reply = _reply_to(rid)
+    assert reply["payload"]["error_code"] == dj.BAD_REQUEST
+    assert reply["to_session"] == requester
+
+
+def test_malformed_interrupted_request_is_answered_at_startup(ws, vm, pre_853):
+    # ...and again in the interrupted-request recovery, on every restart.
+    requester = _session(ws, "req-vm")
+    rid = _raw_request(ws, vm, requester, '["review"]')
+    assert m.claim_requests(vm, claimer=f"{vm}/dispatcher")
+    _review_dispatcher(vm).run_once()
+    assert _reply_to(rid)["payload"]["error_code"] == dj.JOB_INTERRUPTED
+
+
+def test_migration_853_brings_old_rows_into_shape(ws, vm, pre_853):
+    requester = _session(ws, "req-vm")
+    bad_payload = _raw_request(ws, vm, requester, '["review"]')
+    long_subject = _raw_request(ws, vm, requester, "{}", subject="s" * 12000)
+    with psycopg.connect(_dsn(), autocommit=True) as conn:
+        conn.execute(_MIGRATION_853.read_text(encoding="utf-8"))
+        conn.execute(_MIGRATION_853.read_text(encoding="utf-8"))  # idempotent
+        checks = conn.execute(
+            "SELECT conname, convalidated FROM pg_constraint "
+            "WHERE conrelid = 'agent_messages'::regclass AND conname = ANY(%s)",
+            (list(_SHAPE_CHECKS),),
+        ).fetchall()
+    assert sorted(checks) == sorted((name, True) for name in _SHAPE_CHECKS)
+    assert m.get_message(bad_payload)["payload"] == {"invalid_payload": ["review"]}
+    assert len(m.get_message(long_subject)["subject"]) == 512
+    # Both stay claimable, and the old malformed request is answered.
+    _review_dispatcher(vm).run_once()
+    assert _reply_to(bad_payload)["payload"]["error_code"] == dj.BAD_REQUEST
+
+
+def test_unposted_reply_is_kept_and_posted_by_a_later_sweep(ws, vm, monkeypatch):
+    # Finding 7: after three failed writes the verdict used to be lost.
+    requester = _session(ws, "req-vm")
+    req = _request(ws, vm, requester)
+    monkeypatch.setattr(dj, "_REPLY_BACKOFF", 0.0)
+    real = m.answer_request
+    monkeypatch.setattr(m, "answer_request", _fail)
+    d = Dispatcher(
+        vm=vm, waker=None, handlers={"echo": lambda r, c: dj.JobReply(body="the verdict")}
+    )
+    assert d.poll_requests() == 1
+    assert d.wait_for_jobs(30)
+    assert m.replies_to(req["id"]) == []
+    assert d.answer_unreplied() == 0  # still failing: kept, not replaced
+    monkeypatch.setattr(m, "answer_request", real)
+    assert d.answer_unreplied() == 1
+    assert _reply_to(req["id"])["body"] == "the verdict"
+    assert d.answer_unreplied() == 0
+
+
+def test_sweep_answers_stale_claims_but_not_running_jobs(ws, vm):
+    requester = _session(ws, "req-vm")
+    release = threading.Event()
+
+    def slow(request, ctx):
+        release.wait(30)
+        return dj.JobReply(body="slow verdict")
+
+    d = Dispatcher(vm=vm, waker=None, handlers={"echo": slow})
+    running = _request(ws, vm, requester)
+    assert d.poll_requests() == 1
+    stale = _request(ws, vm, requester)
+    assert m.claim_requests(vm, claimer=d.claimer)  # an earlier instance's, never answered
+    try:
+        assert d.answer_unreplied() == 1
+        assert _reply_to(stale["id"])["payload"]["error_code"] == dj.JOB_INTERRUPTED
+        assert m.replies_to(running["id"]) == []
+    finally:
+        release.set()
+    assert d.wait_for_jobs(30)
+    assert _reply_to(running["id"])["body"] == "slow verdict"
+
+
+def test_a_request_is_never_answered_twice(ws, vm):
+    requester = _session(ws, "req-vm")
+    req = _request(ws, vm, requester)
+    ctx = dj.JobContext(vm=vm)
+    assert dj.post_reply(req, dj.failure_reply(req, dj.JOB_INTERRUPTED, "gone"), ctx)
+    assert dj.post_reply(req, dj.JobReply(body="late verdict"), ctx)
+    reply = _reply_to(req["id"])
+    assert reply["payload"]["error_code"] == dj.JOB_INTERRUPTED
+
+
+def test_shutdown_holds_the_vm_lock_until_jobs_finish(ws, vm):
+    # Finding 8: the lock connection used to close before the workers finished.
+    requester = _session(ws, "req-vm")
+    started, release = threading.Event(), threading.Event()
+
+    def slow(request, ctx):
+        started.set()
+        release.wait(30)
+        return dj.JobReply(body="late verdict")
+
+    d = Dispatcher(vm=vm, waker=None, handlers={"echo": slow}, shutdown_grace=20)
+    stop = threading.Event()
+    thread = threading.Thread(target=d.run, args=(stop,), daemon=True)
+    thread.start()
+    req = _request(ws, vm, requester)
+    try:
+        assert started.wait(15), "the job never started"
+        stop.set()
+        time.sleep(1.5)  # past the loop's wait: it is draining now
+        assert thread.is_alive()
+        with pytest.raises(AlreadyRunningError):
+            Dispatcher(vm=vm, waker=None, handlers=None)._connect()
+    finally:
+        release.set()
+        thread.join(timeout=30)
+    assert not thread.is_alive()
+    assert _reply_to(req["id"])["body"] == "late verdict"

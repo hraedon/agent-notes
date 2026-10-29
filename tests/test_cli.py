@@ -134,6 +134,46 @@ def test_init_keeps_old_orient_hook_and_removes_reconcile_hook():
         assert reconcile_cmds == ["user-stop-hook"]
 
 
+def test_reconcile_cleanup_removes_only_commands_init_wrote(tmp_path):
+    """Codex finding 11: a prefix match deleted user-owned compound commands."""
+    from agent_notes.cli import _remove_claude_stop_reconcile_hook
+
+    (tmp_path / ".claude").mkdir()
+    compound = "agent-notes outbox reconcile && ./my-own-stop.sh"
+    flagged = "agent-notes outbox reconcile --json > ~/reconcile.log"
+    settings = {
+        "hooks": {
+            "Stop": [
+                {"hooks": [{"type": "command", "command": "agent-notes outbox reconcile"}]},
+                {
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "agent-notes outbox reconcile >/dev/null || true",
+                        },
+                        {"type": "command", "command": compound},
+                    ]
+                },
+                {"hooks": [{"type": "command", "command": flagged}, {"type": "x"}]},
+                {"hooks": [{"type": "command", "command": ["not", "a", "string"]}]},
+            ]
+        }
+    }
+    path = tmp_path / ".claude" / "settings.json"
+    path.write_text(json.dumps(settings), encoding="utf-8")
+    _path, changed, left = _remove_claude_stop_reconcile_hook(str(tmp_path))
+    assert changed
+    assert left == [compound, flagged]
+    after = json.loads(path.read_text(encoding="utf-8"))["hooks"]["Stop"]
+    assert after == [
+        {"hooks": [{"type": "command", "command": compound}]},
+        {"hooks": [{"type": "command", "command": flagged}, {"type": "x"}]},
+        {"hooks": [{"type": "command", "command": ["not", "a", "string"]}]},
+    ]
+    # Nothing left that init wrote: no change, but the user's commands are reported.
+    assert _remove_claude_stop_reconcile_hook(str(tmp_path))[1:] == (False, [compound, flagged])
+
+
 def test_resolve_not_configured():
     with tempfile.TemporaryDirectory() as td:
         result = _run("resolve", "--path", td, "--json", check=False)

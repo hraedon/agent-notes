@@ -14,17 +14,15 @@ stdin, named hooks in ``~/.gemini/config/hooks.json``):
   the message itself is delivered by the next ``PreInvocation`` as peer
   content. Only a normal turn end (``NO_TOOL_CALL``) is extended.
 
-agy has no per-prompt hook that fires only on human input, so the loop guard
-resets when ``lastUserInput`` changes to a prompt without the peer marker.
-The last seen input's hash is kept per conversation in the state directory.
+agy has no per-prompt hook that fires only on human input. PreInvocation's
+``invocationNum`` is 0 on the first model call of a turn and keeps counting
+through a Stop continuation (checked against agy 1.4.10), so the loop guard
+resets on ``invocationNum == 0`` when ``lastUserInput`` has no peer marker.
+That needs no local state, and a repeated prompt ("continue") still resets.
 """
 
 from __future__ import annotations
 
-import hashlib
-import re
-import time
-from pathlib import Path
 from typing import Any, Mapping
 
 from agent_notes.hooks import common
@@ -36,7 +34,6 @@ SESSION_START_COMMAND = f"{_COMMAND} session-start"
 PRE_INVOCATION_COMMAND = f"{_COMMAND} pre-invocation"
 STOP_COMMAND = f"{_COMMAND} stop"
 _EXTENDABLE_TERMINATIONS = ("", "NO_TOOL_CALL")
-_PROMPT_STATE_TTL = 7 * 86400
 
 WAKE_REASON = (
     "agent-notes: a direct message from another agent session arrived as this turn "
@@ -75,7 +72,6 @@ def _inject(step: dict[str, Any]) -> dict[str, Any]:
 
 def session_start(payload: Mapping[str, Any], env: Mapping[str, str]) -> dict[str, Any]:
     inp = _input(payload, env)
-    _prune_prompt_state()
     with common.connect() as conn:
         row = common.ensure_session(conn, inp, full=True)
     parts: list[str] = []
@@ -98,7 +94,7 @@ def pre_invocation(payload: Mapping[str, Any], env: Mapping[str, str]) -> dict[s
         row = common.ensure_session(conn, inp)
         if row is None:
             return {}
-        if _is_new_human_input(inp.session_id, payload.get("lastUserInput")):
+        if is_new_human_turn(payload):
             common.note_human_prompt(conn, row)
         messages = common.deliver(conn, row["session_key"])
     return _inject({"ephemeralMessage": messages}) if messages else {}
@@ -119,55 +115,26 @@ def stop(payload: Mapping[str, Any], env: Mapping[str, str]) -> dict[str, Any]:
             return {}
         assert row is not None
         key = row["session_key"]
-        if not messaging.count_deliverable(key, wake_only=True, conn=conn):
-            return {}
-        messaging.bump_auto_continue(key, conn=conn)
+        with conn.transaction():
+            # The same rule as the dispatcher. PreInvocation then delivers it
+            # (with anything else pending) as peer content.
+            if messaging.next_wakeable(row, claim=False, conn=conn) is None:
+                return {}
+            messaging.bump_auto_continue(key, conn=conn)
     common.log("agy %s: extending turn (executionNum=%s)", key, payload.get("executionNum"))
     return {"decision": "continue", "reason": WAKE_REASON}
 
 
-# ---------------------------------------------------------------------------
-# Human-input tracking for the loop guard
-# ---------------------------------------------------------------------------
+def is_new_human_turn(payload: Mapping[str, Any]) -> bool:
+    """The first model call of a turn a human started (the loop-guard reset).
 
-
-def _prompt_state_dir() -> Path:
-    return common.state_dir() / "agy-prompts"
-
-
-def _state_file(session_id: str) -> Path:
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", session_id)[:128] or "_"
-    return _prompt_state_dir() / safe
-
-
-def _is_new_human_input(session_id: str, last_input: object) -> bool:
-    """True once per new human ``lastUserInput`` in a conversation."""
-    if not common.is_human_prompt(last_input):
+    Without an integer ``invocationNum`` (an older agy) it never resets: the
+    guard fails closed, and wakes wait for L1 once the cap is reached.
+    """
+    num = payload.get("invocationNum")
+    if not isinstance(num, int) or isinstance(num, bool):
         return False
-    assert isinstance(last_input, str)
-    digest = hashlib.sha256(last_input.encode("utf-8")).hexdigest()
-    path = _state_file(session_id)
-    try:
-        if path.read_text(encoding="utf-8").strip() == digest:
-            return False
-    except OSError:
-        pass
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(digest, encoding="utf-8")
-    except OSError as exc:
-        common.log("agy prompt state not saved: %s", type(exc).__name__)
-    return True
-
-
-def _prune_prompt_state() -> None:
-    cutoff = time.time() - _PROMPT_STATE_TTL
-    try:
-        for path in _prompt_state_dir().iterdir():
-            if path.stat().st_mtime < cutoff:
-                path.unlink(missing_ok=True)
-    except OSError:
-        pass
+    return num == 0 and common.is_human_prompt(payload.get("lastUserInput"))
 
 
 _HANDLERS = {

@@ -1,11 +1,16 @@
 """L3 idle wake: hand a direct ``wake=true`` message to the local Paseo daemon.
 
-One call to :meth:`L3Waker.wake` handles every pending wake message for one
+One call to :meth:`L3Waker.wake` handles the pending wake messages for one
 session. It re-reads the rows (an ``await`` or a Stop hook may have claimed
-them during the grace delay), applies the D6 trust rule, resolves the Paseo
-agent, applies the session's ``wake_policy`` and the ``auto_continues`` cap,
-and sends only when Paseo reports the agent idle. A running turn is never
-interrupted: the message is left for L1/L2 and the caller rechecks later.
+them during the grace delay), resolves the Paseo agent, applies the shared
+wake rule (:func:`agent_notes.core.messaging.may_wake`: ``wake_policy`` and
+the D6 trust rule) and the ``auto_continues`` cap, and sends only when Paseo
+reports the agent idle. It sends at most one message per call; the rest stay
+pending (the woken turn's per-prompt hook usually delivers them).
+
+The idle check and the send are not atomic: a human can start a turn in
+between. The send always uses ``--behavior steer``, so losing that race means
+a mid-turn steer with framed peer content, never an interrupt.
 """
 
 from __future__ import annotations
@@ -41,22 +46,12 @@ class WakeResult:
     message_ids: tuple[int, ...] = ()
     agent_id: str | None = None
     refused: dict[int, str] = field(default_factory=dict)
+    # Allowed to wake but not sent this time (one send per call); retry later.
+    remaining: tuple[int, ...] = ()
 
     @property
     def settled(self) -> bool:
         return self.outcome != DEFERRED
-
-
-def policy_allows(session: dict, msg: dict) -> bool:
-    """D6: ``direct`` wakes on any direct message; ``any-direct-from-project``
-    only when the sender is on the recipient's project."""
-    policy = session.get("wake_policy")
-    if policy == "direct":
-        return True
-    if policy == "any-direct-from-project":
-        project = session.get("project")
-        return project is not None and msg.get("from_project") == project
-    return False
 
 
 class L3Waker:
@@ -92,14 +87,14 @@ class L3Waker:
                 rows.append(row)
         return rows
 
-    def _sender_untrusted(self, msg: dict, cache: dict[str, Any]) -> bool:
+    def _sender_trust(self, msg: dict, cache: dict[str, Any]) -> str | None:
         sender = msg.get("from_session")
         if not sender:
-            return False
+            return None
         if sender not in cache:
             cache[sender] = messaging.get_session(sender)
         row = cache[sender]
-        return row is not None and row.get("trust") == "untrusted-input"
+        return row.get("trust") if row is not None else None
 
     def resolve_agent(self, session: dict) -> tuple[str | None, dict]:
         """(a) the registered ``paseo_agent_id``; (b) Paseo's local records,
@@ -125,34 +120,24 @@ class L3Waker:
         if session is None or session["vm_id"] != self.vm:
             return WakeResult(NOT_HOSTED, "session is not registered on this VM", session_key, ids)
 
-        refused: dict[int, str] = {}
-        trusted_cache: dict[str, Any] = {}
-        candidates = []
-        for row in rows:
-            if self._sender_untrusted(row, trusted_cache):
-                refused[row["id"]] = "sender is untrusted-input (D6)"
-            else:
-                candidates.append(row)
-        if not candidates:
-            return WakeResult(
-                REFUSED, "every sender is untrusted-input", session_key, ids, None, refused
-            )
-
         agent_id, session = self.resolve_agent(session)
         if agent_id is None:
-            return WakeResult(
-                NOT_HOSTED, "no Paseo agent hosts this session", session_key, ids, None, refused
-            )
+            return WakeResult(NOT_HOSTED, "no Paseo agent hosts this session", session_key, ids)
 
+        refused: dict[int, str] = {}
+        trust_cache: dict[str, Any] = {}
         eligible = []
-        for row in candidates:
-            if policy_allows(session, row):
+        for row in rows:
+            why = messaging.wake_refusal(
+                session, row, sender_trust=self._sender_trust(row, trust_cache)
+            )
+            if why is None:
                 eligible.append(row)
             else:
-                refused[row["id"]] = f"wake_policy {session['wake_policy']} does not allow it"
+                refused[row["id"]] = why
         if not eligible:
             return WakeResult(
-                REFUSED, "wake_policy does not allow it", session_key, ids, agent_id, refused
+                REFUSED, "no message may wake this session", session_key, ids, agent_id, refused
             )
         if session["auto_continues"] >= self.max_auto_continues:
             return WakeResult(
@@ -176,28 +161,29 @@ class L3Waker:
             reason = f"Paseo agent is {'archived' if state.archived else state.status}"
             return WakeResult(outcome, reason, session_key, ids, agent_id, refused)
 
-        claimed = [
-            row
-            for row in (messaging.claim_message(r["id"], self.claimer) for r in eligible)
-            if row is not None
-        ]
-        if not claimed:
+        claimed = None
+        for index, row in enumerate(eligible):
+            claimed = messaging.claim_message(row["id"], self.claimer)
+            if claimed is not None:
+                remaining = tuple(r["id"] for r in eligible[index + 1 :])
+                break
+        if claimed is None:
             return WakeResult(SKIPPED, "claimed by someone else", session_key, ids, agent_id)
-        text = "\n\n".join(messaging.format_peer_message(row) for row in claimed)
         try:
-            self.paseo.send(agent_id, text)
-        except PaseoError as exc:
-            messaging.release_claims([row["id"] for row in claimed], self.claimer)
-            return WakeResult(FAILED, f"{exc}; left for L1", session_key, ids, agent_id, refused)
+            self.paseo.send(agent_id, messaging.format_peer_message(claimed))
+        except Exception as exc:  # noqa: BLE001 - any failure leaves the message for L1
+            messaging.release_claims([claimed["id"]], self.claimer)
+            reason = str(exc) if isinstance(exc, PaseoError) else type(exc).__name__
+            return WakeResult(FAILED, f"{reason}; left for L1", session_key, ids, agent_id, refused)
         count = messaging.bump_auto_continue(session_key)
-        sent_ids = tuple(row["id"] for row in claimed)
         return WakeResult(
             SENT,
-            f"sent {len(sent_ids)} message(s); auto_continues={count}",
+            f"sent #{claimed['id']}; auto_continues={count}",
             session_key,
-            sent_ids,
+            (claimed["id"],),
             agent_id,
             refused,
+            remaining,
         )
 
 
