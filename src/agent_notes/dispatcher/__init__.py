@@ -57,11 +57,12 @@ def _configure_logging(level: str, log_file: str | None) -> None:
                 log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
             )
         )
-    logging.basicConfig(
+    from agent_notes.core import logs
+
+    logs.basic_config(
         level=getattr(logging, level.upper(), logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        fmt="%(asctime)s %(levelname)s %(name)s: %(message)s",
         handlers=handlers,
-        force=True,
     )
 
 

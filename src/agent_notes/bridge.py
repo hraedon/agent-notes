@@ -151,7 +151,9 @@ def run(
 
 
 def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    from agent_notes.core import logs
+
+    logs.basic_config(fmt="%(asctime)s %(name)s %(message)s")
     try:
         run()
     except KeyboardInterrupt:

@@ -195,7 +195,9 @@ def log(message: str, *args: object) -> None:
             handler = RotatingFileHandler(
                 path, maxBytes=_LOG_MAX_BYTES, backupCount=2, encoding="utf-8"
             )
-            handler.setFormatter(logging.Formatter("%(asctime)s %(process)d %(message)s"))
+            from agent_notes.core.logs import UTCFormatter
+
+            handler.setFormatter(UTCFormatter("%(asctime)s %(process)d %(message)s"))
             logger.addHandler(handler)
             logger.setLevel(logging.INFO)
             logger.propagate = False
