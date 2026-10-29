@@ -6,19 +6,27 @@ does two things:
 
 - **L3 idle wake.** A direct `wake=true` message for a session on this VM is
   handed to the local Paseo daemon with
-  `paseo send <agent> --no-wait --prompt-file <file>`, framed as peer content
-  (D6). It only does this when all of the following hold:
+  `paseo send <agent> --no-wait --behavior steer --prompt-file <file>`, framed
+  as peer content (D6). It only does this when all of the following hold:
   - The message is still unclaimed 1 s after it arrives. The grace period lets
     `msg await` or a Stop hook take it first.
-  - The sender isn't an `untrusted-input` session.
-  - The session's `wake_policy` allows it: `direct`, or
-    `any-direct-from-project` with a sender on the same project.
+  - The shared wake rule (`messaging.may_wake`, also used by the Stop hooks)
+    allows it: the sender isn't an `untrusted-input` session, and the
+    session's `wake_policy` is `direct`, or `any-direct-from-project` with a
+    sender on the same project.
   - `auto_continues` is below the cap.
   - `paseo inspect` reports the agent `idle`.
 
-  If the agent is running, the message is left for L1 and L2, and the
-  dispatcher rechecks it every sweep for up to 10 minutes. It never interrupts
-  a turn.
+  It sends at most one message per session per sweep or notification. The
+  woken turn's per-prompt hook usually delivers the rest; otherwise they are
+  rechecked at the next sweep. If the agent is running, the message is left for
+  L1 and L2, and the dispatcher rechecks it every sweep for up to 10 minutes.
+
+  `inspect` and `send` are two calls, so a human can start a turn between
+  them. That race can't be closed from outside Paseo. `--behavior steer` is
+  always passed, so losing it means the framed message steers the running
+  turn; it never interrupts it (without the flag, Paseo 0.13 uses the
+  agent's default and otherwise interrupts).
 - **Jobs.** It claims `request` rows addressed to this VM and runs them, at
   most two at a time. v1 has one job type, `review`: one Claude review through
   Plan 023's runner. Every request gets a direct `wake=true` reply, whether it
@@ -61,10 +69,18 @@ dispatcher.
      covers threads adopted with `paseo import`. The result is stored with
      `messaging.set_paseo_agent_id`, which also turns on the `direct` wake
      policy unless a policy was set explicitly.
-- If a send fails, the claim is released, so L1 still delivers the message.
-- When the dispatcher starts, it answers any request it had claimed but never
-  replied to with `JOB_INTERRUPTED`. That covers a crash, a kill or a reboot
-  during a job.
+- If a send fails for any reason (including the prompt file), the claim is
+  released, so L1 still delivers the message.
+- A request gets at most one reply. The reply is posted in the transaction
+  that locks the request row and checks for an existing reply, so a retry, a
+  recovery and a second dispatcher can't answer twice.
+- If a finished job's reply can't be posted (three tries), the reply is kept
+  in memory and retried every sweep.
+- At startup and on every sweep, it answers each request it claimed that has
+  no reply and no job running here with `JOB_INTERRUPTED`. That covers a
+  crash, a kill or a reboot during a job.
+- On SIGTERM it waits up to 25 s for running jobs before closing the
+  connection that holds the VM lock (the systemd unit allows 30 s).
 
 ## The review job
 
@@ -115,6 +131,7 @@ Error codes in `payload.error_code`:
 | `REVIEW_REVISION_MISSING` | The base or head isn't in the checkout after the fetch, usually because it wasn't pushed |
 | `REVIEW_RUNNER_TIMEOUT` | The reviewer exceeded its timeout (600 s by default) |
 | `REVIEW_RUNNER_FAILED`, `REVIEW_OUTPUT_INVALID`, `REVIEW_IDENTITY_MISMATCH`, `REVIEW_GIT_TARGET_INVALID`, `REVIEW_TARGET_INTEGRITY_FAILED` | 023's own failure codes |
+| `BAD_REQUEST` | The payload isn't a JSON object, or has no string `job` (migration 853 keeps a pre-853 non-object payload under `invalid_payload`) |
 | `REVIEW_REQUEST_INVALID`, `REVIEW_REVIEWER_UNSUPPORTED` | The request payload is malformed, or names a reviewer other than `claude` |
 | `REVIEW_ATTEMPT_CONFLICT`, `REVIEW_JOB_FAILED`, `JOB_FAILED`, `JOB_TYPE_UNSUPPORTED`, `JOB_INTERRUPTED` | Journal conflict, an unexpected error, an unknown job type, or a dispatcher restart |
 

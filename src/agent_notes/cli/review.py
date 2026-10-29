@@ -278,7 +278,7 @@ def _status(request: dict, reply_id: int | None) -> str:
 
 
 def _attempt_and_artifact(reply: dict | None) -> tuple[dict | None, dict | None]:
-    payload = (reply or {}).get("payload") or {}
+    payload = messaging.payload_of(reply or {})
     attempt_id = payload.get("attempt_id")
     if not attempt_id:
         return None, None
@@ -356,7 +356,7 @@ def cmd_review_show(args: argparse.Namespace) -> int:
             }
         )
         return EXIT_SUCCESS
-    payload = request.get("payload") or {}
+    payload = messaging.payload_of(request)
     print(
         f"Request #{request['id']} ({payload.get('job')}, {payload.get('reviewer')}) "
         f"to {request['to_vm']}: {status}"
@@ -399,7 +399,7 @@ def cmd_review_list(args: argparse.Namespace) -> int:
     )
     items = []
     for row in rows:
-        payload = row.get("payload") or {}
+        payload = messaging.payload_of(row)
         items.append(
             {
                 "request_id": row["id"],

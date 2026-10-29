@@ -1,7 +1,8 @@
 """The local Paseo daemon, as the dispatcher sees it (Plan 025 §6, L3).
 
 Only two CLI calls are used, both against the local daemon: ``paseo inspect
-<id> --json`` and ``paseo send <id> --no-wait --prompt-file <file>``. No
+<id> --json`` and ``paseo send <id> --no-wait --behavior steer --prompt-file
+<file>``. No
 ``--host`` is ever passed (D2), and nothing here logs the environment, which
 carries ``PASEO_PASSWORD`` on a Paseo machine.
 
@@ -129,14 +130,27 @@ class PaseoClient:
         )
 
     def send(self, agent_id: str, prompt: str) -> None:
-        """Deliver ``prompt`` as a new turn, without waiting for it."""
+        """Deliver ``prompt`` as a new turn, without waiting for it.
+
+        ``--behavior steer`` is always passed. The caller checks that the agent
+        is idle first, but a human can start a turn in between; Paseo's
+        fallback for a running agent would otherwise be an interrupt.
+        """
         if not valid_agent_id(agent_id):
             raise PaseoError(f"not a Paseo agent id: {agent_id!r}")
-        fd, path = tempfile.mkstemp(prefix="agent-notes-wake-", suffix=".txt")
         try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-                handle.write(prompt)
-            self._call(["send", agent_id, "--no-wait", "--prompt-file", path])
+            fd, path = tempfile.mkstemp(prefix="agent-notes-wake-", suffix=".txt")
+        except OSError as exc:
+            raise PaseoError(f"could not create the prompt file: {type(exc).__name__}") from exc
+        try:
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+                    handle.write(prompt)
+            except OSError as exc:
+                raise PaseoError(f"could not write the prompt file: {type(exc).__name__}") from exc
+            self._call(
+                ["send", agent_id, "--no-wait", "--behavior", "steer", "--prompt-file", path]
+            )
         finally:
             try:
                 os.unlink(path)

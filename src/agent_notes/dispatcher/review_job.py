@@ -107,7 +107,9 @@ def default_runner_factory(model: str, env: Mapping[str, str]) -> ReviewRunner:
 
 
 def _payload(request: Mapping[str, Any], env: Mapping[str, str]) -> dict[str, Any]:
-    raw = request.get("payload") or {}
+    raw = request.get("payload")
+    if not isinstance(raw, dict):
+        raise _JobError(REQUEST_INVALID, "the payload is not a JSON object")
     reviewer = raw.get("reviewer", "claude")
     if reviewer not in REVIEWERS:
         raise _JobError(REVIEWER_UNSUPPORTED, f"reviewer {reviewer!r} is not supported here")
