@@ -84,9 +84,11 @@ class TestWorkspaces:
 class TestProjects:
     def test_seed_global_project_exists(self, pg: str) -> None:
         default_ws = next(w for w in coredb.list_workspaces() if w.slug == "default")
-        projects = coredb.list_projects(workspace_id=default_ws.id)
-        slugs = {p.slug for p in projects}
-        assert "global" in slugs
+        # The seeded row is the global memory tier (Plan 025): present as a
+        # project row of kind 'global', hidden from the default project listing.
+        assert "global" not in {p.slug for p in coredb.list_projects(workspace_id=default_ws.id)}
+        tiers = coredb.list_projects(workspace_id=default_ws.id, kinds=("global",))
+        assert [p.slug for p in tiers] == ["global"]
 
     def test_get_or_create_project_idempotent(self, pg: str) -> None:
         ws = coredb.get_or_create_workspace("proj-ws", "Proj WS")

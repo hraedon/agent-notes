@@ -88,6 +88,7 @@ def codex_hook_document() -> dict[str, object]:
                             "type": "command",
                             "command": STOP_COMMAND,
                             "timeout": 10,
+                            "statusMessage": "Checking agent-notes for wake messages",
                         }
                     ]
                 }
@@ -181,20 +182,6 @@ def _format_orientation(payload: dict[str, Any]) -> str:
         ]
         lines.append("Resolved in git but still open: " + ", ".join(identifiers))
 
-    sync = payload.get("regista_sync")
-    if isinstance(sync, dict) and sync.get("enabled"):
-        pending = sum(
-            int(sync.get(key, 0))
-            for key in (
-                "outbox_pending",
-                "outbox_conflicts",
-                "outbox_rejected",
-                "pending_sync_rows",
-            )
-            if isinstance(sync.get(key, 0), int)
-        )
-        lines.append(f"Pending synchronization findings: {pending}")
-
     context = "\n".join(lines)
     if len(context) > MAX_ORIENTATION_CHARS:
         context = context[: MAX_ORIENTATION_CHARS - 24] + "\n[orientation truncated]"
@@ -224,6 +211,10 @@ def _orientation_for_cwd(cwd: Path) -> str | None:
         return None
     parsed = json.loads(stdout.getvalue())
     if not isinstance(parsed, dict) or "error" in parsed:
+        return None
+    if parsed.get("project") is None:
+        # Unregistered cwd: orient reports only the VM/global tiers; this hook
+        # injects project orientation only.
         return None
     return _format_orientation(parsed)
 

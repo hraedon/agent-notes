@@ -79,36 +79,17 @@ def _stop_reconcile_cmds(settings: dict) -> list[str]:
     ]
 
 
-def test_init_wires_session_hook_and_preserves_settings():
+def test_init_no_longer_writes_a_per_repo_session_hook():
+    """Plan 025 Phase 4: orientation moved to the user-level hook
+    (`install-harness claude`), so init leaves .claude/settings.json alone."""
     with tempfile.TemporaryDirectory() as td:
         repo = Path(td) / "repo"
         (repo / ".claude").mkdir(parents=True)
         (repo / ".git").mkdir()
-        # Pre-existing unrelated setting must survive the merge.
         (repo / ".claude" / "settings.json").write_text(json.dumps({"model": "x"}))
         assert _run("init", str(repo), check=False).returncode == 0
         settings = json.loads((repo / ".claude" / "settings.json").read_text())
-        assert settings["model"] == "x"
-        assert any(c.startswith("agent-notes orient") for c in _session_orient_cmds(settings))
-        assert any(
-            c.startswith("agent-notes outbox reconcile") for c in _stop_reconcile_cmds(settings)
-        )
-        # Hook commands must be cross-platform (no POSIX-only shell syntax).
-        for c in _session_orient_cmds(settings) + _stop_reconcile_cmds(settings):
-            assert "2>/dev/null" not in c, f"POSIX-only redirect in hook: {c}"
-            assert "|| true" not in c, f"POSIX-only fallback in hook: {c}"
-            assert ">/dev/null" not in c, f"POSIX-only redirect in hook: {c}"
-        # Idempotent: re-running does not duplicate either hook.
-        _run("init", str(repo), check=False)
-        settings2 = json.loads((repo / ".claude" / "settings.json").read_text())
-        assert sum(c.startswith("agent-notes orient") for c in _session_orient_cmds(settings2)) == 1
-        assert (
-            sum(
-                c.startswith("agent-notes outbox reconcile")
-                for c in _stop_reconcile_cmds(settings2)
-            )
-            == 1
-        )
+        assert settings == {"model": "x"}
 
 
 def test_init_no_hooks_skips_settings():
@@ -120,9 +101,10 @@ def test_init_no_hooks_skips_settings():
         assert not (repo / ".claude" / "settings.json").exists()
 
 
-def test_init_upgrades_old_posix_hook_commands():
-    """Old-format hook commands (with POSIX-only shell syntax) are upgraded
-    to the cross-platform bare command on re-init."""
+def test_init_keeps_old_orient_hook_and_removes_reconcile_hook():
+    """A per-repo orient hook from an older init is left alone (with a note
+    that the user-level hook supersedes it), and the retired outbox reconcile
+    Stop hook is removed while other Stop hooks survive."""
     with tempfile.TemporaryDirectory() as td:
         repo = Path(td) / "repo3"
         (repo / ".claude").mkdir(parents=True)
@@ -134,21 +116,22 @@ def test_init_upgrades_old_posix_hook_commands():
                 {
                     "hooks": {
                         "SessionStart": [{"hooks": [{"type": "command", "command": old_orient}]}],
-                        "Stop": [{"hooks": [{"type": "command", "command": old_reconcile}]}],
+                        "Stop": [
+                            {"hooks": [{"type": "command", "command": old_reconcile}]},
+                            {"hooks": [{"type": "command", "command": "user-stop-hook"}]},
+                        ],
                     }
                 }
             )
         )
-        assert _run("init", str(repo), check=False).returncode == 0
+        result = _run("init", str(repo), check=False)
+        assert result.returncode == 0
+        assert "still runs `agent-notes orient`" in result.stdout
         settings = json.loads((repo / ".claude" / "settings.json").read_text())
         orient_cmds = _session_orient_cmds(settings)
         reconcile_cmds = _stop_reconcile_cmds(settings)
-        assert len(orient_cmds) == 1
-        assert len(reconcile_cmds) == 1
-        assert "2>/dev/null" not in orient_cmds[0]
-        assert "|| true" not in orient_cmds[0]
-        assert ">/dev/null" not in reconcile_cmds[0]
-        assert "|| true" not in reconcile_cmds[0]
+        assert orient_cmds == [old_orient]
+        assert reconcile_cmds == ["user-stop-hook"]
 
 
 def test_resolve_not_configured():

@@ -31,7 +31,8 @@
           {
             "type": "command",
             "command": "agent-notes-hook codex stop",
-            "timeout": 10
+            "timeout": 10,
+            "statusMessage": "Checking agent-notes for wake messages"
           }
         ]
       }

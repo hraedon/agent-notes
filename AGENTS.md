@@ -2,6 +2,11 @@
 
 Conventions and quick reference for agents (and humans) working on agent-notes.
 
+> **Active again (2026-10-28).** agent-notes is the post-AOS coordination
+> home: memory tiers, mailbox, and wake (`plans/025-coordination-after-aos.md`).
+> Native Postgres is the authority for work items; regista write-through is
+> retired (off by default, unsupported going forward).
+
 > **Upstream renamed 2026-05-27:** the coordination spine was previously `substrate`; it is now `regista` (Plan 005 consumer migration here, regista Plan 018 upstream). Older skill text, plans, and reflections that still say "substrate" are intentional historical record.
 
 ## Orient
@@ -37,15 +42,15 @@ Tests for triggers, recursive CTEs, and `change_log` semantics must run against 
 
 ## Architecture in one paragraph
 
-One Postgres database (`agent_notes`), one Python package (`agent_notes`), one `Server` base class with composable kind registries. The **CLI (`agent-notes`) is the primary sync surface** (Plan 004 Phase 9a+). The shared `core/` library handles DB connection pooling, embedding, links, change_log, NOTIFY, and search. A read-only web frontend (`agent-notes-web`) provides browser-based browsing of breadcrumbs, memories, and semantic search. **Regista is the source of truth for work items** (Plan 012 go-live cutover, Plan 017 WI-3.2): the CLI writes through the regista face when attached, with a native op-log degrade path when the coordinator is absent. No code path writes physical breadcrumb files — the `bc_files` module is a one-time import path (files→DB), not a write path.
+One Postgres database (`agent_notes`), one Python package (`agent_notes`), one `Server` base class with composable kind registries. The **CLI (`agent-notes`) is the primary sync surface** (Plan 004 Phase 9a+). The shared `core/` library handles DB connection pooling, embedding, links, change_log, NOTIFY, and search. A read-only web frontend (`agent-notes-web`) provides browser-based browsing of breadcrumbs, memories, and semantic search. **Native Postgres is the authority for work items** (Plan 025 D7): every write goes to the `op_log` and folds into the `work_items` cache. The regista write-through face (Plan 012–017) is retired and only runs when `AGENT_NOTES_REGISTA_WRITES` is set explicitly; rows mirrored during the regista era are sealed into the op-log on their next native write (`core/work_item/_seal.py`). No code path writes physical breadcrumb files — the `bc_files` module is a one-time import path (files→DB), not a write path.
 
-**Work-item model layout (Plan 016):** `core/work_item_model.py` is a thin dispatch facade — each public `WorkItemModel` method selects the regista path (face attached) or native op-log path (degrade) and delegates to free functions in the `core/work_item/` subpackage (`_common`, `_regista`, `_native`, `_queries`, `_cross_project`). The public class API is unchanged; do not add new logic to the facade — extend the relevant subpackage module.
+**Work-item model layout (Plan 016):** `core/work_item_model.py` is a thin dispatch facade — each public `WorkItemModel` method selects the native op-log path (normal) or the retired regista path (only when a face is explicitly enabled) and delegates to free functions in the `core/work_item/` subpackage (`_common`, `_regista`, `_native`, `_queries`, `_cross_project`). The public class API is unchanged; do not add new logic to the facade — extend the relevant subpackage module.
 
 **Work-log coordination kernel** (Plan 008, P0–P4): the `op_log` is an append-only operation log (op-CRDT model) with content-addressed blobs, a deterministic fold into the `work_items` cache, a fail-safe status lattice, and a standalone verifier CLI. Cross-project coordination (P3) adds `request`/`wait` ops, a derived index for foreign work items, and a reverse-edge map so the `ready` query spans projects. The **regista coordinator is an optional, not-yet-attached L3 layer** — the degrade contract (`coordinator-absent / local-lease`) is the default and fully functional mode; the coordinator adds only race-free multi-writer claims when attached later.
 
 ## Schema conventions
 
-- **All kinds are project-scoped** (decision 13). Cross-cutting memories live in a `global` project per workspace.
+- **All kinds are project-scoped** (decision 13). Cross-cutting memories live in a `global` project per workspace, and per-machine memories in a `vm:<id>` project (Plan 025 D3); `projects.kind` (`repo`|`vm`|`global`) keeps those synthetic rows out of every project listing, and only the scope helpers in `core/db.py` return them.
 - **Vocabularies live in data, not `CHECK` constraints** (decision 5). Trigger-load-bearing attributes (`is_terminal`, `is_open`, `sort_order`) are first-class columns; presentation-only metadata stays in `attributes JSONB` (decision 23).
 - **`change_log` is the sole audit/history source** (decision 7). Per-kind history tables are not used.
 - **`links` table accepts dangling rows**; filter at query time. `links_audit` reports orphans (Phase 6.3).
@@ -83,12 +88,13 @@ failures as a named error envelope; nothing is written. Memories and
 reflections use the same canonical actor, but remain non-workflow note entities
 and do not participate in the work-item review gate.
 
-**Canonical regista configuration:** `REGISTA_DSN`, `REGISTA_KEY_PATH`,
+**Canonical regista configuration (retired write-through, Plan 025 D7):** `REGISTA_DSN`, `REGISTA_KEY_PATH`,
 `REGISTA_REQUIRE_SSL`, and `AGENT_NOTES_PROJECT` are the only accepted values
 for the regista DSN, key-set manifest, SSL requirement, and project. The
 `regista` block in `config.json` uses `dsn`, `key_path`, `require_ssl`, and
 `writes_enabled`. `AGENT_NOTES_REGISTA_WRITES` remains the tool-specific write
-gate. Configuration aliases are not supported; unknown names are ignored.
+gate and defaults off; `install-harness` no longer propagates any of these.
+Configuration aliases are not supported; unknown names are ignored.
 
 **Checking the wiring: `agent-notes invariants probe`** (WI-071). This is the
 read-only probe the suite genesis gate consumes
@@ -148,7 +154,8 @@ install-skills --target {claude,opencode}` (skills only) or
 + opencode plugin + opencode subagent definitions — Plan 017 WI-2.1 and
 WI-2.3). Codex installs the canonical skills under `$HOME/.agents/skills` and
 records hash-tracked ownership under `$CODEX_HOME`. It also hash-owns narrow
-`SessionStart` orientation and `Stop` reconciliation groups in
+`SessionStart` orientation and `Stop` groups (the Stop handler is a no-op
+until Plan 025 Phase 4) in
 `$CODEX_HOME/hooks.json`; the component plugin bundles the same canonical hook
 definitions below `plugins/agent-notes` (with drift checks against the canonical
 top-level skills). Hook trust remains an explicit operator action through `/hooks`.
@@ -181,7 +188,10 @@ subagent to perform adversarial review. In Claude Code the equivalent is the
 **Opencode plugin** (Plan 007 Piece 2, OpenCode 2): `integrations/opencode/index.js`
 uses `ctx.session.hook("context")` to inject `agent-notes orient` output into the
 first model request of every session, and `ctx.session.hook("compaction")` to
-append the outbox sync block and reconciliation checklist before compaction.
+append the reconciliation checklist before compaction. Plan 025 L1: a
+`ctx.session.hook("prompt")` claims the session's mailbox messages once per prompt
+(`agent-notes msg inbox --claim --json`) and a second `context` hook injects them as
+framed peer content into the request's messages (never the system prompt).
 This is the non-optional enforcement layer that complements the opt-in skills.
 `agent-notes install-harness opencode` copies the package to
 `~/.config/opencode/agent-notes` and registers the V2 `plugins` entry.

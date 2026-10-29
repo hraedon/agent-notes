@@ -5,8 +5,8 @@ description: Record a cross-session fact — something the next agent (or future
 
 # /add-memory — Record Something the Next Session Needs
 
-Memories are persistent, project-scoped (or workspace-scoped) notes
-that record facts, conventions, decisions, and reframings. They are
+Memories are persistent notes at one of three scopes (below) that record
+facts, conventions, decisions, and reframings. They are
 *not* breadcrumbs — a breadcrumb is "a problem to track until fixed";
 a memory is "a fact that stays true regardless of any specific fix."
 
@@ -30,6 +30,30 @@ Use the store the user intends. These commands write shared agent-notes
 project memory; Codex native memory is a separate destination with its own
 write rules. Do not copy private harness memory into the shared store without
 a request that covers sharing it.
+
+## Scope: where the memory lives
+
+Pick the narrowest scope that is true everywhere it will be read:
+
+| Scope | Use it for | Example |
+|---|---|---|
+| `repo` (default) | Code and design facts about this project: architecture, conventions, decisions, gotchas | "Tests need testcontainers Postgres" |
+| `vm` | Facts about this machine: paths, services, GPU, mounts, installed toolchains, ports | "Docker Desktop runs here; the 3090 is CUDA device 1" |
+| `global` | Cross-host conventions and user preferences that hold in every repo on every machine | "User prefers direct strategic reads" |
+
+If the fact would be wrong on another machine, it is `vm`. If it would be
+wrong in another repo, it is `repo`. Only what survives both is `global`.
+
+- `--scope vm|global` works from any directory, including outside a
+  registered repo. `--scope vm` uses this machine's ID (`AGENT_NOTES_VM`, else
+  the short hostname); `--vm <id>` files under another machine's ID. A host
+  with a generated name (container, pod) must set `AGENT_NOTES_VM`.
+- Each scope has its own namespace. The same name may exist at several
+  scopes, and `memory search` (default `--scope composed`) returns the most
+  specific one (repo > vm > global) and lists the hidden ones in `shadows`.
+  Every result carries `scope` and `scope_key`.
+- Use `--scope repo` (or omit it) for `get`, `update`, and `delete` of a repo
+  memory; pass the same `--scope` you used to add a vm or global one.
 
 ## Memory types
 
@@ -75,6 +99,9 @@ agent-notes memory search "<query>" --path <repo-path> --json
 agent-notes memory list --path <repo-path> --type <type> --json
 ```
 
+`search` covers repo, vm, and global together. `list` shows one scope at a
+time (default `repo`); add `--scope vm`, `--scope global`, or `--scope composed`.
+
 If a close match exists, the right move is usually to update its body
 in place (re-`add` with the same name supersedes the prior version)
 rather than create a near-duplicate. Memories are versioned via
@@ -92,6 +119,8 @@ than with prose padding.
 
 ```
 agent-notes memory add --path <repo-path> --name <kebab-case-name> --type <user|feedback|project|reference> --body "<one sentence + context>" --json
+agent-notes memory add --scope vm --name <kebab-case-name> --type reference --body "<host fact>" --json
+agent-notes memory add --scope global --name <kebab-case-name> --type user --body "<convention or preference>" --json
 ```
 
 Parse the JSON; confirm the `id` and any `supersedes` field (the

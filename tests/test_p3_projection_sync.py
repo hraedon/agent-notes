@@ -81,7 +81,7 @@ def _make_args(**kwargs: Any) -> argparse.Namespace:
 
 
 class TestOrientRegistaSync:
-    def test_orient_surface_regista_sync_counts(
+    def test_orient_has_no_regista_sync_section(
         self,
         default_project,
         regista_env: Path,
@@ -123,14 +123,13 @@ class TestOrientRegistaSync:
             captured = capsys.readouterr()
             assert code == 0
 
+            # Plan 025 D7: orient no longer reports outbox / projection sync
+            # state, even with write-through explicitly on and ops pending.
             payload = json.loads(captured.out)
-            sync = payload["regista_sync"]
-            assert sync["enabled"] is True
-            assert sync["project"] == _REGPROJECT
-            assert sync["outbox_pending"] == 1
-            assert sync["outbox_conflicts"] == 0
-            assert sync["outbox_rejected"] == 0
-            assert sync["pending_sync_rows"] == 1
+            assert "regista_sync" not in payload
+
+            assert cmd_orient(_make_args(json=False)) == 0
+            assert "STALE" not in capsys.readouterr().out
         finally:
             reset_face()
 

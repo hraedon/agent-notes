@@ -54,11 +54,6 @@ def summary_reads(monkeypatch):
 
     monkeypatch.setattr(orient, "_resolve", lambda *_: (1, 2, "test-workspace", "test-project"))
     monkeypatch.setattr(
-        orient.reg_config,
-        "regista_config",
-        lambda: SimpleNamespace(enabled=False, project="test-project"),
-    )
-    monkeypatch.setattr(
         WorkItemModel, "query_work_items", lambda **kwargs: work_items[: kwargs["limit"]]
     )
     monkeypatch.setattr(memory_model, "list_memories", list_memories)
@@ -85,7 +80,8 @@ def test_default_is_bounded_with_honest_freshness_and_independent_handoff(summar
         == len(payload["recent_changes"])
         == 5
     )
-    assert all(payload["has_more"].values())
+    more = payload["has_more"]
+    assert all(more[k] for k in ("open_work_items", "recent_changes", "memories"))
     item = payload["open_work_items"][0]
     assert item["age_days"] == 60 and item["freshness"] == "aged"
     assert item["updated_at"] and payload["generated_at"]
@@ -93,7 +89,10 @@ def test_default_is_bounded_with_honest_freshness_and_independent_handoff(summar
     assert payload["latest_reflection"]["name"] == "reflection-older-handoff"
     assert payload["latest_reflection"]["age_days"] == 90
     assert "body_preview" not in payload["memories"][0]
-    assert {call["project_id"] for call in summary_reads.calls} == {2}
+    # Project reads are all for project 2; the only other reads are the global
+    # tier's (id 1 is the seeded 'global' row), never another project.
+    ids = {call["project_id"] for call in summary_reads.calls}
+    assert 2 in ids and ids <= {1, 2}
 
 
 def test_full_and_explicit_limits_preserve_drill_down(summary_reads, capsys):

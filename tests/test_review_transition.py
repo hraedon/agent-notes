@@ -86,7 +86,12 @@ def _to_in_review(project_id, identifier, monkeypatch):
         identifier=identifier,
         status="in_progress",
     )
-    WorkItemModel.close_work_item(project_id, identifier)
+    # Plan 025: native close completes the item; review is explicit.
+    WorkItemModel.update_work_item(
+        project_id=project_id,
+        identifier=identifier,
+        status="in_review",
+    )
 
 
 def _author_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -244,7 +249,8 @@ class TestNativeReviewTransition:
         )
         assert result["status"] == "in_progress"
 
-    def test_accept_blocked_in_degrade_mode(self, default_project, monkeypatch):
+    def test_accept_completes_on_native_path(self, default_project, monkeypatch):
+        # Plan 025 D7: native is the authority, so accept reaches done.
         _to_in_review(default_project.id, "RV-05", monkeypatch)
         WorkItemModel.review_transition(
             default_project.id,
@@ -252,13 +258,13 @@ class TestNativeReviewTransition:
             transition_name="adversarial_pass",
             review_note="pass",
         )
-        with pytest.raises(ValueError, match="review gate"):
-            WorkItemModel.review_transition(
-                default_project.id,
-                "RV-05",
-                transition_name="accept",
-                review_note="accepting",
-            )
+        result = WorkItemModel.review_transition(
+            default_project.id,
+            "RV-05",
+            transition_name="accept",
+            review_note="accepting",
+        )
+        assert result["status"] == "done"
 
     def test_empty_review_note_raises(self, default_project, monkeypatch):
         _to_in_review(default_project.id, "RV-06", monkeypatch)
@@ -585,7 +591,7 @@ class TestReviewCLI:
         data = json.loads(capsys.readouterr().out)
         assert data["work_item"]["status"] == "in_human_review"
 
-    def test_cli_review_accept_blocked_native(self, default_project, capsys, monkeypatch):
+    def test_cli_review_accept_native(self, default_project, capsys, monkeypatch):
         _to_in_review(default_project.id, "RV-CLI-03", monkeypatch)
         WorkItemModel.review_transition(
             default_project.id,
@@ -605,9 +611,9 @@ class TestReviewCLI:
             note="accepting",
             same_lineage_acknowledged=False,
         )
-        assert cmd_wi_review_accept(ns) != 0
+        assert cmd_wi_review_accept(ns) == 0
         data = json.loads(capsys.readouterr().out)
-        assert "review gate" in data["error"]["message"]
+        assert data["work_item"]["status"] == "done"
 
     def test_cli_review_reject(self, default_project, capsys, monkeypatch):
         _to_in_review(default_project.id, "RV-CLI-04", monkeypatch)

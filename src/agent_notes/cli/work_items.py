@@ -1082,12 +1082,12 @@ def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
     _add_common(wi_requeue)
     wi_requeue.set_defaults(func=cmd_wi_requeue_expired)
 
-    wi_close = wi_sub.add_parser("close", help="Close a work item (submits for review)")
+    wi_close = wi_sub.add_parser("close", help="Close a work item (marks it done)")
     wi_close.add_argument("identifier")
     wi_close.add_argument(
         "--force",
         action="store_true",
-        help="Admin/repair: write a terminal close instead of deferring to review",
+        help="Admin/repair: write the legacy terminal close op",
     )
     _add_common(wi_close)
     wi_close.set_defaults(func=cmd_wi_close)

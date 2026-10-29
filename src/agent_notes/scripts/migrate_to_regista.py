@@ -31,7 +31,7 @@ from agent_notes.core.regista_face import RegistaFace, normalize_source_identifi
 def _resolve_project(conn: psycopg.Connection, slug: str) -> dict:
     cur = conn.cursor(row_factory=dict_row)
     cur.execute(
-        "SELECT id, workspace_id, slug, name FROM projects WHERE slug = %s",
+        "SELECT id, workspace_id, slug, name FROM projects WHERE slug = %s AND kind = 'repo'",
         (slug,),
     )
     row = cur.fetchone()
@@ -178,7 +178,7 @@ def _run_migration(project_slug: str | None, apply: bool) -> int:
     with _conn() as conn:
         if project_slug is None:
             cur = conn.cursor(row_factory=dict_row)
-            cur.execute("SELECT slug FROM projects ORDER BY slug")
+            cur.execute("SELECT slug FROM projects WHERE kind = 'repo' ORDER BY slug")
             slugs = [r["slug"] for r in cur.fetchall()]
         else:
             slugs = [project_slug]

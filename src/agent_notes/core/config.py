@@ -43,6 +43,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import socket
 from pathlib import Path
 
 import platformdirs
@@ -66,6 +68,9 @@ _SUITE_PROJECT_ENV = "AGENT_NOTES_PROJECT"
 # Tool-specific (not a shared fact) — keeps its AGENT_NOTES_* name.
 _REGISTA_WRITES_ENV = "AGENT_NOTES_REGISTA_WRITES"
 _REGISTA_PROJECT_DEFAULT = "agent_notes"
+
+# VM identity for memory tiers (Plan 025 WI-2.2).
+_VM_ENV = "AGENT_NOTES_VM"
 
 
 def _env_or_suite(canonical_env: str, suite: dict[str, str]) -> str | None:
@@ -236,9 +241,7 @@ class RegistaConfig:
 
         env_key = _env_or_suite(_SUITE_REGISTA_KEY_ENV, suite)
         file_key = file_cfg.get("key_path")
-        self.key_path: str | None = env_key or (
-            file_key if isinstance(file_key, str) else None
-        )
+        self.key_path: str | None = env_key or (file_key if isinstance(file_key, str) else None)
 
         ssl_env = _env_or_suite(_SUITE_REGISTA_SSL_ENV, suite)
         self.require_ssl: bool = _parse_bool(ssl_env, file_cfg.get("require_ssl", False))
@@ -255,3 +258,61 @@ class RegistaConfig:
 def regista_config() -> RegistaConfig:
     """Return resolved regista face config (read fresh from env each call)."""
     return RegistaConfig()
+
+
+# ---------------------------------------------------------------------------
+# VM identity (Plan 025 WI-2.2)
+# ---------------------------------------------------------------------------
+
+_VM_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,61}[a-z0-9])?$")
+# Kubernetes name generators draw from this alphabet (no vowels, no 0/1/3).
+_K8S_RAND = "[bcdfghjklmnpqrstvwxz2456789]"
+_GENERATED_HOSTNAME_RES = (
+    # Docker/Podman container ID (short or full).
+    re.compile(r"^(?:[0-9a-f]{12}|[0-9a-f]{64})$"),
+    # Deployment/ReplicaSet pod: <name>-<template-hash>-<5 chars>; CronJob pod:
+    # <name>-<epoch minutes>-<5 chars>.
+    re.compile(rf"^.+-(?:{_K8S_RAND}{{8,10}}|\d{{6,10}})-{_K8S_RAND}{{5}}$"),
+    # Job / DaemonSet pod: <name>-<5 chars>.
+    re.compile(rf"^.+-{_K8S_RAND}{{5}}$"),
+)
+_UNSTABLE_HOSTNAMES = frozenset({"localhost", "localhost.localdomain", "ip6-localhost"})
+
+
+class VmIdError(ValueError):
+    """The VM ID could not be resolved to something stable."""
+
+
+def _looks_generated(hostname: str) -> bool:
+    if hostname in _UNSTABLE_HOSTNAMES:
+        return True
+    return any(rx.match(hostname) for rx in _GENERATED_HOSTNAME_RES)
+
+
+def resolve_vm_id(explicit: str | None = None) -> str:
+    """Return the VM ID that names this machine's memory scope.
+
+    Precedence: ``explicit`` (``--vm``) > ``AGENT_NOTES_VM`` (process env, then
+    suite.env) > short lowercase hostname. A hostname that looks generated
+    (container ID, k8s pod name, ``localhost``) is refused, because VM memories
+    filed under a random name scatter and are never read again. Raises
+    :class:`VmIdError` with an actionable message.
+    """
+    configured = explicit or _env_or_suite(_VM_ENV, load_suite_env())
+    if configured:
+        vm_id = configured.strip().lower()
+        if not _VM_ID_RE.match(vm_id):
+            raise VmIdError(
+                f"invalid VM ID {configured!r}: use lowercase letters, digits, '.', '_' or '-' "
+                "(max 63 characters)"
+            )
+        return vm_id
+
+    hostname = socket.gethostname().split(".")[0].strip().lower()
+    if not hostname or not _VM_ID_RE.match(hostname) or _looks_generated(hostname):
+        raise VmIdError(
+            f"cannot derive a stable VM ID from hostname {hostname!r}: it looks generated "
+            "or unstable (container, pod, or localhost). Set AGENT_NOTES_VM (environment "
+            "or suite.env) or pass --vm."
+        )
+    return hostname

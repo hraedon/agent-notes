@@ -20,8 +20,22 @@ Q4).
   `agent-notes orient --json` output into the system prompt on the first model
   request of each session, so the agent starts with open work items, recent
   changes, and active memories already loaded.
-- **Compaction reconciliation:** the `compaction` hook appends the outbox sync
-  block and reconciliation checklist to the summary request, enforcing the
+- **Mailbox delivery (Plan 025 L1):** on each user prompt the `prompt` hook runs
+  `agent-notes msg inbox --claim --json` once, with `OPENCODE_SESSION_ID` set
+  in the child's environment and the session's directory as its cwd. The CLI
+  resolves the session as `<vm>/opencode/<session id>` (D5) and heartbeats its
+  `agent_sessions` row, so `agent-notes who` shows it and direct messages can
+  target it. Claimed messages are framed as peer content, not operator
+  instructions (D6), and a second `context` hook splices them into the next
+  request's messages just before the user's turn and persists them with
+  `ctx.session.synthetic` (the same mechanism OpenCode's own Plan-mode
+  reminder uses). They never go through the system prompt. Notices, which the
+  CLI lists but never claims, are shown once per session.
+  The claim is best effort: a 2 s timeout, no output on any failure, and at
+  most one spawn per prompt (concurrent firings share it, a repeat within
+  500 ms is skipped and waits for the next prompt).
+- **Compaction reconciliation:** the `compaction` hook appends the
+  reconciliation checklist to the summary request, enforcing the
   `/end` discipline (close work items, file new ones, run `/reflect`, commit)
   before context is lost.
 
@@ -60,7 +74,8 @@ resolves `index.js` at its root. Do not point at the file, and do not import
 | Environment variable | Default | Description |
 |---|---|---|
 | `AGENT_NOTES_ORIENT_TIMEOUT_MS` | `15000` | Timeout for `agent-notes orient` subprocess |
-| `AGENT_NOTES_RECONCILE_TIMEOUT_MS` | `60000` | Timeout for `agent-notes outbox reconcile` |
+| `AGENT_NOTES_MSG_TIMEOUT_MS` | `2000` | Timeout for the per-prompt `agent-notes msg inbox --claim` |
+| `AGENT_NOTES_BIN` | `agent-notes` | CLI executable to spawn (tests point it at a fake) |
 | `AGENT_NOTES_DSN` | — | Postgres connection string; the CLI also reads its own config file |
 
 ## Troubleshooting
@@ -80,6 +95,20 @@ resolves `index.js` at its root. Do not point at the file, and do not import
   same enforcement model as Claude Code's `settings.json` SessionStart hook —
   the harness makes the prompt non-optional, but the agent chooses the tool
   calls.
-- The hooks are OpenCode 2's `ctx.session.hook("context")` and
-  `ctx.session.hook("compaction")`. If OpenCode changes that API, the plugin
-  will need updating.
+- No idle wake. OpenCode 2.2 has no Stop-equivalent hook, so a message that
+  arrives while the session is idle waits for the next prompt (L1). L3 idle
+  wake for OpenCode comes through Paseo (`paseo send`), not from this plugin.
+- A message is claimed when the prompt starts and handed over on the next
+  context build; if that build never happens (the prompt fails first), the
+  claimed message is not redelivered.
+- The hooks are OpenCode 2's `ctx.session.hook("prompt")`,
+  `ctx.session.hook("context")` and `ctx.session.hook("compaction")`, plus
+  `ctx.session.synthetic`. If OpenCode changes that API, the plugin will need
+  updating.
+
+## Tests
+
+`tests/test_opencode_plugin.py` drives `index.js` under Node (`node` must be
+on PATH; the tests skip without it) through `tests/opencode_plugin_harness.mjs`,
+which fakes OpenCode's `ctx`, and `tests/opencode_fake_cli.cjs`, which stands in
+for `agent-notes` (via `AGENT_NOTES_BIN`) so the real spawn path is exercised.

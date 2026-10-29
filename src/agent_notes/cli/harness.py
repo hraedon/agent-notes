@@ -13,9 +13,14 @@ tested helpers in :mod:`agent_notes.cli.skills`) and adds the config-merge layer
 
 Env-var wiring per harness (decision: respect each harness's schema):
 
-* **claude** — merge the suite + tool env vars into ``~/.claude/settings.json``
+* **claude** — merge the tool env vars into ``~/.claude/settings.json``
   under the ``env`` key (the schema-supported, working mechanism Claude Code
   injects into spawned processes).
+
+Plan 025 D7 retired regista write-through: ``REGISTA_DSN``,
+``REGISTA_KEY_PATH``, ``REGISTA_REQUIRE_SSL``, and ``AGENT_NOTES_REGISTA_WRITES``
+are no longer propagated, and a re-install removes them wherever the manifest
+(or, for hermes, the sentinel block) shows agent-notes wrote them.
 * **opencode** - ``opencode.json`` has no top-level ``env`` key
   (``additionalProperties: false``), so env vars are written into agent-notes'
   own config file (``~/.config/agent-notes/config.json``) - the existing
@@ -88,28 +93,42 @@ _CANDIDATE_HARNESS_TARGETS = ("codex", "agy")
 _PRIVATE_HARNESS_TARGETS = ("hermes",)
 _HARNESS_TARGETS = _STABLE_HARNESS_TARGETS + _CANDIDATE_HARNESS_TARGETS + _PRIVATE_HARNESS_TARGETS
 
-# Canonical suite env vars to propagate (Plan 017 WI-1.1).
-_SUITE_ENV_VARS: list[str] = [
-    "REGISTA_DSN",
-    "REGISTA_KEY_PATH",
-    "REGISTA_REQUIRE_SSL",
-]
-# Tool-specific vars (not suite-shared) — keep their AGENT_NOTES_* names.
+# Tool-specific vars propagated into the harness. Plan 025 D7 retired regista
+# write-through, so the regista DSN/key/SSL vars and the write gate are no
+# longer propagated (see _RETIRED_ENV_VARS).
 _TOOL_ENV_VARS: list[str] = [
     "AGENT_NOTES_DSN",
-    "AGENT_NOTES_REGISTA_WRITES",
     "AGENT_NOTES_PROJECT",
 ]
+# The canonical actor (core/actor.py) still falls back to the suite principal,
+# so ``--user`` keeps wiring it.
 _PRINCIPAL_ENV = "REGISTA_PRINCIPAL_ID"
+
+# Keys earlier versions propagated for regista write-through. A re-install
+# removes them where the manifest shows agent-notes wrote them; keys the
+# operator set by hand are never touched.
+_RETIRED_ENV_VARS: frozenset[str] = frozenset(
+    {
+        "REGISTA_DSN",
+        "REGISTA_KEY_PATH",
+        "REGISTA_REQUIRE_SSL",
+        "AGENT_NOTES_REGISTA_WRITES",
+    }
+)
+# The same keys as opencode config-file paths (agent-notes config.json).
+_RETIRED_CONFIG_KEYS: frozenset[str] = frozenset(
+    {
+        "regista.dsn",
+        "regista.key_path",
+        "regista.require_ssl",
+        "regista.writes_enabled",
+    }
+)
 
 # opencode config-file field map: env-var name -> (section, key) where section
 # is "regista" or None (top-level). Boolean fields are coerced from the env
 # string so the config-file value is a real bool, not "1".
 _OPENCODE_FIELD_MAP: dict[str, tuple[str | None, str, bool]] = {
-    "REGISTA_DSN": ("regista", "dsn", False),
-    "REGISTA_KEY_PATH": ("regista", "key_path", False),
-    "REGISTA_REQUIRE_SSL": ("regista", "require_ssl", True),
-    "AGENT_NOTES_REGISTA_WRITES": ("regista", "writes_enabled", True),
     "AGENT_NOTES_DSN": (None, "dsn", False),
     # AGENT_NOTES_PROJECT has no config-file field (env-only).
 }
@@ -815,15 +834,10 @@ def _unwire_agy_hook(
 def _resolve_harness_env(user: str | None) -> dict[str, str]:
     """Build the ordered env-var -> value map to propagate into the harness.
 
-    Canonical suite vars and tool-specific vars are taken verbatim. ``--user``
-    overrides the principal. Empty values are dropped (an unset var is not
-    propagated).
+    Tool-specific vars are taken verbatim. ``--user`` sets the principal.
+    Empty values are dropped (an unset var is not propagated).
     """
     env: dict[str, str] = {}
-    for name in _SUITE_ENV_VARS:
-        val = os.environ.get(name)
-        if val:
-            env[name] = val
     for name in _TOOL_ENV_VARS:
         val = os.environ.get(name)
         if val:
@@ -1025,10 +1039,6 @@ def _wire_env_opencode(
     config-file paths already present and equal to our value; the caller decides
     management using the previous manifest.
     """
-    regista = agent_cfg.setdefault("regista", {})
-    if not isinstance(regista, dict):
-        regista = {}
-        agent_cfg["regista"] = regista
     actions: list[dict] = []
     newly: list[str] = []
     matching: list[str] = []
@@ -1039,7 +1049,13 @@ def _wire_env_opencode(
             continue
         section, key, _is_bool = spec
         value = _env_coerce(name, raw_value)
-        target = agent_cfg if section is None else regista
+        if section is None:
+            target = agent_cfg
+        else:
+            target = agent_cfg.setdefault(section, {})
+            if not isinstance(target, dict):
+                target = {}
+                agent_cfg[section] = target
         key_path = f"{section}.{key}" if section else key
         if key in target:
             if target[key] == value:
@@ -1206,6 +1222,79 @@ def _wire_env_hermes(
         env_path.write_text(content, encoding="utf-8")
 
     return actions, newly, matching, warns
+
+
+# ---------------------------------------------------------------------------
+# retired regista write-through keys (Plan 025 D7)
+# ---------------------------------------------------------------------------
+
+
+def _retire_env_claude(settings: dict, owned: set[str], dry_run: bool) -> list[dict]:
+    """Drop manifest-owned retired keys from settings.json['env']."""
+    env_block = settings.get("env")
+    if not isinstance(env_block, dict):
+        return []
+    actions: list[dict] = []
+    for key in sorted(owned & _RETIRED_ENV_VARS):
+        if key in env_block:
+            if not dry_run:
+                env_block.pop(key)
+            actions.append(
+                _act("remove_key", [f"env.{key}"], "removed retired regista write-through key")
+            )
+    return actions
+
+
+def _retire_config_opencode(agent_cfg: dict, owned: set[str], dry_run: bool) -> list[dict]:
+    """Drop manifest-owned ``regista.*`` keys from the agent-notes config file."""
+    section = agent_cfg.get("regista")
+    if not isinstance(section, dict):
+        return []
+    actions: list[dict] = []
+    for key_path in sorted(owned & _RETIRED_CONFIG_KEYS):
+        key = key_path.split(".", 1)[1]
+        if key in section:
+            if not dry_run:
+                section.pop(key)
+            actions.append(
+                _act("remove_key", [key_path], "removed retired regista write-through key")
+            )
+    if actions and not dry_run and not section:
+        agent_cfg.pop("regista")
+    return actions
+
+
+def _retire_env_hermes(env_path: Path, dry_run: bool) -> list[dict]:
+    """Drop retired keys from the sentinel-managed block (agent-notes owns it)."""
+    if not env_path.is_file():
+        return []
+    lines = env_path.read_text(encoding="utf-8").splitlines()
+    kept: list[str] = []
+    removed: list[str] = []
+    in_block = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == _BEGIN_SENTINEL:
+            in_block = True
+        elif stripped == _END_SENTINEL:
+            in_block = False
+        elif in_block and "=" in stripped:
+            key = stripped.partition("=")[0].strip()
+            if key in _RETIRED_ENV_VARS:
+                removed.append(key)
+                continue
+        kept.append(line)
+    if not removed:
+        return []
+    if not dry_run:
+        # Drop a block left empty by the removal.
+        text = "\n".join(kept) + "\n"
+        text = text.replace(f"{_BEGIN_SENTINEL}\n{_END_SENTINEL}\n", "")
+        env_path.write_text(text.rstrip("\n") + "\n" if text.strip() else "", encoding="utf-8")
+    return [
+        _act("remove_env", [key], "removed retired regista write-through key")
+        for key in sorted(removed)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -1446,12 +1535,15 @@ def _install_harness_one(
     env_newly: list[str] = []
     plugin_newly = False
     plugin_managed = False
+    retired_now = False
 
     if harness == "claude":
+        ra = _retire_env_claude(config, prev_env_keys, dry_run)
         ca, newly, matching, w = _wire_env_claude(config, env_values, dry_run)
-        for a in ca:
+        for a in ra + ca:
             a["path"] = str(config_path)
-        config_actions += ca
+        config_actions += ra + ca
+        retired_now = bool(ra)
         env_newly = newly
         env_managed = newly + [k for k in matching if k in prev_env_keys]
         # Preserve previously-managed env keys still in settings.json but no
@@ -1470,15 +1562,17 @@ def _install_harness_one(
             a["path"] = str(config_path)
         config_actions += hook_actions
         warns += hook_conflicts + _claude_orient_hook_warnings(config)
-        if not dry_run and config:
+        if not dry_run and (config or retired_now):
             _save_json(config_path, config)
     elif harness == "hermes":
         # Hermes uses a .env KEY=VALUE file with sentinel-wrapped managed block
         # (not JSON). The file is written atomically by _wire_env_hermes.
+        ra = _retire_env_hermes(config_path, dry_run)
         ha, hnewly, hmatching, hw = _wire_env_hermes(config_path, env_values, dry_run)
-        for a in ha:
+        for a in ra + ha:
             a["path"] = str(config_path)
-        config_actions += ha
+        config_actions += ra + ha
+        retired_now = bool(ra)
         env_newly = hnewly
         env_managed = hnewly + [k for k in hmatching if k in prev_env_keys]
         # Preserve previously-managed env keys still in the .env managed block
@@ -1526,10 +1620,12 @@ def _install_harness_one(
     else:  # opencode
         # env -> agent-notes config file (the harness-independent fallback)
         agent_cfg = _load_json(agent_config_path)
+        ra = _retire_config_opencode(agent_cfg, prev_env_keys, dry_run)
         oa, onewly, omatching, ow = _wire_env_opencode(agent_cfg, env_values, dry_run)
-        for a in oa:
+        for a in ra + oa:
             a["path"] = str(agent_config_path)
-        config_actions += oa
+        config_actions += ra + oa
+        retired_now = bool(ra)
         env_newly = onewly
         env_managed = onewly + [k for k in omatching if k in prev_env_keys]
         # Preserve previously-managed config keys still present but no longer
@@ -1545,7 +1641,7 @@ def _install_harness_one(
             elif kp in agent_cfg:
                 env_managed.append(kp)
         warns += ow
-        if not dry_run and agent_cfg:
+        if not dry_run and (agent_cfg or retired_now):
             _save_json(agent_config_path, agent_cfg)
         # plugin package -> ~/.config/opencode/agent-notes, then register it in
         # opencode.json's V2 'plugins' array (and drop the obsolete V1 entry).
@@ -1563,9 +1659,13 @@ def _install_harness_one(
         if not dry_run and config:
             _save_json(config_path, config)
 
+    # Retired keys are never managed again, even if a prior manifest owned them.
+    env_managed = [
+        k for k in env_managed if k not in _RETIRED_ENV_VARS and k not in _RETIRED_CONFIG_KEYS
+    ]
     all_actions = skill_actions + config_actions + agent_actions
     agents_newly = any(a.get("status") in ("created", "updated") for a in agent_actions)
-    any_newly = bool(env_newly or plugin_newly or agents_newly)
+    any_newly = bool(env_newly or plugin_newly or agents_newly or retired_now)
     no_op = all(_action_is_unchanged(a) for a in all_actions) and not any_newly
     has_conflict = any(a.get("status") == "conflict" for a in all_actions)
     # --- manifest: record what install-harness manages (survives re-installs) ---

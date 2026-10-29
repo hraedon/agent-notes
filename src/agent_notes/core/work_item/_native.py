@@ -1,9 +1,10 @@
-"""Native op-log write path for work items (degrade mode — no regista face).
+"""Native op-log write path for work items (the default; Plan 025 D7).
 
 These functions implement the work-item mutations against the local op-log
 and ``work_items`` cache directly. They are used when ``face_factory.get_face()``
-returns ``None`` (regista writes disabled, or coordinator-absent). Each
-preserves the behavior of the original ``WorkItemModel`` native branches.
+returns ``None``, which is normal operation: regista write-through is retired
+and only runs when explicitly enabled. Each preserves the behavior of the
+original ``WorkItemModel`` native branches unless noted.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from agent_notes.core.lifecycle import (
     transition_for as _lifecycle_transition_for,
 )
 
-from . import _common
+from . import _common, _seal
 
 KIND = "work_item"
 ENTITY_TYPE = "work_item"
@@ -147,6 +148,7 @@ def update_work_item(
     """
     actor_id = face_factory.write_actor().actor_id
     workspace_id = _common.resolve_workspace_for_project(conn, project_id)
+    _seal.seal_for_write(conn, project_id, identifier, actor_id)
     cur = conn.cursor(row_factory=dict_row)
     cur.execute(
         "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
@@ -195,20 +197,11 @@ def update_work_item(
         # Plan 013 WI-5: pre-flight transition check on the native path.
         # Both paths (regista + native) now reject the same illegal
         # transitions. ``force=True`` is the explicit admin escape hatch.
+        # Plan 025 D7: native is the authority, so ``accept`` (in_human_review
+        # → done) is an ordinary transition here; Plan 014 WI-2's block assumed
+        # regista would run the gate.
         if not force:
-            transition = _lifecycle_transition_for(old["status"], status)
-            # Plan 014 WI-2: degrade mode cannot run the cross-lineage
-            # review gate, so it must not *complete* work unilaterally.
-            # The only gate transition into a terminal state is `accept`
-            # (in_human_review → done); block it off-regista. `close_from_open`
-            # (the review-exempt won't-fix/duplicate dismissal) stays allowed,
-            # matching the regista path.
-            if transition == "accept":
-                raise ValueError(
-                    f"Cannot accept {identifier!r} to 'done' in degrade mode: "
-                    "completion requires regista's cross-lineage review gate. "
-                    "Use force=True only for admin/repair."
-                )
+            _lifecycle_transition_for(old["status"], status)
         status_op = kernel.commit_op(
             conn,
             entity_id=entity_id,
@@ -296,53 +289,79 @@ def update_work_item(
     return dict(folded)
 
 
-def close_work_item_native_deferred(
+_CLOSABLE = frozenset({"open", "in_progress", "claimed", "in_review", "in_human_review"})
+
+
+def close_work_item(
     project_id: int,
     identifier: str,
-    old: dict,
 ) -> dict:
-    """Native (degrade) close that defers to ``in_review`` (Plan 014 A(b)).
+    """Native close: complete the work item (``done``) in one transaction.
 
-    Mirrors ``_close_work_item_regista``'s state handling, but drives the
-    op-log via ``update_work_item`` (with the Plan 013 WI-5 transition
-    pre-flight) instead of a regista face. Reaching a terminal state is not
-    possible here — completion requires regista's review gate.
+    Plan 025 D7: native Postgres is the authority, so ``close`` completes the
+    item directly instead of deferring to ``in_review``. Review stays an
+    explicit workflow (``work-item review`` or ``--status in_review``); closing
+    an item that is in review completes it. Terminal, blocked, and deferred
+    items are refused. Any lease on the item is released with the close.
     """
-    state = old["status"]
-    canonical = "done" if state == "closed" else state
-    if canonical in ("in_review", "in_human_review"):
-        return dict(old)  # already awaiting review — no-op
-    if canonical == "done":
-        raise ValueError(f"Work item {identifier!r} is already done; reopen first")
-    if canonical == "blocked":
-        raise ValueError(f"Work item {identifier!r} is blocked; unblock before closing")
-    if canonical == "deferred":
-        raise ValueError(f"Work item {identifier!r} is deferred; resume before closing")
-    if canonical == "claimed":
-        raise ValueError(
-            f"Work item {identifier!r} is in legacy 'claimed' state; "
-            "migrate to the canonical workflow first"
-        )
-    # open or in_progress → defer to in_review (never terminal). Both steps run
-    # on a single connection and commit once, so the close is atomic (WI-020):
-    # the item can no longer be stranded in ``in_progress`` by a crash between
-    # the two transitions.
+    from datetime import datetime, timezone
+
+    actor_id = face_factory.write_actor().actor_id
     with _conn() as conn:
-        if canonical == "open":
-            update_work_item(
-                conn,
-                project_id=project_id,
-                identifier=identifier,
-                status="in_progress",
-            )
-        result = update_work_item(
+        workspace_id = _common.resolve_workspace_for_project(conn, project_id)
+        _seal.seal_for_write(conn, project_id, identifier, actor_id)
+        old = _common.load_work_item_row(conn, project_id, identifier)
+        state = old["status"]
+        if is_terminal(state):
+            raise ValueError(f"Work item {identifier!r} is already done; reopen first")
+        if state == "blocked":
+            raise ValueError(f"Work item {identifier!r} is blocked; unblock before closing")
+        if state == "deferred":
+            raise ValueError(f"Work item {identifier!r} is deferred; resume before closing")
+        if state not in _CLOSABLE:
+            raise ValueError(f"Work item {identifier!r} cannot be closed from {state!r}")
+
+        entity_id = old["entity_id"]
+        # ``closed_at`` keeps the op_id unique when an item is reopened and
+        # closed again (op_ids are content hashes of payload + parents).
+        op = kernel.commit_op(
             conn,
+            entity_id=entity_id,
+            entity_type=ENTITY_TYPE,
+            op_type="set_status",
+            payload={
+                "status": "done",
+                "transition": "close",
+                "closed_at": datetime.now(timezone.utc).isoformat(),
+            },
+            parent_op_ids=[entity_id],
+            actor_id=actor_id,
+        )
+        cur = conn.cursor()
+        cur.execute("DELETE FROM work_item_leases WHERE entity_id = %s", (entity_id,))
+
+        folded = kernel.fold_work_item(conn, entity_id)
+        if folded is None:
+            raise RuntimeError("fold_work_item returned None after close op")
+
+        kernel.emit_event(
+            conn,
+            op_id=op["op_id"],
+            event_type="item.closed",
+            payload={"entity_id": entity_id, "identifier": identifier},
+        )
+        write_change(
+            conn,
+            kind=KIND,
+            workspace_id=workspace_id,
             project_id=project_id,
             identifier=identifier,
-            status="in_review",
+            event="status_changed",
+            payload={"old_status": state, "new_status": "done"},
+            actor=actor_id,
         )
         conn.commit()
-    return result
+        return dict(folded)
 
 
 def close_work_item_force(
@@ -353,6 +372,7 @@ def close_work_item_force(
     actor_id = face_factory.write_actor().actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
+        _seal.seal_for_write(conn, project_id, identifier, actor_id)
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
@@ -485,15 +505,15 @@ def review_transition(
     transition_name: str,
     review_note: str,
 ) -> dict:
-    """Native (degrade) review transition — stores note, defers gate.
+    """Native review transition — stores the note and moves the status.
 
     The status transition is written as a ``set_status`` op whose payload
     includes the ``review_note`` (making the op_id unique — the op-log
     content-addresses ops by ``(entity_type, op_type, payload,
     parent_op_ids)``, so a bare ``{"status": "in_progress"}`` collides
     when the same status is revisited, e.g. ``reject`` → ``in_progress``
-    after ``start`` → ``in_progress``).  ``accept`` is blocked (Plan 014
-    WI-2) because the cross-lineage gate cannot run off-regista.
+    after ``start`` → ``in_progress``). ``accept`` completes the item
+    (Plan 025 D7; Plan 014 WI-2 blocked it while regista ran the gate).
     """
     from datetime import datetime, timezone
 
@@ -502,19 +522,9 @@ def review_transition(
 
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
+        _seal.seal_for_write(conn, project_id, identifier, actor.actor_id)
         old = _common.load_work_item_row(conn, project_id, identifier)
         entity_id = old["entity_id"]
-
-        # Plan 014 WI-2: degrade mode cannot run the gate, so accept
-        # (in_human_review → done) is blocked — it would fake the
-        # cross-lineage requirement.
-        if transition_name == "accept":
-            raise ValueError(
-                f"Cannot accept {identifier!r} to 'done' in degrade mode: "
-                "completion requires regista's cross-lineage review gate. "
-                "For admin/repair use 'agent-notes work-item close --force' "
-                "or 'work-item update --status done --force'."
-            )
 
         if old["status"] == target_status:
             raise ValueError(
@@ -610,6 +620,7 @@ def claim_work_item(
     stamped_actor = face_factory.write_actor().actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
+        _seal.seal_for_write(conn, project_id, identifier, stamped_actor)
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
@@ -714,6 +725,7 @@ def release_work_item(
     stamped_actor = face_factory.write_actor().actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
+        _seal.seal_for_write(conn, project_id, identifier, stamped_actor)
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",

@@ -4,9 +4,9 @@ The native (no-regista / degrade) write path used to write a terminal ``close``
 op directly, while the regista path routes ``close → submit_for_review →
 in_review`` and cannot complete work without the cross-lineage review gate. That
 behavior drift meant a single verb (`close`) produced divergent terminal
-outcomes by path. These tests pin the invariant both paths now share: **neither
-can complete (reach ``done``) work unilaterally**; native ``close`` defers to
-``in_review`` too, and only ``force=True`` writes a terminal op.
+outcomes by path. Plan 014 made native ``close`` defer to ``in_review`` too.
+Plan 025 D7 retires regista write-through, so native ``close`` now completes
+the item (``done``) and review is an explicit workflow.
 
 WI-3 adds the degraded-completion detector in ``verify`` (flags terminal items
 completed without a preceding ``adversarial_pass``), and WI-4 adds the
@@ -52,22 +52,21 @@ def _gate_violations(result):
 
 
 class TestDegradeModeClose:
-    def test_native_close_defers_to_in_review_not_terminal(self, default_project, monkeypatch):
+    def test_native_close_completes_to_done(self, default_project, monkeypatch):
+        # Plan 025 D7: native is the authority, so close completes the item.
         _native(monkeypatch)
         WorkItemModel.file_work_item(
             project_id=default_project.id,
             identifier="DG-01",
-            title="defer me",
+            title="close me",
             status="open",
             embedding=_vec768(),
         )
         closed = WorkItemModel.close_work_item(default_project.id, "DG-01")
-        # Defers to in_review — NOT terminal, the old bug.
-        assert closed["status"] == "in_review"
-        assert closed["status"] not in ("done", "closed")
-        assert closed.get("closed_at") is None
+        assert closed["status"] == "done"
+        assert closed.get("closed_at") is not None
 
-    def test_native_close_from_in_progress_defers(self, default_project, monkeypatch):
+    def test_native_close_from_in_progress_completes(self, default_project, monkeypatch):
         _native(monkeypatch)
         WorkItemModel.file_work_item(
             project_id=default_project.id,
@@ -82,9 +81,10 @@ class TestDegradeModeClose:
             status="in_progress",
         )
         closed = WorkItemModel.close_work_item(default_project.id, "DG-02")
-        assert closed["status"] == "in_review"
+        assert closed["status"] == "done"
 
-    def test_native_close_already_in_review_is_noop(self, default_project, monkeypatch):
+    def test_explicit_review_still_reaches_in_review(self, default_project, monkeypatch):
+        # Review is an explicit workflow now, not a side effect of close.
         _native(monkeypatch)
         WorkItemModel.file_work_item(
             project_id=default_project.id,
@@ -93,13 +93,24 @@ class TestDegradeModeClose:
             status="open",
             embedding=_vec768(),
         )
-        WorkItemModel.close_work_item(default_project.id, "DG-03")  # -> in_review
-        again = WorkItemModel.close_work_item(default_project.id, "DG-03")
-        assert again["status"] == "in_review"
+        for st in ("in_progress", "in_review"):
+            out = WorkItemModel.update_work_item(
+                project_id=default_project.id,
+                identifier="DG-03",
+                status=st,
+            )
+        assert out["status"] == "in_review"
+        passed = WorkItemModel.review_transition(
+            default_project.id,
+            "DG-03",
+            transition_name="adversarial_pass",
+            review_note="looks right",
+        )
+        assert passed["status"] == "in_human_review"
 
-    def test_native_accept_to_done_is_blocked_without_force(self, default_project, monkeypatch):
-        # WI-2: degrade mode cannot run the gate, so `accept` (in_human_review →
-        # done) must be refused — it would fake the cross-lineage requirement.
+    def test_native_accept_to_done_is_allowed(self, default_project, monkeypatch):
+        # Plan 025 D7 lifts Plan 014 WI-2's block: native is the authority, and
+        # verify_gate_integrity still flags an accept with no adversarial pass.
         _native(monkeypatch)
         WorkItemModel.file_work_item(
             project_id=default_project.id,
@@ -114,12 +125,12 @@ class TestDegradeModeClose:
                 identifier="DG-04",
                 status=st,
             )
-        with pytest.raises(ValueError, match="review gate"):
-            WorkItemModel.update_work_item(
-                project_id=default_project.id,
-                identifier="DG-04",
-                status="done",
-            )
+        out = WorkItemModel.update_work_item(
+            project_id=default_project.id,
+            identifier="DG-04",
+            status="done",
+        )
+        assert out["status"] == "done"
 
     def test_native_force_close_writes_terminal(self, default_project, monkeypatch):
         # The admin/repair escape hatch keeps the legacy terminal close.

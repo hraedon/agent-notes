@@ -131,7 +131,8 @@ def test_harness_resolves_only_canonical_configuration(monkeypatch: pytest.Monke
 
     resolved = _resolve_harness_env(None)
 
-    assert resolved["REGISTA_DSN"] == "postgresql://canonical/x"
+    # Plan 025 D7: regista write-through config is no longer propagated.
+    assert "REGISTA_DSN" not in resolved
     assert resolved["AGENT_NOTES_PROJECT"] == "canonical-project"
     assert "AGENT_NOTES_REGISTA_DSN" not in resolved
     assert "AGENT_NOTES_REGISTA_PROJECT" not in resolved
@@ -165,15 +166,18 @@ def test_claude_install_wires_env_and_skills():
         assert data["no_op"] is False
         # settings.json env block populated
         settings = json.loads((td / ".claude" / "settings.json").read_text())
-        assert settings["env"]["REGISTA_DSN"] == "postgresql://suite/x"
-        assert settings["env"]["REGISTA_KEY_PATH"] == "/suite/key"
         assert settings["env"]["AGENT_NOTES_DSN"] == "postgresql://native/x"
         assert settings["env"]["AGENT_NOTES_PROJECT"] == "suite-project"
+        # Plan 025 D7: regista write-through vars are not propagated.
+        for retired in ("REGISTA_DSN", "REGISTA_KEY_PATH", "REGISTA_REQUIRE_SSL"):
+            assert retired not in settings["env"]
+        assert "AGENT_NOTES_REGISTA_WRITES" not in settings["env"]
         # skills installed
         assert (td / ".claude" / "skills" / "demo" / "SKILL.md").is_file()
         # manifest written
         man = json.loads((td / ".claude" / ".agent-notes-harness.json").read_text())
-        assert "REGISTA_DSN" in man["env_keys"]
+        assert "AGENT_NOTES_DSN" in man["env_keys"]
+        assert "REGISTA_DSN" not in man["env_keys"]
         assert man["plugin"] is False
 
 
@@ -191,7 +195,7 @@ def test_claude_reinstall_is_noop_and_manifest_preserved():
         # Manifest must still list all managed keys (regression: re-install must
         # not blank the manifest, or a later uninstall can't find them).
         man = json.loads((td / ".claude" / ".agent-notes-harness.json").read_text())
-        assert "REGISTA_DSN" in man["env_keys"]
+        assert "AGENT_NOTES_PROJECT" in man["env_keys"]
         assert "AGENT_NOTES_DSN" in man["env_keys"]
 
 
@@ -261,10 +265,10 @@ def test_no_clobber_keeps_existing_different_value():
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         src = _make_skill_tree(td)
-        # Pre-populate settings.json with a user-set REGISTA_DSN.
+        # Pre-populate settings.json with a user-set AGENT_NOTES_DSN.
         (td / ".claude").mkdir(parents=True)
         (td / ".claude" / "settings.json").write_text(
-            json.dumps({"env": {"REGISTA_DSN": "postgresql://user-set/x"}})
+            json.dumps({"env": {"AGENT_NOTES_DSN": "postgresql://user-set/x"}})
         )
         result = _run(
             "install-harness",
@@ -281,13 +285,13 @@ def test_no_clobber_keeps_existing_different_value():
         assert "no clobber" in result.stderr
         settings = json.loads((td / ".claude" / "settings.json").read_text())
         # User value kept
-        assert settings["env"]["REGISTA_DSN"] == "postgresql://user-set/x"
+        assert settings["env"]["AGENT_NOTES_DSN"] == "postgresql://user-set/x"
         # Other keys written
-        assert settings["env"]["REGISTA_KEY_PATH"] == "/suite/key"
+        assert settings["env"]["AGENT_NOTES_PROJECT"] == "suite-project"
         # Manifest does NOT track the clobbered key (so uninstall won't remove it)
         man = json.loads((td / ".claude" / ".agent-notes-harness.json").read_text())
-        assert "REGISTA_DSN" not in man["env_keys"]
-        assert "REGISTA_KEY_PATH" in man["env_keys"]
+        assert "AGENT_NOTES_DSN" not in man["env_keys"]
+        assert "AGENT_NOTES_PROJECT" in man["env_keys"]
 
 
 def test_dry_run_mutates_nothing_exit_2():
@@ -340,11 +344,9 @@ def test_opencode_install_writes_config_file_and_plugin():
         assert result.returncode == 0, result.stderr
         # env -> agent-notes config file (opencode.json has no env block)
         cfg = json.loads(config_path(home=td).read_text())
-        assert cfg["regista"]["dsn"] == "postgresql://suite/x"
-        assert cfg["regista"]["key_path"] == "/suite/key"
-        assert cfg["regista"]["require_ssl"] is True  # coerced to bool
-        assert cfg["regista"]["writes_enabled"] is True
         assert cfg["dsn"] == "postgresql://native/x"
+        # Plan 025 D7: no regista write-through block is written.
+        assert "regista" not in cfg
         # plugin package -> ~/.config/opencode/agent-notes; V2 registration
         oc = json.loads((td / ".config" / "opencode" / "opencode.json").read_text())
         assert oc.get("plugins") == ["./agent-notes"]
@@ -900,17 +902,17 @@ def test_reinstall_with_fewer_env_vars_preserves_manifest_tracking():
         full = ["install-harness", "claude", "--source", str(src), "--home", str(td), "--json"]
         # Install with full env.
         _run(*full, env=_SUITE_ENV, check=False)
-        # Re-install with REGISTA_DSN unset (user removed it from their shell).
-        reduced = {k: v for k, v in _SUITE_ENV.items() if k != "REGISTA_DSN"}
+        # Re-install with AGENT_NOTES_PROJECT unset (removed from the shell).
+        reduced = {k: v for k, v in _SUITE_ENV.items() if k != "AGENT_NOTES_PROJECT"}
         _run(*full, env=reduced, check=False)
-        # Manifest must still track REGISTA_DSN (still in settings.json from
-        # the first install).
+        # Manifest must still track AGENT_NOTES_PROJECT (still in settings.json
+        # from the first install).
         man = json.loads((td / ".claude" / ".agent-notes-harness.json").read_text())
-        assert "REGISTA_DSN" in man["env_keys"]
+        assert "AGENT_NOTES_PROJECT" in man["env_keys"]
         # Uninstall must remove it.
         _run("install-harness", "claude", "--uninstall", "--home", str(td), "--json", check=False)
         settings = json.loads((td / ".claude" / "settings.json").read_text())
-        assert "REGISTA_DSN" not in settings.get("env", {})
+        assert "AGENT_NOTES_PROJECT" not in settings.get("env", {})
 
 
 def test_reinstall_with_removed_skill_preserves_manifest_tracking():
@@ -952,10 +954,10 @@ def test_opencode_no_clobber_keeps_existing_different_value():
         td = Path(td)
         src = _make_skill_tree(td)
         _make_opencode_agents(td)
-        # Pre-populate the agent-notes config with a user-set regista.dsn.
+        # Pre-populate the agent-notes config with a user-set dsn.
         _cfg = config_path(home=td)
         _cfg.parent.mkdir(parents=True, exist_ok=True)
-        _cfg.write_text(json.dumps({"regista": {"dsn": "postgresql://user-set/x"}}))
+        _cfg.write_text(json.dumps({"dsn": "postgresql://user-set/x"}))
         result = _run(
             "install-harness",
             "opencode",
@@ -971,13 +973,10 @@ def test_opencode_no_clobber_keeps_existing_different_value():
         assert "no clobber" in result.stderr
         cfg = json.loads(config_path(home=td).read_text())
         # User value kept.
-        assert cfg["regista"]["dsn"] == "postgresql://user-set/x"
-        # Other keys written.
-        assert cfg["regista"]["key_path"] == "/suite/key"
+        assert cfg["dsn"] == "postgresql://user-set/x"
         # Clobbered key NOT tracked in manifest.
         man = json.loads((td / ".config" / "opencode" / ".agent-notes-harness.json").read_text())
-        assert "regista.dsn" not in man["env_keys"]
-        assert "regista.key_path" in man["env_keys"]
+        assert "dsn" not in man["env_keys"]
 
 
 def test_user_flag_warns_for_opencode():
@@ -1053,16 +1052,17 @@ def test_hermes_install_wires_env_and_skills():
         assert data["no_op"] is False
         # .env file populated with sentinel-wrapped managed block
         env_content = (td / ".hermes" / ".env").read_text()
-        assert "REGISTA_DSN=postgresql://suite/x" in env_content
-        assert "REGISTA_KEY_PATH=/suite/key" in env_content
         assert "AGENT_NOTES_DSN=postgresql://native/x" in env_content
+        assert "AGENT_NOTES_PROJECT=suite-project" in env_content
+        assert "REGISTA_DSN" not in env_content
+        assert "AGENT_NOTES_REGISTA_WRITES" not in env_content
         assert "# BEGIN agent-notes-harness-managed" in env_content
         assert "# END agent-notes-harness-managed" in env_content
         # skills installed (directory-based SKILL.md, same as claude)
         assert (td / ".hermes" / "skills" / "demo" / "SKILL.md").is_file()
         # manifest written
         man = json.loads((td / ".hermes" / ".agent-notes-harness.json").read_text())
-        assert "REGISTA_DSN" in man["env_keys"]
+        assert "AGENT_NOTES_DSN" in man["env_keys"]
         assert man["plugin"] is False
         # No agents key for hermes (unlike opencode)
         assert "agents" not in man
@@ -1081,7 +1081,7 @@ def test_hermes_reinstall_is_noop_and_manifest_preserved():
         assert data["no_op"] is True
         # Manifest must still list all managed keys
         man = json.loads((td / ".hermes" / ".agent-notes-harness.json").read_text())
-        assert "REGISTA_DSN" in man["env_keys"]
+        assert "AGENT_NOTES_PROJECT" in man["env_keys"]
         assert "AGENT_NOTES_DSN" in man["env_keys"]
 
 
@@ -1151,9 +1151,9 @@ def test_hermes_no_clobber_keeps_existing_different_value():
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         src = _make_skill_tree(td)
-        # Pre-populate .env with a user-set REGISTA_DSN outside the managed block.
+        # Pre-populate .env with a user-set AGENT_NOTES_DSN outside the managed block.
         (td / ".hermes").mkdir(parents=True)
-        (td / ".hermes" / ".env").write_text("REGISTA_DSN=postgresql://user-set/x\n")
+        (td / ".hermes" / ".env").write_text("AGENT_NOTES_DSN=postgresql://user-set/x\n")
         result = _run(
             "install-harness",
             "hermes",
@@ -1169,13 +1169,13 @@ def test_hermes_no_clobber_keeps_existing_different_value():
         assert "no clobber" in result.stderr
         env_content = (td / ".hermes" / ".env").read_text()
         # User value kept
-        assert "REGISTA_DSN=postgresql://user-set/x" in env_content
+        assert "AGENT_NOTES_DSN=postgresql://user-set/x" in env_content
         # Other keys written in managed block
-        assert "REGISTA_KEY_PATH=/suite/key" in env_content
+        assert "AGENT_NOTES_PROJECT=suite-project" in env_content
         # Manifest does NOT track the clobbered key
         man = json.loads((td / ".hermes" / ".agent-notes-harness.json").read_text())
-        assert "REGISTA_DSN" not in man["env_keys"]
-        assert "REGISTA_KEY_PATH" in man["env_keys"]
+        assert "AGENT_NOTES_DSN" not in man["env_keys"]
+        assert "AGENT_NOTES_PROJECT" in man["env_keys"]
 
 
 def test_hermes_dry_run_mutates_nothing_exit_2():
@@ -1214,16 +1214,16 @@ def test_hermes_reinstall_with_fewer_env_vars_preserves_manifest_tracking():
         full = ["install-harness", "hermes", "--source", str(src), "--home", str(td), "--json"]
         # Install with full env.
         _run(*full, env=_SUITE_ENV, check=False)
-        # Re-install with REGISTA_DSN unset.
-        reduced = {k: v for k, v in _SUITE_ENV.items() if k != "REGISTA_DSN"}
+        # Re-install with AGENT_NOTES_PROJECT unset.
+        reduced = {k: v for k, v in _SUITE_ENV.items() if k != "AGENT_NOTES_PROJECT"}
         _run(*full, env=reduced, check=False)
-        # Manifest must still track REGISTA_DSN (still in .env managed block).
+        # Manifest must still track it (still in .env managed block).
         man = json.loads((td / ".hermes" / ".agent-notes-harness.json").read_text())
-        assert "REGISTA_DSN" in man["env_keys"]
+        assert "AGENT_NOTES_PROJECT" in man["env_keys"]
         # Uninstall must remove it.
         _run("install-harness", "hermes", "--uninstall", "--home", str(td), "--json", check=False)
         env_content = (td / ".hermes" / ".env").read_text()
-        assert "REGISTA_DSN" not in env_content
+        assert "AGENT_NOTES_PROJECT" not in env_content
 
 
 # ---------------------------------------------------------------------------
@@ -1853,3 +1853,147 @@ def test_all_target_mixed_conflict_and_success():
         statuses = {r["harness"]: r["status"] for r in data["results"]}
         assert statuses["claude"] == "failed"
         assert statuses["opencode"] == "installed"
+
+
+# ---------------------------------------------------------------------------
+# Plan 025 D7: retired regista write-through keys
+# ---------------------------------------------------------------------------
+
+
+def _write_manifest(path: Path, env_keys: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"tool": "agent-notes", "harness": "x", "env_keys": env_keys, "skills": {}})
+    )
+
+
+def test_claude_reinstall_removes_owned_regista_keys_only():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        settings_path = td / ".claude" / "settings.json"
+        settings_path.parent.mkdir(parents=True)
+        # An earlier install wrote the write gate and DSN; the operator set the
+        # key path by hand (not in the manifest).
+        settings_path.write_text(
+            json.dumps(
+                {
+                    "env": {
+                        "AGENT_NOTES_REGISTA_WRITES": "1",
+                        "REGISTA_DSN": "postgresql://suite/x",
+                        "REGISTA_KEY_PATH": "/hand/set",
+                        "USER_KEY": "keep-me",
+                    }
+                }
+            )
+        )
+        _write_manifest(
+            td / ".claude" / ".agent-notes-harness.json",
+            ["AGENT_NOTES_REGISTA_WRITES", "REGISTA_DSN"],
+        )
+        common = ["install-harness", "claude", "--source", str(src), "--home", str(td), "--json"]
+
+        dry = _run(*common, "--dry-run", env=_SUITE_ENV, check=False)
+        assert dry.returncode == 2
+        assert any(
+            a["kind"] == "remove_key" and a["keys"] == ["env.REGISTA_DSN"]
+            for a in json.loads(dry.stdout)["actions"]
+        )
+        assert "REGISTA_DSN" in json.loads(settings_path.read_text())["env"]
+
+        result = _run(*common, env=_SUITE_ENV, check=False)
+        assert result.returncode == 0, result.stderr
+        env = json.loads(settings_path.read_text())["env"]
+        assert "AGENT_NOTES_REGISTA_WRITES" not in env
+        assert "REGISTA_DSN" not in env
+        assert env["REGISTA_KEY_PATH"] == "/hand/set"  # not ours: untouched
+        assert env["USER_KEY"] == "keep-me"
+        man = json.loads((td / ".claude" / ".agent-notes-harness.json").read_text())
+        assert "REGISTA_DSN" not in man["env_keys"]
+        assert "AGENT_NOTES_REGISTA_WRITES" not in man["env_keys"]
+
+        again = _run(*common, env=_SUITE_ENV, check=False)
+        assert json.loads(again.stdout)["no_op"] is True
+
+
+def test_opencode_reinstall_removes_owned_regista_config_keys():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        _make_opencode_agents(td)
+        cfg_path = config_path(home=td)
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text(
+            json.dumps(
+                {
+                    "dsn": "postgresql://native/x",
+                    "regista": {
+                        "dsn": "postgresql://suite/x",
+                        "writes_enabled": True,
+                        "hmac_key_path": "/hand/set",
+                    },
+                }
+            )
+        )
+        _write_manifest(
+            td / ".config" / "opencode" / ".agent-notes-harness.json",
+            ["regista.dsn", "regista.writes_enabled", "dsn"],
+        )
+        result = _run(
+            "install-harness",
+            "opencode",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            env=_SUITE_ENV,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        cfg = json.loads(cfg_path.read_text())
+        assert cfg["regista"] == {"hmac_key_path": "/hand/set"}
+        assert cfg["dsn"] == "postgresql://native/x"
+        man = json.loads((td / ".config" / "opencode" / ".agent-notes-harness.json").read_text())
+        assert man["env_keys"] == ["dsn"]
+
+
+def test_hermes_reinstall_drops_regista_keys_from_managed_block():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        src = _make_skill_tree(td)
+        env_path = td / ".hermes" / ".env"
+        env_path.parent.mkdir(parents=True)
+        env_path.write_text(
+            "REGISTA_DSN=postgresql://hand/x\n"
+            "\n# BEGIN agent-notes-harness-managed\n"
+            "REGISTA_DSN=postgresql://suite/x\n"
+            "AGENT_NOTES_REGISTA_WRITES=1\n"
+            "AGENT_NOTES_DSN=postgresql://native/x\n"
+            "# END agent-notes-harness-managed\n"
+        )
+        _write_manifest(
+            td / ".hermes" / ".agent-notes-harness.json",
+            ["REGISTA_DSN", "AGENT_NOTES_REGISTA_WRITES", "AGENT_NOTES_DSN"],
+        )
+        result = _run(
+            "install-harness",
+            "hermes",
+            "--source",
+            str(src),
+            "--home",
+            str(td),
+            "--json",
+            env=_SUITE_ENV,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        content = env_path.read_text()
+        # The hand-set line outside the managed block survives.
+        assert content.startswith("REGISTA_DSN=postgresql://hand/x\n")
+        assert "REGISTA_DSN=postgresql://suite/x" not in content
+        assert "AGENT_NOTES_REGISTA_WRITES" not in content
+        assert "AGENT_NOTES_DSN=postgresql://native/x" in content
+        man = json.loads((td / ".hermes" / ".agent-notes-harness.json").read_text())
+        assert "REGISTA_DSN" not in man["env_keys"]
+        assert "AGENT_NOTES_REGISTA_WRITES" not in man["env_keys"]

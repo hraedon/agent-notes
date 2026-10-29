@@ -98,7 +98,6 @@ def test_orientation_renderer_redacts_and_bounds_metadata() -> None:
         "memories": [{"name": "password=do-not-print", "type": "decision"}],
         "learned_context": {"results": [{"text": "token=also-do-not-print"}]},
         "resolved_in_git": [],
-        "regista_sync": {"enabled": False},
     }
 
     context = lifecycle._format_orientation(payload)

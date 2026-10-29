@@ -62,43 +62,51 @@ def _repo_orient_hook(repo_root: str) -> str | None:
     return settings_path if settings_run_orient(Path(settings_path)) else None
 
 
-def _install_claude_stop_hook(repo_root: str) -> tuple[str, bool]:
-    """Wire a Stop hook into <repo>/.claude/settings.json that replays the
-    regista outbox (Plan 009 §12.4). Non-optional reconcile on session end; if
-    regista is unreachable the reconcile is a no-op and `orient`/`outbox status`
-    surface the stale count next session. Idempotent. Returns (path, changed).
+def _remove_claude_stop_reconcile_hook(repo_root: str) -> tuple[str, bool]:
+    """Remove the `agent-notes outbox reconcile` Stop hook earlier `init` runs
+    wired into <repo>/.claude/settings.json (Plan 009 §12.4). Regista
+    write-through is retired (Plan 025 D7), so there is no outbox to replay.
+    Only that command is removed; other Stop hooks are kept. Returns
+    (path, changed).
     """
     settings_path = os.path.join(repo_root, ".claude", "settings.json")
-    os.makedirs(os.path.dirname(settings_path), exist_ok=True)
-    settings: dict = {}
-    if os.path.exists(settings_path):
-        try:
-            settings = json.loads(open(settings_path, encoding="utf-8").read()) or {}
-        except (json.JSONDecodeError, OSError):
-            settings = {}
-    hooks = settings.setdefault("hooks", {})
-    stop = hooks.setdefault("Stop", [])
-    command = "agent-notes outbox reconcile"
+    if not os.path.exists(settings_path):
+        return settings_path, False
+    try:
+        settings = json.loads(open(settings_path, encoding="utf-8").read()) or {}
+    except (json.JSONDecodeError, OSError):
+        return settings_path, False
+    hooks = settings.get("hooks")
+    stop = hooks.get("Stop") if isinstance(hooks, dict) else None
+    if not isinstance(stop, list):
+        return settings_path, False
     changed = False
-    found = False
+    kept_entries: list = []
     for entry in stop:
-        if not isinstance(entry, dict):
-            continue
-        for h in entry.get("hooks", []):
-            if not isinstance(h, dict):
-                continue
-            cmd = h.get("command", "")
-            if cmd.startswith("agent-notes outbox reconcile"):
-                found = True
-                if cmd != command:
-                    h["command"] = command
-                    changed = True
-    if not found:
-        stop.append({"hooks": [{"type": "command", "command": command}]})
-        changed = True
+        if isinstance(entry, dict) and isinstance(entry.get("hooks"), list):
+            kept = [
+                h
+                for h in entry["hooks"]
+                if not (
+                    isinstance(h, dict)
+                    and str(h.get("command", "")).startswith("agent-notes outbox reconcile")
+                )
+            ]
+            if len(kept) != len(entry["hooks"]):
+                changed = True
+                if not kept:
+                    continue
+                entry = {**entry, "hooks": kept}
+        kept_entries.append(entry)
+    if not changed:
+        return settings_path, False
+    if kept_entries:
+        hooks["Stop"] = kept_entries
+    else:
+        hooks.pop("Stop")
     with open(settings_path, "w", encoding="utf-8") as f:
         f.write(json.dumps(settings, indent=2) + "\n")
-    return settings_path, changed
+    return settings_path, True
 
 
 def _regista_schema_missing(slug: str) -> str | None:
@@ -177,6 +185,14 @@ def cmd_init(
     repo_root = os.path.abspath(git_root)
     name = slug or os.path.basename(repo_root)
 
+    if name == "global" or name.startswith("vm:"):
+        print(
+            f"Error: '{name}' is reserved for memory tiers (global / vm:<id>) and cannot "
+            "name a project. Pass --slug to register this repo under another slug.",
+            file=sys.stderr,
+        )
+        return EXIT_CONFLICT
+
     missing = _regista_schema_missing(name)
     if missing is not None:
         print(
@@ -238,9 +254,9 @@ def cmd_init(
                 "user-level hook from `agent-notes install-harness claude` now does this "
                 "(and skips orient while the per-repo hook exists); you can remove it."
             )
-        stop_path, stop_changed = _install_claude_stop_hook(repo_root)
-        stop_verb = "wired" if stop_changed else "already present"
-        print(f"Claude Code Stop -> `agent-notes outbox reconcile` {stop_verb} in {stop_path}.")
+        stop_path, stop_changed = _remove_claude_stop_reconcile_hook(repo_root)
+        if stop_changed:
+            print(f"Removed the retired `agent-notes outbox reconcile` Stop hook from {stop_path}.")
 
     print(
         "Next (once per machine): `agent-notes install-harness all` wires skills, "
