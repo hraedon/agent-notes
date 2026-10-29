@@ -707,3 +707,27 @@ lineage.
   no `[with: regista-hraedon==0.7.2]`. Restart the dispatchers as usual. Mixed
   versions are harmless here: no deployed host relies on anything Phase 3
   removes.
+
+### 2026-10-29: Phase 3 deployed (`359c14d`)
+
+- **Install command.** On all three hosts it is now
+  `uv tool install --force --reinstall <checkout>`, with no `--no-sources` and
+  no `--with regista-hraedon`.
+- **regista is gone.** It can't be imported in any host's tool environment.
+- **`doctor`.** `healthy` on mvmcc02 and mvmhermes01. Windows fails only the
+  known `codex_harness` (two local Codex marketplace paths with no manifest).
+- **Production smoke test.**
+  - A write succeeded (WI-085, then deleted).
+  - A malformed `AGENT_NOTES_ACTOR_ID` returns the same
+    `PRINCIPAL_ID_UNGRAMMATICAL` envelope as before.
+  - `agent-notes outbox reconcile` now exits 2, as intended.
+- **Outbox Stop hooks.** All 51 were cleared before the stub was removed.
+  - **Pushed at source** to 6 repos: ad-steward, agent-suite, frontier-lag,
+    modern-moo2, socratic-specification and vitrine.
+  - **Edited locally only:**
+    - openbia, sluice and switchboard, which are archived on GitHub and
+      read-only;
+    - diagnostics-architect-curriculum (on git.hraedon.com), because mvmcc02
+      has no credentials for it;
+    - every remaining worktree and untracked copy.
+

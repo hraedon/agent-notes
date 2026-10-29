@@ -547,3 +547,21 @@ payload sizes; why `gitea-orient` printed nothing.
     (`_mentions_path`). `"a/" * 8000` dropped from 1.46 s to 1.5 ms, and
     200 KB takes 17 ms.
   - Added linearity and behaviour tests (`test_r3_mentions_path_*`).
+
+### 2026-10-29: Phase 1 deployed (`b040efb`)
+
+- **Hosts.** Deployed to mvmcc02, Windows (`shodan`) and mvmhermes01, and
+  refreshed the harnesses, because the `add-memory` skill changed.
+- **Production checks.**
+  - `memory hygiene --all` took 1.2 s and found:
+    - 15 near-duplicate pairs;
+    - 68 oversized facts;
+    - 0 shadowed names;
+    - 0 contradictions;
+    - 0 stale facts;
+    - reflections without a follow-up fact in 19 projects;
+    - 2 possible secrets, both the test-DB fixture.
+  - Re-adding an existing project memory's text under a new name was refused
+    with `POSSIBLE_DUPLICATE`, and nothing was written.
+  - `memory recall` returned results.
+
