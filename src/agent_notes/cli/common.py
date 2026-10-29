@@ -261,10 +261,11 @@ def scope_workspace(args: argparse.Namespace, *, strict_path: bool = False) -> S
     """Pick the workspace for a scope command without requiring a registered repo.
 
     ``strict_path`` makes an explicit ``--path`` that is not inside a registered
-    repo an error (``SystemExit``), for composed queries where a silently absent
-    repo tier would read as "no repo memories".
+    repo (of ``--workspace``, when given) an error, for composed queries where a
+    silently absent repo tier would read as "no repo memories".
     """
     from agent_notes.core.db import get_project, list_workspaces
+    from agent_notes.core.project_discovery import discover_project
 
     ws_slug = getattr(args, "workspace", None)
     if getattr(args, "project", None):
@@ -281,9 +282,23 @@ def scope_workspace(args: argparse.Namespace, *, strict_path: bool = False) -> S
                 f"Workspace '{ws_slug}' not found. Available: {available or '(none)'}",
                 EXIT_NOT_FOUND,
             )
+        path = getattr(args, "path", None)
+        if path:
+            found = discover_project(path)
+            proj = (
+                get_project(ws.id, found.project) if found and found.workspace == ws.slug else None
+            )
+            if proj is not None:
+                return ScopeContext(ws.id, ws.slug, proj.id, proj.slug)
+            if strict_path:
+                if found is None:
+                    raise SystemExit(EXIT_NOT_CONFIGURED)
+                raise ScopeError(
+                    "PROJECT_NOT_RESOLVED",
+                    f"--path {path!r} is in workspace '{found.workspace}', not '{ws.slug}'.",
+                    EXIT_NOT_CONFIGURED,
+                )
         return ScopeContext(ws.id, ws.slug)
-
-    from agent_notes.core.project_discovery import discover_project
 
     discovered = discover_project(getattr(args, "path", None))
     if discovered is not None:
@@ -432,6 +447,7 @@ def report_resolution_failure(
         and code == EXIT_NOT_CONFIGURED
         and getattr(args, "workspace", None)
         and not getattr(args, "project", None)
+        and not path
     ):
         detail = (
             f"--workspace {args.workspace} alone selects no project here: work items "

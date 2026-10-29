@@ -529,6 +529,38 @@ def _shadows_for(
     return out
 
 
+def active_by_name(workspace_id: int, scopes: list[ScopeRef], names: list[str]) -> list[dict]:
+    """Active memories named ``names`` in ``scopes``, most specific scope first.
+
+    Exact-name lookup for composed recall: a tier's retrieval cutoff must not
+    decide which tier wins a name (repo > vm > global).
+    """
+    if not scopes or not names:
+        return []
+    by_project = {s.project_id: s for s in scopes}
+    project_ids = [s.project_id for s in scopes]
+    with _conn() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            SELECT project_id, name, memory_type, body
+            FROM memories
+            WHERE active = true AND workspace_id = %s
+              AND project_id = ANY(%s) AND name = ANY(%s)
+            ORDER BY array_position(%s::int[], project_id)
+            """,
+            (workspace_id, project_ids, sorted(set(names)), project_ids),
+        )
+        return [
+            {
+                **r,
+                "scope": by_project[r["project_id"]].scope,
+                "scope_key": by_project[r["project_id"]].scope_key,
+            }
+            for r in cur.fetchall()
+        ]
+
+
 def _tag_scoped(
     cur: Any, workspace_id: int, scopes: list[ScopeRef], rows: list[dict]
 ) -> list[dict]:
