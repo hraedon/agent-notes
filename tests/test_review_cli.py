@@ -138,6 +138,14 @@ def test_review_vm_comes_from_the_environment(capsys, checkout, monkeypatch):
     assert code == 0 and out["to_vm"] == "mvmcc02"
 
 
+def test_a_bare_model_alias_is_refused_before_sending(capsys, checkout):
+    _push(checkout["repo"])
+    code, out = _request(capsys, "--model", "haiku", "--json")
+    assert code == 4 and out["error"]["code"] == "MODEL_INVALID"
+    assert "claude-haiku-" in out["error"]["message"]
+    assert m.list_requests(checkout["ws"], from_session=checkout["session"]) == []
+
+
 def test_bad_revision_is_refused(capsys, checkout):
     code, out = _cli(
         capsys,

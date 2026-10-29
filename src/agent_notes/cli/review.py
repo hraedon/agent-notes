@@ -125,6 +125,12 @@ def cmd_review_request(args: argparse.Namespace) -> int:
             exit_code=EXIT_NOT_FOUND,
         )
 
+    if args.model:
+        from agent_notes.dispatcher.review_job import model_alias_refusal
+
+        if refusal := model_alias_refusal(args.model):
+            return emit_error("MODEL_INVALID", refusal, use_json=use_json, exit_code=EXIT_CONFLICT)
+
     cwd = os.getcwd()
     try:
         head_sha = _resolve_rev(cwd, args.head)

@@ -54,6 +54,7 @@ JOB_ERROR = "REVIEW_JOB_FAILED"
 
 _SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,127}$")
+_MODEL_FAMILIES = ("haiku", "sonnet", "opus", "fable")
 _SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 _log = logging.getLogger("agent_notes.dispatcher")
@@ -71,6 +72,22 @@ class _JobError(Exception):
 def platform_supported() -> bool:
     """023's bounded runner is POSIX-only (``os.killpg``)."""
     return os.name != "nt"
+
+
+def model_alias_refusal(model: str) -> str | None:
+    """Why ``model`` can't be requested, when it is a CLI alias (``haiku``, ``opus[1m]``).
+
+    023's runner checks the model Claude reports against the one requested, and
+    Claude always reports the full ID, so an alias would run a review and then fail.
+    """
+    family = model.split("[", 1)[0].lower()
+    if family not in _MODEL_FAMILIES and family not in ("default", "best", "opusplan"):
+        return None
+    example = f"claude-{family}-..." if family in _MODEL_FAMILIES else DEFAULT_MODEL
+    return (
+        f"model {model!r} looks like an alias; pass the full model ID (for example "
+        f"{example}), which the reviewer's reported model must match exactly"
+    )
 
 
 def _env_list(name: str, env: Mapping[str, str]) -> list[str]:
@@ -128,6 +145,8 @@ def _payload(request: Mapping[str, Any], env: Mapping[str, str]) -> dict[str, An
     model = raw.get("model") or env.get(MODEL_ENV) or DEFAULT_MODEL
     if not isinstance(model, str) or not _MODEL_RE.match(model):
         raise _JobError(REQUEST_INVALID, "payload.model is invalid")
+    if refusal := model_alias_refusal(model):
+        raise _JobError(REQUEST_INVALID, refusal)
     timeout = raw.get("timeout_seconds") or env.get(TIMEOUT_ENV) or DEFAULT_TIMEOUT
     try:
         timeout = min(MAX_TIMEOUT, max(MIN_TIMEOUT, float(timeout)))

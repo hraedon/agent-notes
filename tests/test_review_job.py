@@ -286,6 +286,7 @@ def test_windows_refuses_with_a_reply(ws, vm, project, repos, monkeypatch):
         ({"reviewer": "codex"}, rj.REVIEWER_UNSUPPORTED),
         ({"head": "main"}, rj.REQUEST_INVALID),
         ({"model": "--dangerously"}, rj.REQUEST_INVALID),
+        ({"model": "haiku"}, rj.REQUEST_INVALID),
         ({"project": "../etc"}, rj.REQUEST_INVALID),
     ],
 )

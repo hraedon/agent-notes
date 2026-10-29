@@ -141,6 +141,44 @@ def test_unreachable_database_fails_open_in_a_subprocess(tmp_path):
     assert "failed" in log and "pw@" not in log
 
 
+def _capture_rerun(monkeypatch) -> list:
+    calls: list = []
+    if os.name == "nt":
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda args, env: calls.append((args, env)) or subprocess.CompletedProcess(args, 7),
+        )
+    else:
+        monkeypatch.setattr(os, "execve", lambda path, args, env: calls.append((args, env)))
+    monkeypatch.setattr(common, "run", lambda argv: calls.append(("ran", argv)) or 0)
+    return calls
+
+
+def test_a_harness_pythonpath_is_dropped_before_any_dependency_import(monkeypatch, tmp_path):
+    # Hermes exports its own interpreter's site-packages, which shadow this venv's compiled modules.
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path / "hermes-site-packages"))
+    monkeypatch.setenv("PYTHONHOME", str(tmp_path / "hermes-home"))
+    monkeypatch.setattr(sys, "argv", ["agent-notes-hook", "hermes", "pre-llm-call"])
+    calls = _capture_rerun(monkeypatch)
+    main()
+    ((args, env),) = calls
+    assert args == [sys.executable, "-I", "-m", "agent_notes.hooks", "hermes", "pre-llm-call"]
+    assert "PYTHONPATH" not in env and "PYTHONHOME" not in env
+    assert env["PATH"] == os.environ["PATH"]
+
+
+def test_a_pythonpath_this_package_came_from_is_kept(monkeypatch):
+    import agent_notes
+
+    package_parent = Path(agent_notes.__file__).resolve().parents[1]
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(["/elsewhere", str(package_parent)]))
+    monkeypatch.setattr(sys, "argv", ["agent-notes-hook", "claude", "stop"])
+    calls = _capture_rerun(monkeypatch)
+    main()
+    assert calls == [("ran", None)]
+
+
 def test_output_is_utf8_whatever_the_console_encoding():
     out = _Stdout()
     common.write_json({"reason": "naïve ✓ 日本語 — ok"}, out)
