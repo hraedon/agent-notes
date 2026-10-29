@@ -155,6 +155,12 @@ on its own:
   `direct`; all others default to `none`** (owner decision). The dispatcher
   refuses to wake a session whose policy doesn't allow it.
 - Sessions marked `untrusted-input` can't submit `request` jobs (D8).
+- Paseo exports `PASEO_PASSWORD` into every hosted agent's environment
+  (Phase 0). A Paseo-hosted agent can therefore already drive its **own**
+  machine's daemon, which is no more than the shell access it already has.
+  D2's guarantee is about other machines, and it holds, because pairing
+  links are never in the environment. agent-notes must never log or echo
+  the environment.
 - Following the operator-console rule: a session registered as
   `trust = 'untrusted-input'` (one that reads web content) can send messages,
   but those messages never wake a session that holds brokered capabilities.
