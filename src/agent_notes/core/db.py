@@ -99,6 +99,7 @@ class Project:
     log_location: str | None = None
     wake_channel: str | None = None
     created_at: datetime | None = None
+    kind: str = "repo"
 
 
 @dataclass
@@ -160,8 +161,13 @@ def get_or_create_project(
     log_location: str | None = None,
     wake_channel: str | None = None,
     relocate: bool = False,
+    kind: str | None = None,
 ) -> Project:
     """Register a project, or return the existing one for (workspace, slug).
+
+    ``kind`` defaults from the slug (``global`` -> ``'global'``, ``vm:*`` ->
+    ``'vm'``, anything else ``'repo'``) and is never changed on conflict; the
+    memory-scope helpers below are the supported way to create tier rows.
 
     An already-registered ``repo_root`` is NOT overwritten unless *relocate*
     is set. Slugs default to a directory basename, so two checkouts of the
@@ -183,44 +189,135 @@ def get_or_create_project(
         if relocate
         else "COALESCE(projects.repo_root, EXCLUDED.repo_root)"
     )
+    if kind is None:
+        kind = project_kind_for_slug(slug)
     with _conn() as conn:
         cur = conn.cursor()
         cur.execute(
             f"""
-            INSERT INTO projects (workspace_id, slug, name, repo_root, log_location, wake_channel)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO projects
+                (workspace_id, slug, name, repo_root, log_location, wake_channel, kind)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (workspace_id, slug) DO UPDATE SET
                 name = EXCLUDED.name,
                 repo_root = {repo_root_expr},
                 log_location = COALESCE(EXCLUDED.log_location, projects.log_location),
                 wake_channel = COALESCE(EXCLUDED.wake_channel, projects.wake_channel)
             RETURNING id, workspace_id, slug, name, repo_root,
-                      log_location, wake_channel, created_at
+                      log_location, wake_channel, created_at, kind
             """,  # noqa: S608 - repo_root_expr is a fixed literal chosen above
-            (workspace_id, slug, name, repo_root, log_location, wake_channel),
+            (workspace_id, slug, name, repo_root, log_location, wake_channel, kind),
         )
         conn.commit()
         row = cur.fetchone()
         return _row_to_project(row)
 
 
-def list_projects(workspace_id: int | None = None) -> list[Project]:
+def list_projects(
+    workspace_id: int | None = None, *, kinds: tuple[str, ...] = ("repo",)
+) -> list[Project]:
+    """List registered projects.
+
+    Defaults to ``kind = 'repo'``: the VM and global memory-scope rows are
+    synthetic (Plan 025 D3) and must not appear in anything a user or agent
+    browses. Pass ``kinds`` explicitly only from the scope helpers.
+    """
+    conditions = ["kind = ANY(%s)"]
+    params: list[Any] = [list(kinds)]
+    if workspace_id is not None:
+        conditions.append("workspace_id = %s")
+        params.append(workspace_id)
     with _conn() as conn:
         cur = conn.cursor()
-        if workspace_id is not None:
-            cur.execute(
-                "SELECT id, workspace_id, slug, name, repo_root, "
-                "log_location, wake_channel, created_at "
-                "FROM projects WHERE workspace_id = %s ORDER BY slug",
-                (workspace_id,),
-            )
-        else:
-            cur.execute(
-                "SELECT id, workspace_id, slug, name, repo_root, "
-                "log_location, wake_channel, created_at "
-                "FROM projects ORDER BY workspace_id, slug"
-            )
+        cur.execute(
+            "SELECT id, workspace_id, slug, name, repo_root, "
+            "log_location, wake_channel, created_at, kind "
+            f"FROM projects WHERE {' AND '.join(conditions)} ORDER BY workspace_id, slug",  # noqa: S608
+            params,
+        )
         return [_row_to_project(r) for r in cur.fetchall()]
+
+
+def get_project(
+    workspace_id: int, slug: str, *, kinds: tuple[str, ...] = ("repo",)
+) -> Project | None:
+    """Look up one project by slug; ``repo`` rows only unless ``kinds`` says otherwise."""
+    return next((p for p in list_projects(workspace_id, kinds=kinds) if p.slug == slug), None)
+
+
+# ---------------------------------------------------------------------------
+# Memory scope rows (Plan 025 D3): 'vm:<id>' and 'global' project rows
+# ---------------------------------------------------------------------------
+
+SCOPE_REPO = "repo"
+SCOPE_VM = "vm"
+SCOPE_GLOBAL = "global"
+GLOBAL_SLUG = "global"
+_VM_PREFIX = "vm:"
+
+
+def project_kind_for_slug(slug: str) -> str:
+    if slug == GLOBAL_SLUG:
+        return SCOPE_GLOBAL
+    if slug.startswith(_VM_PREFIX):
+        return SCOPE_VM
+    return SCOPE_REPO
+
+
+def vm_project_slug(vm_id: str) -> str:
+    return f"{_VM_PREFIX}{vm_id}"
+
+
+def get_or_create_scope_project(workspace_id: int, scope: str, vm_id: str | None = None) -> Project:
+    """Resolve or create the project row that holds a ``vm`` or ``global`` memory scope.
+
+    The only supported way to obtain a synthetic scope row. ``global`` is the
+    workspace's seeded ``global`` project (``kind`` is corrected if it was
+    created before the 850 migration); ``vm`` is ``vm:<vm_id>`` with no
+    ``repo_root``.
+    """
+    if scope == SCOPE_GLOBAL:
+        slug, name = GLOBAL_SLUG, "Global Project"
+    elif scope == SCOPE_VM:
+        if not vm_id:
+            raise ValueError("vm_id is required for vm scope")
+        slug, name = vm_project_slug(vm_id), f"VM {vm_id}"
+    else:
+        raise ValueError(f"not a synthetic memory scope: {scope!r}")
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO projects (workspace_id, slug, name, kind)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (workspace_id, slug) DO UPDATE SET kind = EXCLUDED.kind
+            RETURNING id, workspace_id, slug, name, repo_root,
+                      log_location, wake_channel, created_at, kind
+            """,
+            (workspace_id, slug, name, scope),
+        )
+        conn.commit()
+        return _row_to_project(cur.fetchone())
+
+
+def find_scope_project(workspace_id: int, scope: str, vm_id: str | None = None) -> Project | None:
+    """Look up a ``vm`` or ``global`` scope row without creating it."""
+    if scope == SCOPE_GLOBAL:
+        slug = GLOBAL_SLUG
+    elif scope == SCOPE_VM and vm_id:
+        slug = vm_project_slug(vm_id)
+    else:
+        return None
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, workspace_id, slug, name, repo_root, "
+            "log_location, wake_channel, created_at, kind "
+            "FROM projects WHERE workspace_id = %s AND slug = %s AND kind = %s",
+            (workspace_id, slug, scope),
+        )
+        row = cur.fetchone()
+        return _row_to_project(row) if row else None
 
 
 def resolve_project(path: str) -> dict:
@@ -238,6 +335,7 @@ def resolve_project(path: str) -> dict:
                    w.slug AS workspace
             FROM projects p
             JOIN workspaces w ON w.id = p.workspace_id
+            WHERE p.kind = 'repo'
             ORDER BY LENGTH(p.repo_root) DESC
             """
         )
@@ -272,6 +370,7 @@ def _row_to_project(row: dict) -> Project:
         log_location=row.get("log_location"),
         wake_channel=row.get("wake_channel"),
         created_at=row["created_at"],
+        kind=row.get("kind", "repo"),
     )
 
 

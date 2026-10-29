@@ -97,6 +97,21 @@ def _check_schema() -> tuple[bool, str]:
         return False, _sanitize_conn_error(exc)
 
 
+def _check_vm_identity() -> tuple[str, str]:
+    """Report the VM ID that names this machine's memory scope (Plan 025 WI-2.2).
+
+    Returns ``(status, detail)``. An unresolvable ID is a ``warn``, not a
+    failure: containers and pods legitimately have no stable hostname, and VM
+    memory is optional.
+    """
+    from agent_notes.core.config import VmIdError, resolve_vm_id
+
+    try:
+        return "ok", f"vm id: {resolve_vm_id()}"
+    except VmIdError as exc:
+        return "warn", str(exc)
+
+
 def _check_coordination_mode() -> tuple[bool, str]:
     """Report the coordination mode (Plan 008 P4 degrade contract).
 
@@ -982,6 +997,8 @@ def run_json(check_embed: bool = False) -> tuple[dict, int]:
 
     ok, msg = _check_coordination_mode()
     add("coordination_mode", ok, msg)
+    vm_status, vm_msg = _check_vm_identity()
+    checks.append({"name": "vm_identity", "status": vm_status, "detail": vm_msg})
     # Reuse the coordination-mode string for the regista block instead of
     # calling get_coordination_mode() a second time.
     mode = msg if ok else "unknown"
@@ -1112,6 +1129,10 @@ def run(skip_embed: bool = False, check_embed: bool = False) -> int:
     _print_section("3. Coordination Mode")
     _print_result(ok, msg)
     all_ok = all_ok and ok
+
+    vm_status, vm_msg = _check_vm_identity()
+    _print_section("VM Identity")
+    print(f"  {vm_status.upper()}: {vm_msg}")
 
     if not (dsn_ok and schema_ok):
         for name in (
