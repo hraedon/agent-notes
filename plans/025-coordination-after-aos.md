@@ -647,3 +647,42 @@ Researched 2026-10-28, from official docs and source where available.
   - Refresh the Codex plugins (both machines are still on the 1.1.0 cache) and
     re-trust them with `/hooks`, which adds UserPromptSubmit.
   - Approve the Hermes hook once Hermes is installed.
+
+### 2026-10-29 (later): owner follow-ups closed
+
+- **Reviewer credential:** the owner's `claude setup-token` value is in
+  `dispatch-secret.env` on mvmcc02, mode 600. A brief review requested from
+  `shodan` returned `accept`.
+- **Model aliases:** `review request --model haiku` used to run the review and
+  then fail the exact reported-model check. The CLI and the job now refuse an
+  alias up front and name the full ID to pass.
+- **Codex:** the 1.1.0 plugin duplicated the skills and hooks that
+  `install-harness codex` already writes at user level, and only its
+  SessionStart and Stop hooks were trusted.
+  - On mvmcc02 and Windows, `agent-notes@<marketplace>` is set to
+    `enabled = false`; its cache is left in place.
+  - The three user-level hooks in `~/.codex/hooks.json` are trusted.
+    - mvmcc02 trusted them through `/hooks`.
+    - Windows got the same `trusted_hash` values: Codex hashes a hook's
+      content, not its path.
+  - A one-line `codex exec` ran SessionStart, UserPromptSubmit and Stop on
+    both machines.
+- **Hermes, on mvmhermes01:**
+  - Hermes exports `PYTHONPATH` with its own Python 3.14 site-packages to shell
+    hooks. Those shadowed the hook venv's compiled `rpds`, so every
+    `pre_llm_call` failed open.
+  - `agent-notes-hook` now re-runs itself isolated (`-I`, without
+    `PYTHONPATH`/`PYTHONHOME`) when `PYTHONPATH` is set but the package was not
+    loaded from it.
+  - The hook was approved with Hermes' own `--accept-hooks`; no other hooks are
+    configured there.
+  - A message sent to a Hermes session was delivered when that session was
+    resumed.
+- **mvmhermes01 setup:**
+  - Its agent-notes was the July v1.0.0 with regista writes on. It now runs this
+    branch from `~/agent-notes-025` with `--no-sources`, regista writes are off,
+    and `AGENT_NOTES_ACTOR_ID` is `agent:mvmhermes01` (it was `hermes`, which is
+    not canonical). Both config files were backed up with the suffix
+    `.bak-20261029-pre025`.
+  - Not done there: a dispatcher (for Paseo agents on that host), and the
+    Claude/Codex harness hooks.
