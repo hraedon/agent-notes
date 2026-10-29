@@ -78,15 +78,9 @@ def _env_list(name: str, env: Mapping[str, str]) -> list[str]:
 
 
 def default_checkout_resolver(workspace_id: int, project_slug: str, vm_id: str) -> str | None:
-    """``core.checkouts.resolve_checkout`` (WI-2.6), or ``projects.repo_root``
-    on a tree that doesn't have it yet."""
-    try:
-        from agent_notes.core.checkouts import resolve_checkout
-    except ImportError:
-        from agent_notes.core import db as coredb
+    """This VM's checkout of the project (``project_checkouts``, WI-2.6)."""
+    from agent_notes.core.checkouts import resolve_checkout
 
-        project = coredb.get_project(workspace_id, project_slug)
-        return project.repo_root if project is not None else None
     return resolve_checkout(workspace_id, project_slug, vm_id)
 
 
@@ -313,8 +307,8 @@ def _run(
     if not checkout or not os.path.isdir(checkout):
         raise _JobError(
             NO_CHECKOUT,
-            f"no checkout of {spec['project']} on {ctx.vm}; register one with "
-            "`agent-notes init` there",
+            f"no checkout of {spec['project']} on {ctx.vm}; register one there with "
+            "`agent-notes init` or `agent-notes checkout scan <dir> --apply`",
         )
 
     fetch_error = _fetch(checkout)
