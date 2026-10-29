@@ -23,7 +23,7 @@ from agent_notes.core.lifecycle import (
     transition_for as _lifecycle_transition_for,
 )
 
-from . import _common
+from . import _common, _seal
 
 KIND = "work_item"
 ENTITY_TYPE = "work_item"
@@ -147,6 +147,7 @@ def update_work_item(
     """
     actor_id = face_factory.write_actor().actor_id
     workspace_id = _common.resolve_workspace_for_project(conn, project_id)
+    _seal.seal_for_write(conn, project_id, identifier, actor_id)
     cur = conn.cursor(row_factory=dict_row)
     cur.execute(
         "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
@@ -296,53 +297,79 @@ def update_work_item(
     return dict(folded)
 
 
-def close_work_item_native_deferred(
+_CLOSABLE = frozenset({"open", "in_progress", "claimed", "in_review", "in_human_review"})
+
+
+def close_work_item(
     project_id: int,
     identifier: str,
-    old: dict,
 ) -> dict:
-    """Native (degrade) close that defers to ``in_review`` (Plan 014 A(b)).
+    """Native close: complete the work item (``done``) in one transaction.
 
-    Mirrors ``_close_work_item_regista``'s state handling, but drives the
-    op-log via ``update_work_item`` (with the Plan 013 WI-5 transition
-    pre-flight) instead of a regista face. Reaching a terminal state is not
-    possible here — completion requires regista's review gate.
+    Plan 025 D7: native Postgres is the authority, so ``close`` completes the
+    item directly instead of deferring to ``in_review``. Review stays an
+    explicit workflow (``work-item review`` or ``--status in_review``); closing
+    an item that is in review completes it. Terminal, blocked, and deferred
+    items are refused. Any lease on the item is released with the close.
     """
-    state = old["status"]
-    canonical = "done" if state == "closed" else state
-    if canonical in ("in_review", "in_human_review"):
-        return dict(old)  # already awaiting review — no-op
-    if canonical == "done":
-        raise ValueError(f"Work item {identifier!r} is already done; reopen first")
-    if canonical == "blocked":
-        raise ValueError(f"Work item {identifier!r} is blocked; unblock before closing")
-    if canonical == "deferred":
-        raise ValueError(f"Work item {identifier!r} is deferred; resume before closing")
-    if canonical == "claimed":
-        raise ValueError(
-            f"Work item {identifier!r} is in legacy 'claimed' state; "
-            "migrate to the canonical workflow first"
-        )
-    # open or in_progress → defer to in_review (never terminal). Both steps run
-    # on a single connection and commit once, so the close is atomic (WI-020):
-    # the item can no longer be stranded in ``in_progress`` by a crash between
-    # the two transitions.
+    from datetime import datetime, timezone
+
+    actor_id = face_factory.write_actor().actor_id
     with _conn() as conn:
-        if canonical == "open":
-            update_work_item(
-                conn,
-                project_id=project_id,
-                identifier=identifier,
-                status="in_progress",
-            )
-        result = update_work_item(
+        workspace_id = _common.resolve_workspace_for_project(conn, project_id)
+        _seal.seal_for_write(conn, project_id, identifier, actor_id)
+        old = _common.load_work_item_row(conn, project_id, identifier)
+        state = old["status"]
+        if is_terminal(state):
+            raise ValueError(f"Work item {identifier!r} is already done; reopen first")
+        if state == "blocked":
+            raise ValueError(f"Work item {identifier!r} is blocked; unblock before closing")
+        if state == "deferred":
+            raise ValueError(f"Work item {identifier!r} is deferred; resume before closing")
+        if state not in _CLOSABLE:
+            raise ValueError(f"Work item {identifier!r} cannot be closed from {state!r}")
+
+        entity_id = old["entity_id"]
+        # ``closed_at`` keeps the op_id unique when an item is reopened and
+        # closed again (op_ids are content hashes of payload + parents).
+        op = kernel.commit_op(
             conn,
+            entity_id=entity_id,
+            entity_type=ENTITY_TYPE,
+            op_type="set_status",
+            payload={
+                "status": "done",
+                "transition": "close",
+                "closed_at": datetime.now(timezone.utc).isoformat(),
+            },
+            parent_op_ids=[entity_id],
+            actor_id=actor_id,
+        )
+        cur = conn.cursor()
+        cur.execute("DELETE FROM work_item_leases WHERE entity_id = %s", (entity_id,))
+
+        folded = kernel.fold_work_item(conn, entity_id)
+        if folded is None:
+            raise RuntimeError("fold_work_item returned None after close op")
+
+        kernel.emit_event(
+            conn,
+            op_id=op["op_id"],
+            event_type="item.closed",
+            payload={"entity_id": entity_id, "identifier": identifier},
+        )
+        write_change(
+            conn,
+            kind=KIND,
+            workspace_id=workspace_id,
             project_id=project_id,
             identifier=identifier,
-            status="in_review",
+            event="status_changed",
+            payload={"old_status": state, "new_status": "done"},
+            actor=actor_id,
         )
         conn.commit()
-    return result
+        return dict(folded)
 
 
 def close_work_item_force(
@@ -353,6 +380,7 @@ def close_work_item_force(
     actor_id = face_factory.write_actor().actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
+        _seal.seal_for_write(conn, project_id, identifier, actor_id)
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
@@ -502,6 +530,7 @@ def review_transition(
 
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
+        _seal.seal_for_write(conn, project_id, identifier, actor.actor_id)
         old = _common.load_work_item_row(conn, project_id, identifier)
         entity_id = old["entity_id"]
 
@@ -610,6 +639,7 @@ def claim_work_item(
     stamped_actor = face_factory.write_actor().actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
+        _seal.seal_for_write(conn, project_id, identifier, stamped_actor)
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
@@ -714,6 +744,7 @@ def release_work_item(
     stamped_actor = face_factory.write_actor().actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
+        _seal.seal_for_write(conn, project_id, identifier, stamped_actor)
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",

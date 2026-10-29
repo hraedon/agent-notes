@@ -86,7 +86,12 @@ def _to_in_review(project_id, identifier, monkeypatch):
         identifier=identifier,
         status="in_progress",
     )
-    WorkItemModel.close_work_item(project_id, identifier)
+    # Plan 025: native close completes the item; review is explicit.
+    WorkItemModel.update_work_item(
+        project_id=project_id,
+        identifier=identifier,
+        status="in_review",
+    )
 
 
 def _author_env(monkeypatch: pytest.MonkeyPatch) -> None:

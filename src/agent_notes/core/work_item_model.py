@@ -21,7 +21,7 @@ Public surface:
 - `file_work_item` — create a new work item.
 - `update_work_item` — update fields / status.
 - `set_status` — dedicated status transition (delegates to update_work_item).
-- `close_work_item` — defer to in_review (review gate owns completion);
+- `close_work_item` — complete the item (`done`, native path; Plan 025);
   `force=True` writes a terminal `close` op (admin/repair).
 - `attest_gate_waiver` — record a retroactive gate waiver (Plan 014 WI-4).
 - `review_transition` — drive a review-gate transition with a review note.
@@ -203,23 +203,16 @@ class WorkItemModel:
     ) -> dict:
         """Close a work item.
 
-        Regista branch (Plan 010 WI-3): ``close`` → ``submit_for_review`` →
-        ``in_review``. The agent cannot reach ``done`` unilaterally; work awaits a
-        cross-lineage review pass + accept.
+        Native branch (the default; Plan 025 D7): ``close`` completes the item
+        (``done``) in one transaction and releases any lease. Review is an
+        explicit workflow (``review_transition`` or ``status="in_review"``), not
+        a side effect of closing. ``force=True`` is the admin/repair escape
+        hatch that writes the legacy terminal ``close`` op.
 
-        Native / degrade branch (Plan 014, Option A(b)): ``close`` **defers** to
-        ``in_review`` here too — neither path may *complete* (reach ``done``) work
-        unilaterally. The review gate cannot run off-regista, so degrade-mode
-        records the work as submitted and leaves completion to regista. This makes
-        the two paths agree on the one provenance-critical invariant ("no
-        unilateral completion") instead of the old behavior where native ``close``
-        wrote a terminal op with no gate. ``force=True`` is the admin/repair escape
-        hatch: on the native path it writes the legacy terminal ``close`` op; on the
-        regista path it terminalizes through the workflow (``done``) via
-        :meth:`update_work_item`. Routing the face check first (matching
-        :meth:`update_work_item`) matters: a regista-synced item has no native op
-        chain, so the native force-close cannot fold it (it used to raise
-        ``fold_work_item returned None``).
+        Regista branch (retired write-through, only when
+        ``AGENT_NOTES_REGISTA_WRITES`` is explicitly on; Plan 010 WI-3):
+        ``close`` → ``submit_for_review`` → ``in_review``; ``force=True``
+        terminalizes through the workflow via :meth:`update_work_item`.
         """
         face = face_factory.get_face()
         if face is not None:
@@ -240,14 +233,7 @@ class WorkItemModel:
                 project_id,
                 identifier,
             )
-        old = cls.get_work_item(project_id, identifier)
-        if old is None:
-            raise ValueError(f"Work item not found: {identifier!r} in project {project_id}")
-        return _native.close_work_item_native_deferred(
-            project_id,
-            identifier,
-            old,
-        )
+        return _native.close_work_item(project_id, identifier)
 
     @classmethod
     def attest_gate_waiver(
