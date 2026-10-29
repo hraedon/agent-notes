@@ -290,4 +290,126 @@ under `~/reviews/plans-026-027/`. Adopted:
 
 ## 9. Exposure inventory (Phase 0, WI-0.1)
 
-To be filled in.
+Checked 2026-10-29, read-only, on the Windows workstation, mvmcc02 and
+mvmhermes01, against agent-notes 1.1.1 at `b332466`. No hook was run, because
+every hook writes an `agent_sessions` row. Sizes come from running the same
+read-only `orient` commands the hooks run, from the installed configs, and
+from the lengths (only) of recent Codex transcripts on Windows. "B" means
+bytes; other sizes are characters.
+
+**Shared hook budgets** (`hooks/common.py:35-37`): peer messages 8,000; one
+injection in total 9,500; orient text 5,000. `orient_text` runs `orient
+--path <cwd> --reconcile` (`common.py:474-493`). Orient lists memory **names,
+types and ages only** (`cli/orient.py:214-219`): 5 repo, 3 VM and 3 global
+memories, plus the latest reflection's name. Measured orient text is
+1,511–1,849 B in registered repos, 321–326 B in an unregistered directory,
+and 3.6–4.7 KB with `--json`.
+
+| Harness | When | agent-notes injects | Size | Native memory injects | Size |
+|---|---|---|---|---|---|
+| Claude Code | SessionStart | Orient text, session-key line and claimed messages (`hooks/claude.py:79-116`). The hook skips its own orient when a settings file already runs `agent-notes orient`. | orient ≤5,000 (1.5–1.8 KB typical) + key ~200; total ≤9,500 | `MEMORY.md` of `~/.claude/projects/<cwd>/memory/` (first 200 lines); topic files only when read; repo `CLAUDE.md`/`AGENTS.md` | see host notes |
+| Claude Code | per prompt | Claimed peer messages only (`claude.py:119-130`) | 0 when empty; ≤8,000 | — | — |
+| Claude Code | Stop | One wake message plus a fixed hint (`claude.py:133-142`) | ≤8,000 + ~200 | — | — |
+| Codex | SessionStart (startup, resume, clear, compact) | Work-item ids, status, severity, age; **counts** of changes and memories, no memory names; latest handoff time; drift ids; key line; messages (`hooks/codex.py:56-83`, `codex_lifecycle.py:122-219`, cap 7,000 at `:28`) | measured 933 incl. key line (Windows transcript); computed 545–731 + ~200 on mvmcc02 | **Windows:** `use_memories = true`; a `## Memory` developer block embeds `~/.codex/memories/memory_summary.md`. **mvmcc02:** memories not configured, nothing injected. Global `~/.codex/AGENTS.md` (Windows 0 B, mvmcc02 1,749 B) plus repo `AGENTS.md`. | Windows: measured 16,879 chars / 235 lines in each of the 3 latest sessions |
+| Codex | per prompt / Stop | Messages only / wake message (`codex.py:86-109`) | ≤8,000 | — | — |
+| OpenCode | first model request | `orient --path <dir> --json` formatted as project, work-item ids and titles, memory names and types; no `--reconcile`, **no cap**; nothing in an unregistered directory (`integrations/opencode/index.js:117-148`, `:309-343`) | 893 chars / 18 lines for agent-notes | Repo `AGENTS.md`. No global `~/.config/opencode/AGENTS.md`, no `instructions` key, no native memory store on either host. | repo `AGENTS.md` only |
+| OpenCode | per prompt | `msg inbox --claim --json --limit 20`, spliced before the last user turn (`index.js:218-307`) | 0 when empty; **no budget** | — | — |
+| OpenCode | compaction | Reconciliation checklist (`index.js:345-365`) | 493 | — | — |
+| agy (mvmcc02 only) | SessionStart | Orient text and key line as `systemMessage`; never peer content (`hooks/agy.py:77-90`) | ~1.5–1.9 KB + ~200; ≤9,500 | No `GEMINI.md` under `~/.gemini` or at `/projects/*` roots; settings have no memory keys. 10 agent-notes skills in `~/.gemini/config/skills` (2.1–8.1 KB each). | none found |
+| agy | every model call / Stop | Claimed messages as `ephemeralMessage` / fixed wake text (`agy.py:93-129`) | ≤8,000 / ~250 | — | — |
+| Hermes (mvmhermes01, v0.22.5) | `pre_llm_call`, first turn | Orient text, key line and messages, **appended to the user message** (`hooks/hermes.py:72-102`) | ~1.2–1.9 KB + ~200; ≤9,500 | Frozen system-prompt snapshot: `memories/MEMORY.md` 2,197 chars (13 entries; limit 2,200), `USER.md` 1,359 (limit 1,375), `SOUL.md` 663; context files capped at 20,000; `memory.provider: ''` (built-in only) | ~4.2 KB + repo context |
+| Hermes | later turns | Messages only; no Stop hook (`hermes.py:94-99`) | ≤8,000 | — | — |
+
+**Host notes**
+
+- **mvmcc02, Claude Code:** 49 project directories, 19 with `memory/` (9
+  empty); 185 `.md` files (176 topic files and 9 `MEMORY.md`), 1,193,694 B in
+  total. Topic types: 88 reference, 40 project, 40 feedback, 6 user. The
+  largest topic files are 68, 110 and 114 KB. The largest `MEMORY.md` is
+  `-projects` (cwd `/projects`): 170 lines / 25,398 B indexing 158 files. Next
+  is `-home-itadmin-projects-homelab` (48 lines / 2,957 B); the rest are 23
+  lines or fewer. No `MEMORY.md` exceeds 200 lines; no `~/.claude/CLAUDE.md`.
+  SessionStart runs a legacy uncapped `agent-notes orient --reconcile`, then
+  `gitea-orient` (0 B in every case measured), then `agent-notes-hook claude
+  session-start`.
+- **Windows, Claude Code:** 4 project directories, 2 with memory. `C--projects`
+  has a 20-line / 3,152 B `MEMORY.md` over 21 files (45,603 B);
+  `C--projects-agent-notes` has 2 lines / 260 B over 3 files. Hooks:
+  `agent-notes-hook` only.
+- **Windows, Codex:** 63 of the 84 substantive lines of `memory_summary.md`
+  (13,275 B) appear in the injected block. Not injected: `memories/MEMORY.md`
+  (139,452 B), `raw_memories.md` (183,102 B), 43 rollout summaries, and
+  `memories_v2/` (152,045 B). `memories_1.sqlite` holds 39 `stage1_outputs`.
+  The agent-notes Codex plugin is `enabled = false` on both hosts, so hooks
+  come from `~/.codex/hooks.json` alone.
+- **Repo `AGENTS.md`:** agent-notes is 16,422 B. About 110 checkouts on
+  mvmcc02 range from 807 B to 46,007 B, mostly 5–12 KB.
+
+**Findings that matter for this plan**
+
+1. The largest automatic memory injection anywhere is Windows Codex's native
+   `## Memory` block (~16.9k chars, every project on the machine), about 9x
+   what agent-notes injects. agent-notes itself pushes a table of contents
+   (names only), never bodies.
+2. A NetBox-token-shaped string is in
+   `~/.claude/projects/-home-itadmin-projects-homelab/memory/MEMORY.md` on
+   mvmcc02, which Claude Code auto-loads in that directory (the checkout no
+   longer exists, so it is dormant). A pattern scan also flagged 8 files under
+   `-projects/memory/`, including its `MEMORY.md`; not inspected, possibly
+   false positives. Feeds WI-4.3 and §6.
+3. On mvmcc02 the legacy user-level `agent-notes orient` hook makes the capped
+   hook skip its own orient, so orient arrives uncapped; in the agent-notes
+   repo, the tracked `.claude/settings.json` adds a second orient
+   (`--path /projects/agent-notes`). On Windows that tracked hook resolves to
+   no project and also suppresses the hook's own orient.
+4. The Hermes hook is registered but all 5 logged runs (2026-10-29
+   15:42–15:44Z) failed with `ModuleNotFoundError: No module named
+   'rpds.rpds'`; it fails open, so those turns got nothing from agent-notes.
+5. OpenCode has no budget on the mailbox splice or its orient call.
+6. `agent-notes orient --reconcile` crashes with `UnicodeEncodeError` on a
+   cp1252 Windows console when drift exists (the ⚠ glyph at
+   `cli/orient.py:367`). Hooks are unaffected because they capture stdout.
+
+**Unverified:** whether Claude Code also caps `MEMORY.md` by bytes (~25 KB;
+`-projects` sits at that edge); whether Claude Code on Linux loads
+`AGENTS.md`; live Claude, agy and Hermes SessionStart payloads (no transcripts
+captured); Codex `## Memory` composition (inferred by line matching, not from
+Codex source) and its `project_doc` byte cap; whether agy loads
+`AGENTS.md`/`GEMINI.md` or injects skill bodies; what OpenCode 2 auto-loads;
+orient size on mvmhermes01; whether the Hermes failure persists; real mailbox
+payload sizes; why `gitea-orient` printed nothing.
+
+## 10. Implementation log
+
+**2026-10-29, Phase 0 (Claude, uncommitted working tree):**
+
+- **WI-0.1:** §9 filled in from code plus read-only inspection of the
+  Windows workstation, mvmcc02 and mvmhermes01.
+- **WI-0.2:**
+  - `tests/memory_eval/fixture.jsonl` has 33 queries over 18 projects,
+    labelled `claude-draft`. Three of them have no current answer and test
+    stale-only behaviour.
+  - `tests/memory_eval/names-snapshot-2026-10-29.json` freezes the 59
+    `(project, name, memory_type)` triples the fixture uses. All were checked
+    active against production with SELECT only.
+- **WI-0.3:** `scripts/eval_memory_recall.py` (stdlib only) calls `agent-notes
+  memory search|recall --json` in a subprocess and refuses any other
+  subcommand.
+- **Baseline:** `docs/memory-eval/baseline-2026-10-29.md`.
+  - Scores: nP@5 0.92, MRR 0.86, hit@5 0.97, stale-slot rate 0.045.
+  - A labelled stale memory is in the top 5 for 6/8 queries.
+  - A reflection outranks a relevant fact in 3/26.
+  - Reflections fill 61% of top-5 slots.
+  - `search` and `recall` rank identically.
+- **Inputs to Phase 1:**
+  - Stale facts with no superseder rank first (supports WI-1.2 and WI-1.5).
+  - Reflection crowding (WI-1.3; re-run this fixture to choose between
+    down-ranking and `--no-episodes`).
+  - The single global memory pads small projects because there is no score
+    floor.
+- **Open:**
+  - Owner review of the labels.
+  - An independent Codex labeling pass.
+  - Fixing the §9 findings: the dormant token in a Claude `MEMORY.md`, the
+    broken Hermes hook, the duplicate/uncapped orient on mvmcc02, and the
+    Windows `orient --reconcile` encoding crash. None are fixed here.
