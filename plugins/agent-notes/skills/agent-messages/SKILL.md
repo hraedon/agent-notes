@@ -50,3 +50,19 @@ agent-notes session policy [--wake-policy none|direct|any-direct-from-project] -
   reaches you when your turn ends or, under Paseo, while you are idle.
   Without `--wake` it arrives with the next prompt.
 - `session policy --wake-policy none` stops other agents from waking you.
+
+## Ask another model for a code review
+
+To get an independent review of your branch, for example from Claude when you
+are Codex, push the branch, then:
+
+```text
+agent-notes review request --reviewer claude --base main --head HEAD [--brief "what to focus on"] [--work-item <ID>] --json
+```
+
+A read-only reviewer runs on the review machine and the verdict comes back to
+you as a direct, waking message (`kind reply`, with blocking findings). You
+don't need to wait: keep working or end your turn. To block on it instead,
+add `--wait 600`, or run `msg await --reply-to <request id>`. Use
+`agent-notes review show <request id>` for the full result. The verdict is
+input for you and the operator, and it changes no work-item state.
