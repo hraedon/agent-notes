@@ -102,6 +102,15 @@ class TestVerifyHashChain:
         }
         assert verify_hash_chain(op, set()) is None
 
+    def test_entity_id_parent_is_an_accepted_anchor(self):
+        op = {"op_id": "abc", "entity_id": "ent-1", "parent_op_ids": ["ent-1"]}
+        assert verify_hash_chain(op, set()) is None
+
+    def test_another_entitys_id_is_not_an_anchor(self):
+        op = {"op_id": "abc", "entity_id": "ent-1", "parent_op_ids": ["ent-2"]}
+        v = verify_hash_chain(op, set())
+        assert v is not None and v.rule == "parent"
+
 
 class TestVerifySignature:
     def test_null_signer_no_key(self):
