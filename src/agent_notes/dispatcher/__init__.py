@@ -48,7 +48,8 @@ def _int_setting(name: str, default: int, *, minimum: int) -> int:
 
 
 def _configure_logging(level: str, log_file: str | None) -> None:
-    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stderr)]
+    # With a log file it is the only sink (the Windows task has no console).
+    handlers: list[logging.Handler] = [] if log_file else [logging.StreamHandler(sys.stderr)]
     if log_file:
         os.makedirs(os.path.dirname(os.path.abspath(log_file)), exist_ok=True)
         handlers.append(
