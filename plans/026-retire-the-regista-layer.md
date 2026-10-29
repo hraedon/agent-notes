@@ -1,7 +1,8 @@
 # Plan 026 — Retire the regista layer and Hindsight: one native path, an enforced review gate
 
 **Status:** Accepted 2026-10-29. The owner chose D2 option (a) and retired
-Hindsight (D6).
+Hindsight (D6). Revised the same day after two independent reviews,
+GPT-6.1-sol (Codex) and Gemini 4 Argon (agy); see §8.
 **Owner:** `agent-notes`.
 **Follows:** Plan 025 D7, which turned regista write-through off and made
 native Postgres the work-item authority, but left the code in place.
@@ -78,18 +79,95 @@ facade") becomes moot.
 
 ### D2. Enforce reviewer independence natively, before `producer.py` goes
 
-**Decided 2026-10-29: option (a).** The other options are kept for the record.
+**Decided 2026-10-29: option (a), enforced lineage.** The first draft of the
+rule wouldn't have enforced anything (§8 R1–R3). The revised rule follows.
 
-| Option | Rule | Cost |
-|---|---|---|
-| **a. Enforced lineage** (recommended) | Each review op records the reviewer's producer (`harness`, `model`, `model_lineage`) from the process environment. `accept` is refused when the reviewer's lineage equals the lineage of the most recent `claim`/`set_status → in_progress` actor. Same refusal if the reviewer is the same `actor_id`. `human:*` reviewers are exempt. `attest_gate_waiver` stays the escape hatch | About 150 lines plus tests. Implementers must declare a lineage, otherwise their items can be accepted by anyone, and `doctor` warns. The 025 dispatcher's review jobs already know their model, so they stamp it reliably |
-| b. Same actor only | Refuse `accept` only when the reviewer's `actor_id` equals the implementer's | About 40 lines. Weak, because two Claude sessions with different actor IDs pass |
-| c. Honour system | Document that the gate records but doesn't enforce | Docs only. Matches today's behaviour |
+**Trust boundary.** This is cooperative workflow enforcement. It stops an
+agent from approving its own work by accident or out of habit. It doesn't
+stop a determined operator, because actor and model identity are
+self-asserted through the environment and the hooks. The docs must say this
+plainly.
 
-Whichever option is chosen, fix the AGENTS.md text in the same change.
-Lineage values: keep regista's closed vocabulary by vendoring the
-`MODEL_LINEAGE_FAMILIES` tuple (D3), so existing `REGISTA_PRODUCER_MODEL_LINEAGE`
-settings stay valid.
+**D2.1 Record who did the work.** Every authored work-item op carries a
+`producer` object **inside its payload**, so it's covered by the content
+hash: `create`, `claim`, `set_status`, `set_field` and `close`.
+
+```json
+{"harness": "codex", "model": "gpt-6.1-sol", "lineage": "openai",
+ "session_key": "shodan/codex/...", "source": "env|session|unknown"}
+```
+
+The producer is resolved in this order:
+
+1. `AGENT_NOTES_MODEL` (and optionally `AGENT_NOTES_MODEL_LINEAGE`) in the
+   process environment. `REGISTA_PRODUCER_MODEL` and
+   `REGISTA_PRODUCER_MODEL_LINEAGE` are still read during the transition.
+2. The calling session's registered model. Plan 025 D5's `resolve_session()`
+   finds the session. A new `agent_sessions.model` column is filled by
+   SessionStart/per-prompt hooks from the harness's own hook input. Phase 1a
+   checks which harnesses supply `model`.
+3. `unknown`.
+
+**D2.2 Lineage is coarse: the vendor family.** `claude-*` → `anthropic`,
+`gpt-*` and `o<digit>*` → `openai`, `gemini-*` → `google`, and likewise
+`glm` → `zhipu`, `kimi` → `moonshot`, `minimax`, `nemotron` → `nvidia`,
+`deepseek`, `qwen`, `longcat` → `meituan`. The mapping is data, not branching
+code (AGENTS.md decision 5). Regista's finer vocabulary, where `claude-opus`
+and `claude-sonnet` count as different lineages, is the wrong grain for "an
+independent model looked at this". Regista lineage values still map to a
+family, so old settings keep working.
+
+**D2.3 The implementer set** is every non-system author of an authored op on
+the item since its last `reject` or `request_changes` transition (or since
+creation), excluding the review transitions themselves.
+
+**D2.4 Gated transitions.** Each of these runs the check:
+
+- `adversarial_pass` and `accept`;
+- `close`, and `update --status done`, when the item is in `in_review` or
+  `in_human_review`.
+
+The other close paths are unchanged. Plan 025 D7 deliberately lets `close`
+complete an item that never entered review, and review stays opt-in.
+
+**D2.5 The rule.**
+
+- The reviewer must have a known lineage.
+- The transition is refused when the reviewer's lineage matches any known
+  implementer lineage.
+- When an implementer's lineage is unknown (all of today's 143 items in
+  review), the reviewer's `actor_id` must differ from that implementer's.
+  The op records `independence: "unverified-legacy"`.
+- `human:*` reviewers skip the lineage check. They must still differ from
+  every implementer's actor.
+- Refusals name the matching implementer and point to the escape hatches.
+
+**D2.6 Escape hatches, both recorded on the op.**
+
+- `--same-lineage-acknowledged "<reason>"` passes the gate with an explicit
+  reason.
+- `attest_gate_waiver` gains a pre-completion mode.
+
+**D2.7 Delegated reviews.** `work-item review pass|accept --attempt <id>`
+takes the reviewer identity from a `review_delegation_attempts` row in
+`result_validated` state for the same item and head:
+
+- `harness`, `model_identity` → lineage;
+- `identity_assurance`.
+
+It does not take it from the running process. Without this, Plan 025's
+headline flow fails: the Codex implementer that receives Claude's verdict
+would be refused. Brief-mode attempts (no work item) can't be used this way.
+
+**D2.8 Lands with:**
+
+- the `adversarial-review` skill, its bundled copies and the OpenCode
+  reviewer agents;
+- CLI help;
+- `data/cli-manifest.json`;
+- AGENTS.md §"Canonical v6 actor and producer identity".
+
+The skill currently says acceptance needs regista.
 
 ### D3. Vendor the small library pieces, then drop the dependency
 
@@ -120,12 +198,20 @@ placeholder envelope (F2) is a possible follow-up. It needs its own check
 that `op_id` hashing is unaffected (the envelope is outside the hash per
 `kernel.py:122`) and that the verifier keeps accepting historical rows.
 
-### D5. The schema is forward-only; drop tables last
+### D5. The schema is forward-only; drop columns, not tables
 
-No migration in Phases 1–3. Phase 4 adds one migration that drops the
-outbox/regista-mirror tables, only after `doctor` confirms they've been empty
-or unread on both machines for 14 days. Keep the 025 import marker
-(`imported_from_regista`) because it's provenance.
+There are no regista tables to drop. The regista outbox is **per-user JSONL
+files** (`core/outbox.py:66-84`), not a table. Migrations 810 and 830 added
+mirror columns and indexes to the live `work_items` and `memories` tables
+(`regista_note_id`, `pending_sync`, and the 810 columns).
+
+- **Phase 2:** `doctor` inspects each host's outbox files. Non-empty files
+  are archived to NFS before the outbox tooling is deleted.
+- **Phase 4:** one migration drops only the mirror columns and indexes,
+  after `doctor` reports `pending_sync = true` on zero rows on every host.
+  The rows are checked directly; there's no "unread for 14 days" heuristic.
+- The 025 import marker (`imported_from_regista`) stays, because it's
+  provenance.
 
 ### D6. Retire the Hindsight memory engine
 
@@ -148,11 +234,13 @@ Decision: native is the only memory engine. Operations-side retirement is in
 §7. In code, delete:
 
 - `core/hindsight_adapter.py`;
-- `core/http_transport.py`, if nothing else uses it;
-- the engine-selection seam in `core/memory_engine.py`, `knowledge_provider.py`
-  and `cli/memory_provider.py`, keeping only what `memory recall` and
-  `search --federated` need natively;
+- the engine selection in `core/memory_engine.py` and `cli/memory_provider.py`.
+  Keep what `memory recall` and `search --federated` need natively;
 - `AGENT_NOTES_MEMORY_ENGINE`, `HINDSIGHT_URL` and `HINDSIGHT_TENANT`.
+
+`core/http_transport.py` **stays**: it's the HMAC client used by `bridge.py:35`
+and `trigger_loop.py:45`. `knowledge_provider.py` **stays**: it provides live
+native browsing and search, not engine selection.
 
 A setting that names any engine other than `native` becomes a startup error,
 not a silent fallback.
@@ -163,42 +251,52 @@ implementation is overhead. If a learned engine is ever needed again, Plan 027
 
 ## 4. Inventory
 
-Measured on `main` at `88db0d6`.
+Measured on `main` at `88db0d6`. Corrected after review (§8 R4).
 
 | Remove | Lines | Notes |
 |---|---|---|
 | `core/regista_face.py` | 412 | |
 | `core/work_item/_regista.py` | 506 | After D2 lands natively |
-| `core/outbox.py`, `cli/outbox.py` | 708 | Orient and Codex-Stop callers were already removed in 025 |
+| `core/outbox.py`, `cli/outbox.py` | 708 | Also remove the callers: `cli/breadcrumbs.py:35` and lines 490–496, `scripts/doctor.py:25`, `face_factory.py:53` (`OutboxAwareFace`). Archive outbox files first (D5) |
 | `core/reconcile.py` | 366 | Outbox → regista replay (Plan 009). Git reconcile is `core/git_reconcile.py`, which stays |
-| `core/projection.py`, `cli/projection.py` | 344 | Only `rebuild_from_regista` |
+| `core/projection.py`, `cli/projection.py` | 344 | Callers: `core/work_item/_common.py:17` (top-level import on **every** work-item command), `scripts/doctor.py:25`, `scripts/backfill_native_op_log.py:42`. Move anything still used (e.g. `state_to_status`) first |
 | regista branches in `core/note_model.py`, `core/memory_model.py`, `cli/memory.py` (`rebuild_from_regista`) | ~400 of 1,657 | Notes and memories become native-only. Confirm that `note_model`'s native path covers every write it mirrors today |
-| `face_factory.get_face`, `regista_project_name`, `set_current_project` and the CLI project-schema probe (`cli/__init__.py:141-176`, `cli/common.py:106-111,333-338`) | ~120 | Keep `write_actor` and `default_actor`, moved to `core/actor.py` |
-| `core/producer.py` | 86 | Replaced by the D2 native check |
+| `face_factory.get_face`, `regista_project_name`, `set_current_project`, the CLI project-schema probe (`cli/__init__.py:141-176`, `cli/common.py:106-111,333-338`) and `face_factory.py:28` (`regista._connection.validate_project_name`, reached by every `--scope vm|global` memory command) | ~120 | Keep `write_actor` and `default_actor`, moved to `core/actor.py` |
+| `scripts/doctor.py` regista checks | — | Today `doctor --json` reports `degraded` when `regista_reachable` is `None` (`doctor.py:1076-1080`). Fix this **before** any `REGISTA_DSN` removal |
+| `core/producer.py` | 86 | Replaced by D2.1 |
 | `core/coordinator.py` | 78 | Tier B coordinator stub. `doctor` keeps reporting `local-lease` |
 | `scripts/migrate_to_regista.py`, `scripts/dedup_regista_source_identifiers.py`, `cli/admin.py` | 464 | One-shot scripts |
 | `scripts/backfill_native_op_log.py` | 387 | One-shot. Ran at the 025 cutover |
+| `data/cli-manifest.json`, skills | — | Remove `outbox`, `projection`, `admin` and `memory-provider` entries, and the regista text in skills |
 | `cli/harness.py` regista cleanup | — | Keep the code that **removes** old `REGISTA_*` entries for one more release, then delete it |
-| Tests | 47 of 101 files mention regista | Delete the regista-path tests. Convert the dual-path tests to native-only |
+| Tests | 39 of 97 files mention regista | Delete the regista-path tests. Convert the dual-path tests to native-only |
 | `regista` config block, `regista_config()` | — | Unknown keys are already ignored |
-| `core/hindsight_adapter.py`, engine selection in `core/memory_engine.py`, `knowledge_provider.py`, `cli/memory_provider.py` (D6) | ~800 of 1,995 | Keep native recall. Check `http_transport.py` for other users before deleting it |
+| `core/hindsight_adapter.py`, engine selection in `core/memory_engine.py` and `cli/memory_provider.py` (D6) | ~700 | Keep native recall |
 
-Total: roughly 4,700 lines of source, plus the tests.
+Total: roughly 4,600 lines of source, plus the tests.
 
 **Kept:** `kernel.py`, `verifier.py`, `_native.py`, `_seal`, leases,
-`_queries`, `cross_project.py` (a Phase 3 audit decides; see below),
-`messaging.py`, the dispatcher, review jobs, native memory and recall, and
-the `invariants probe`.
+`_queries`, `cross_project.py` (a Phase 3 audit decides), `messaging.py`,
+`http_transport.py`, `knowledge_provider.py`, the bridge, the trigger loop,
+the dispatcher, review jobs, native memory and recall, and the
+`invariants probe`.
+
+**Deployed hosts:** mvmcc02, Windows (`shodan`) and `mvmhermes01` (Hermes,
+Plan 025 §12), plus the Mac if agent-notes is installed there. Every phase
+that changes behaviour redeploys **all** of them and restarts the
+dispatchers. Mixed versions are a bypass: an older install neither stamps
+producers nor enforces D2.
 
 ## 5. Phases
 
 | Phase | Content | Exit |
 |---|---|---|
-| **1** | D2 per the owner's decision: native independence check with tests on real Postgres (same actor, same lineage, human exempt, waiver), plus the AGENTS.md fix | A same-lineage `accept` is refused natively. The dispatcher's Claude review of a Codex-implemented item is accepted |
-| **2** | D1: delete the write-through (§4, everything except library vendoring). `AGENT_NOTES_REGISTA_WRITES=1` → error | `make test` green. `rg -n "get_face\|_regista\|regista_face" src` returns nothing. Deploy to mvmcc02 and Windows; `doctor` clean on both |
-| **2b** | D6: delete the Hindsight engine code. Independent of Phase 2 | `rg -in hindsight src` returns nothing. `memory recall` and `search --federated` still pass on native |
-| **3** | D3: vendor, drop the dependency, retire `SUITE.lock`. Audit `cross_project` usage (rows in `cross_project_*` and `request`/`wait` ops in the last 90 days) and record a keep/remove decision here | `uv pip install -e .` in a fresh venv with no regista. Error-envelope JSON is byte-identical for one sample error per `ErrorCode` |
-| **4** | D5: drop the dead tables after the 14-day window. Delete the harness cleanup code. Rewrite the README and AGENTS.md identity sections around the native model | Migration applied with a backup taken first. Docs no longer describe v6 signing as live |
+| **1a** | Check what each harness's hook input supplies for `model`: Claude, Codex, OpenCode, agy, Hermes | A matrix in §9. A harness with no model falls back to env or `unknown` |
+| **1** | D2.1–D2.8. Migration `860`: `agent_sessions.model`, plus the `model_lineages` vocabulary table. Real-Postgres tests cover: same lineage refused at pass, accept, close and update→done; reviewer lineage unknown refused; legacy implementer with a different actor allowed and recorded; same actor refused; human exempt from lineage but not actor; acknowledgement and waiver recorded; `--attempt` path; `reject` doesn't make the reviewer an implementer | Same-lineage completion is refused on every path. Plan 025's headline flow, a Claude review of a Codex item applied by the Codex session with `--attempt`, succeeds. Skills and docs updated. All hosts redeployed |
+| **2** | D1: delete the write-through (§4, everything except library vendoring), including the doctor fix and caller cleanup. `AGENT_NOTES_REGISTA_WRITES=1` → error | `make test` green. `grep -rnE "get_face\|_regista\b\|regista_face" src` is empty. Fresh-venv smoke run of the CLI, every hook entry point, `agent-notes-bridge`, `agent-notes-dispatch` and `doctor --json`. Then a week with `REGISTA_DSN` unset on all hosts, `doctor` clean |
+| **2b** | D6: delete the Hindsight engine code. Independent of Phase 2 | `grep -rni hindsight src` is empty. `memory recall` and `search --federated` still pass on native |
+| **3** | D3: vendor, drop the dependency, retire `SUITE.lock`. Audit `cross_project` usage (rows in `cross_project_*` and `request`/`wait` ops in the last 90 days) and record a keep/remove decision here | `uv pip install -e .` works in a fresh venv with no regista. Error-envelope JSON is byte-identical for one sample error per `ErrorCode` |
+| **4** | D5: drop the mirror columns and indexes. Delete the harness cleanup code. Rewrite the README and AGENTS.md identity sections around the native model | Migration applied with a backup taken first. Docs no longer describe v6 signing as live |
 
 Phases 1 and 2 can be reviewed together, but Phase 1 must merge first, so
 there's never a release where `producer.py` is gone and nothing replaces it.
@@ -206,13 +304,18 @@ there's never a release where `producer.py` is gone and nothing replaces it.
 ## 6. Risks
 
 - **Hidden regista reads.** Some path may still read through the face
-  without the gate being on. Phase 2's `rg` exit, and running a deployed
-  week with `REGISTA_DSN` unset on both machines, are the checks.
+  without the gate being on. Phase 2's grep, the fresh-venv smoke run and
+  the week with `REGISTA_DSN` unset are the checks.
 - **Error-code drift** breaking skills or hooks that match on `code` values
   (Phase 3 exit).
-- **D2 friction.** Sessions that don't declare a lineage leave their items
-  accepted by anyone. Option (a) logs that case, and `doctor` lists sessions
-  without a lineage, so the gap is visible rather than silent.
+- **D2 friction.**
+  - Sessions with no resolvable model can't pass or accept.
+  - The refusal says how to fix it: set `AGENT_NOTES_MODEL`, or use
+    `--attempt`.
+  - `doctor` lists registered sessions with no model.
+- **Self-asserted identity.** See the D2 trust boundary. If that's ever not
+  enough, the fix is a per-host DB role, with the trigger stamping the host
+  (Plan 025 §8), not more client logic.
 
 ## 7. Hindsight operations retirement (2026-10-29)
 
@@ -240,3 +343,41 @@ there's never a release where `producer.py` is gone and nothing replaces it.
    - drop the `hindsight` database and role on mvmpostgres01; the dump in
      step 2 is the final copy;
    - remove the ingress DNS name.
+
+## 8. Review record (2026-10-29)
+
+Reviewers: GPT-6.1-sol (`codex exec`, read-only) and Gemini 4 Argon medium
+(`agy`, sandboxed print mode). Their verdicts on the first draft: Plan 026
+"rework" and "approve with changes". Raw reviews are on mvmcc02 under
+`~/reviews/plans-026-027/`. Adopted:
+
+- **R1.** `close`, and `update --status done` from review, bypassed a check
+  placed only on `accept`; `adversarial_pass` was unchecked (both reviewers,
+  verified at `_native.py:195-214, 295-339`). → D2.4.
+- **R2.** No op records lineage. Stamping only review ops can't recover who
+  implemented; `reject`/`request_changes` write `in_progress` and would make
+  the reviewer the "implementer" (both reviewers). → D2.1 and D2.3.
+- **R3.** Identity is self-asserted. A human exemption via the env is
+  trivially reachable. Producer evidence must be inside the hashed payload
+  (GPT). → D2 trust boundary and D2.1. Delegated review attempts never write
+  to the op-log, so the headline flow would be refused (Argon). → D2.7.
+  A shared host-level actor ID would block review between harnesses on the
+  same host (Argon). → the D2.5 rule is lineage-first.
+- **R4.** Inventory missed live callers (`_common.py:17`, `breadcrumbs.py:35`,
+  `doctor.py:25`, `face_factory.py:28`, the CLI manifest, skills). It wrongly
+  listed `http_transport.py`, and `knowledge_provider.py` has no engine seam
+  (both reviewers, verified). → §4.
+- **R5.** The outbox is JSONL files, not tables; 810/830 added columns to
+  live tables (GPT). → D5.
+- **R6.** `mvmhermes01` is a deployed host, and skills must change with D2
+  (GPT). → §4 deployed hosts, D2.8.
+- **R7.** `rg` isn't installed on mvmcc02 (Argon). → exits use `grep`.
+
+**My own finding during revision:** no host sets `REGISTA_PRODUCER_*`, and
+regista's lineage vocabulary splits Claude Opus from Claude Sonnet and has
+no Gemini family. → D2.1's session-model source and D2.2's coarse vendor
+lineage.
+
+## 9. Harness model matrix (Phase 1a)
+
+To be filled in.

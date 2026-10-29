@@ -1,444 +1,293 @@
-# Plan 027 — Memory roadmap: measured recall, harvest, and periodic curation ("dream")
+# Plan 027 — Memory roadmap: measure, keep the store clean, curate periodically
 
-**Status:** Proposed 2026-10-29.
+**Status:** Proposed 2026-10-29; revised the same day after two independent
+reviews (GPT-6.1-sol and Gemini 4 Argon; see §8). Both reviewers said
+"rework", and both made the same point: the first draft built AOS-style
+machinery (staging tables, a typed-op executor, rollback, telemetry) before
+there was any evidence it would help. This revision keeps the owner's goal,
+periodic curation, but as a **report that sessions act on with existing
+commands**.
 **Owner:** `agent-notes`.
-**Supersedes:** Plan 020 (pluggable memory engine; Hindsight retired by Plan
-026 D6). Also supersedes Plan 022's provider-bank mapping and signed-note
-dependencies. Plan 022's scope/visibility ideas live on only where §4 below
-restates them.
-**Builds on:** Plan 025 (memory tiers, the dispatcher and its job allowlist,
-peer-data framing) and Plan 023 (the `claude -p` runner).
+**Supersedes:** Plan 020 (pluggable engine) and Plan 022 (shared and personal
+memory), except where this plan restates their ideas.
+**Builds on:** Plan 025 (memory tiers, the mailbox and inbox notices, the
+dispatcher) and Plan 026 (native-only memory).
 
 ---
 
 ## 1. Where memory stands (2026-10-29)
 
-| Fact | Value | So what |
-|---|---|---|
-| Rows | 582: 417 reflections, 118 project, 43 reference, 4 user/feedback | Mostly episodic. Few distilled facts |
-| Body size | Reflections average 5.4k characters. Project memories average 5.2k, max 95k | These are documents, not memory items. They inject badly and retrieve coarsely |
-| Writes per month | 112 / 224 / 208 / 25 / 2 / 11 (May → Oct) | Agents stopped writing here |
-| Harness-native memory | 185 Claude Code memory files on mvmcc02, 21 on Windows, plus a Codex `~/.codex/memories` store | **Agents still write memories, just not to the shared store** |
-| Curation | None. 15 near-duplicate fact pairs (cosine distance < 0.08); 67 rows use `supersedes` | Duplicates and stale facts accumulate, unseen |
-| Tiers (Plan 025) | 510 repo, 1 global, 0 VM | Shipped yesterday; nothing populates them yet |
-| Measurement | None. We don't know whether injected memories help | Highest-risk gap (P1) |
+| Fact | Value |
+|---|---|
+| Rows | 582: 417 reflections (5.4k characters on average), 118 project (5.2k on average, max 95k), 43 reference, 4 user/feedback |
+| Writes per month | 112 / 224 / 208 / 25 / 2 / 11 (May → Oct) |
+| Near-duplicate fact pairs | 15 (cosine distance < 0.08); 67 rows use `supersedes` |
+| Tiers | 510 repo, 1 global, 0 VM |
+| Harness-native memory | About 176 Claude Code memory items on mvmcc02 and 21 files on Windows, plus a Codex memory store per machine |
+
+**How memory actually reaches agents today.** This is corrected from the
+first draft (§8 R1).
+
+- `orient` (session start) injects memory **names, types and ages only**, not
+  bodies (`cli/orient.py:214`).
+- Codex's lifecycle hook narrows that to counts (`codex_lifecycle.py:122-202`).
+- The per-prompt hooks deliver mailbox messages, not memories.
+- Memory bodies reach an agent only when it runs `memory get`, `memory
+  recall`, `memory search` or `search` itself.
+- What harnesses **inject automatically** is their own native memory, for
+  example the first 200 lines of Claude Code's `MEMORY.md`.
+
+So agent-notes memory is a *pull* resource with a *push* table of contents.
+Agents mostly write to harness-native memory instead, and that's
+machine-local.
 
 ## 2. What the field says
 
-These principles come from three research sweeps (2026-10-29): first-party
-harness memory, open-source memory systems, and 2025–2026 papers. Citations are
-in §10. Items marked [pre] are preprints, and many 2026 results come from a
-single author and haven't been replicated.
+These are summarised from three research sweeps on 2026-10-29. The citations
+are in the git history of this file at `d3d9f5f`. Only the items marked ✓
+were checked against the primary source.
 
-- **P1. Memory can hurt, so measure before building.**
-  - In SWE-ContextBench [pre], correctly selected summaries of prior work
-    help, while unfiltered or wrongly selected context gives limited or
-    negative benefit.
-  - In VibeMemBench [pre], 11 of 12 off-the-shelf memory/solver pairings
-    failed to beat memory-off.
-  - DreamBench-SWE [pre] found memory beats no memory, but no significant
-    difference *between* memory systems.
-- **P2. Precision beats recall when injecting.** A wrong lesson is worse than
-  no lesson (SWE-ContextBench). Agents also copy retrieved records, so
-  errors spread to later tasks (Xiong et al., ACL 2026).
-- **P3. Curate with incremental, typed operations; never rewrite.**
-  - ACE (ICLR 2026) found that monolithic rewrites cause "context collapse"
-    and "brevity bias".
-  - Mem0 v3 abandoned its own in-place UPDATE/DELETE in favour of add-only.
-  - Anthropic's Dreams writes a *separate* output store and never modifies
-    its inputs.
-  - Codex consolidation uses one lease and a git-tracked directory.
-  - Gemini CLI Auto Memory sends every change to an approval inbox.
-- **P4. Supersede, never delete, and resolve conflicts before injection.**
-  - Models used a stale stored value 92–100% of the time, and more capable
-    models were harmed more (The Memory Trust Gap [pre]).
-  - Embedding similarity can't tell a contradiction from a duplicate, while
-    deterministic supersession in the query removes the error (MemStrata
-    [pre]).
-  - Graphiti and SodaMem use validity intervals plus supersede edges.
-- **P5. Summaries drop specifics.** Gist compression kept 3% of temporal
-  expressions; one prompt sentence raised that to 62% (*The Sleeping Agent*
-  [pre]). Curation must keep dates, versions, paths and SHAs, and must link
-  back to its sources.
-- **P6. Don't put an LLM on the write path.**
-  - Hindsight's write-time extraction is what failed here.
-  - Our agents already *are* the extractor: they decide what to write.
-  - LLM work happens only in batch curation.
-- **P7. Import harness-native memory; don't compete with it.**
-  - Claude Code's auto memory is machine-local and per-repo, and uses the
-    same four types as ours (user/feedback/project/reference).
-  - Codex's memory files are "generated state", per machine.
-  - Letta's `/init` already ingests Claude and Codex histories.
-  - Our value is *sharing across machines and harnesses*, plus curation.
-- **P8. Procedural memory goes through human review.** SkillsBench (NeurIPS
-  2026): curated skills add about 16 points, while self-generated skills add
-  about 0, and 16 of 84 tasks got worse.
-- **P9. Cross-harness memory is a prompt-injection path.**
-  - MINJA, AgentPoison and MPBench show memory poisoning through ordinary
-    use, and prompt-injection defences don't cover it.
-  - Screening caught 0 of 360 plain false statements (*Utility Under Attack*
-    [pre]).
-  - Defences that hold up: provenance, injecting memory as data, per-source
-    caps on injected slots, and review for wide-scope promotion.
+- **Memory can hurt.**
+  - Wrongly selected prior context gives limited or negative benefit
+    (SWE-ContextBench ✓).
+  - Most off-the-shelf memory/solver pairings failed to beat having no
+    memory (VibeMemBench).
+  - **Measure before building.**
+- **Don't rewrite memory; supersede it.**
+  - Monolithic rewrites cause "context collapse" (ACE, ICLR 2026).
+  - Mem0 v3 dropped its own in-place UPDATE/DELETE (✓).
+  - Anthropic's Dreams never modifies its input store (✓).
+- **Stale facts get over-trusted** (The Memory Trust Gap ✓). Resolve
+  supersession before an agent sees a memory, not afterwards.
+- **No LLM on the write path.** That's exactly what failed with Hindsight.
+  The writing agent already decides what is worth keeping.
+- **Self-generated skills don't help, but curated ones do** (SkillsBench).
+  Anything promoted to procedural memory needs a human.
+- **Memory shared across harnesses is a prompt-injection path** (MINJA,
+  MPBench). Frame memory as data, keep provenance, and redact secrets.
 
 ## 3. Decisions
 
-- **D1. Measurement gates curation.** No curation result is auto-applied, and
-  orient doesn't switch to digests (§7), until the Phase 0 evaluation shows a
-  baseline and the change doesn't regress it.
-- **D2. The writing agent is the extractor; the dream job is the curator.**
-  Writes stay explicit, and an LLM runs only in the batch job. No write-time
-  LLM, no learned-memory service, no graph database. `links` plus recursive
-  CTEs handle relations at our scale (low thousands of rows).
-- **D3. Rows are never edited in place by automation.**
-  - Curation creates new rows and flips `active`, tagged with a
-    `curation_run_id`, so a whole run can be rolled back.
-  - Humans and agents keep `memory update`; it already writes `change_log`.
-- **D4. Supersession and validity are enforced in SQL, not left to the
-  model.**
-  - Default recall and injection exclude superseded or expired rows.
-  - Two rows linked `contradicts` are never injected together. The newer one
-    is injected with a one-line note that an older, conflicting memory
-    exists.
-- **D5. Reflections are the episode archive, not injection material.**
-  - Once curation has distilled a reflection, it leaves default recall and
-    orient.
-  - It stays searchable with `--include-episodes`, and it's never deleted.
-- **D6. Harness-native memory is harvested read-only into proposals.**
-  - agent-notes never writes into `~/.claude`, `~/.codex` or other harness
-    directories.
-  - Harvested items arrive as `proposed`, and they're deduplicated against
-    the store before anyone reviews them.
-- **D7. The dream job is a dispatcher job type, not a new service.**
-  - Add `curate` to the dispatcher's job allowlist, next to `review`
-    (`dispatcher/__init__.py:100`).
-  - A systemd timer on mvmcc02 inserts the `request` rows.
-  - An advisory lock ensures one curation run per workspace at a time.
+- **D1. Measure first, and keep it cheap.** Phase 0 is a static evaluation
+  script and a fixture: no telemetry tables, no replay A/B. Ranking or
+  injection changes ship only if they don't regress it.
+- **D2. The lifecycle stays `active` + `supersedes`.**
+  - No validity columns and no proposal state. `memory_model` already
+    deactivates the predecessor on supersede.
+  - Provenance goes in the existing `attributes` JSONB: `attributes.source =
+    {origin, harness, session_key, vm, path, sha256}`.
+  - That needs no migration.
+- **D3. The writing agent is the judge.** `memory add` shows near-duplicate
+  candidates and asks the agent to choose. Nothing calls an LLM at write time.
+- **D4. Periodic curation ("dream") is a report, not an executor.**
+  - A scheduled job finds problems and posts a curation notice to the
+    project's inbox (Plan 025 mailbox).
+  - The next session there, or a human, acts on it with existing commands:
+    `memory add --supersedes`, `memory update` and `memory delete`. Those
+    already write `change_log`.
+  - No staging tables, no auto-apply, no new rollback machinery.
+  - An optional LLM drafting step (Phase 3) only adds suggested wording.
+- **D5. Harvest is a one-shot, reviewed import.** It's a command with
+  `--dry-run`, not a daemon. It redacts secrets before anything is written.
+  agent-notes never writes into harness directories.
 
-## 4. Schema changes (Phase 1, migration 860)
+## 4. Phases
 
-```sql
-ALTER TABLE memories
-  ADD COLUMN valid_from  TIMESTAMPTZ NOT NULL DEFAULT now(),  -- backfill = created_at
-  ADD COLUMN valid_to    TIMESTAMPTZ,              -- set when superseded or retired
-  ADD COLUMN origin      TEXT NOT NULL DEFAULT 'agent'
-             CHECK (origin IN ('agent','human','harvest','curation')),
-  ADD COLUMN source      JSONB NOT NULL DEFAULT '{}',
-             -- {harness, session_key, vm, path, sha256, curation_run_id}
-  ADD COLUMN review_state TEXT
-             CHECK (review_state IN ('proposed','rejected')),  -- proposed rows have active = false
-  ADD COLUMN summary     TEXT CHECK (length(summary) <= 280);  -- injection line for long bodies
+### Phase 0: Measure
 
-CREATE TABLE memory_recalls (          -- append-only; avoids hot-row updates
-  id          BIGSERIAL PRIMARY KEY,
-  memory_id   BIGINT NOT NULL REFERENCES memories(id),
-  session_key TEXT,
-  surface     TEXT NOT NULL CHECK (surface IN ('orient','recall','search','get','prompt-hook')),
-  rank        INTEGER,
-  query_hash  TEXT,
-  at          TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+- **WI-0.1 Exposure inventory.** Per harness, record what reaches the model
+  at session start and per prompt: agent-notes and native memory, with sizes.
+  It's a table in this plan (§9), checked on each host.
+- **WI-0.2 Recall fixture.**
+  - 30 queries, hand-captured from real work across 6 or more projects. Each
+    has the memory names a good answer would include, and the names that
+    are stale or wrong.
+  - Stored in `tests/memory_eval/fixture.jsonl`, with all expected items
+    taken from a frozen snapshot of names.
+- **WI-0.3 `scripts/eval_memory_recall.py`.**
+  - Runs the fixture against the live DB, read-only.
+  - Reports precision@5, MRR, the stale-hit rate (superseded or known-wrong
+    items returned), and how often a reflection outranks a fact.
+  - About 100 lines, with no schema changes.
 
-CREATE TABLE curation_runs (
-  id          BIGSERIAL PRIMARY KEY,
-  workspace_id INTEGER NOT NULL REFERENCES workspaces(id),
-  project_id  INTEGER REFERENCES projects(id),
-  started_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-  ended_at    TIMESTAMPTZ,
-  model       TEXT, model_lineage TEXT,
-  input_watermark TIMESTAMPTZ,
-  usage       JSONB NOT NULL DEFAULT '{}',
-  status      TEXT NOT NULL CHECK (status IN ('running','completed','failed','rolled_back'))
-);
+**Exit:** a committed baseline under `docs/memory-eval/`.
 
-CREATE TABLE curation_ops (
-  id          BIGSERIAL PRIMARY KEY,
-  run_id      BIGINT NOT NULL REFERENCES curation_runs(id),
-  op          TEXT NOT NULL CHECK (op IN ('merge','supersede','distill','contradiction',
-                                          'retire','promote_scope','digest','skill_candidate')),
-  source_ids  BIGINT[] NOT NULL,       -- memories the op is derived from (required, non-empty)
-  result_id   BIGINT REFERENCES memories(id),
-  rationale   TEXT NOT NULL,
-  state       TEXT NOT NULL DEFAULT 'proposed'
-              CHECK (state IN ('proposed','applied','rejected','rolled_back')),
-  decided_by  TEXT, decided_at TIMESTAMPTZ
-);
-```
+### Phase 1: Store hygiene (no LLM)
 
-Provenance edges also go in `links` (`derived_from`, `contradicts`,
-`mentions`), so the existing link tooling and audits see them.
-
-## 5. Phases
-
-### Phase 0: Measure (before any curation)
-
-- **WI-0.1 Recall telemetry.**
-  - orient, the per-prompt hook, `memory recall/search/get` and `search
-    --federated` write a `memory_recalls` row for each memory they return or
-    inject.
-  - Writes are best-effort and fail open, like the hooks.
-- **WI-0.2 Retrieval precision set.**
-  - Sample 40 real session starts across 6 or more projects, from the
-    `agent_sessions` cwd/project plus the first user prompt.
-  - Record what orient injected, and have Claude and Codex label each item
-    for relevance, with a human resolving disagreements.
-  - Metrics: precision@k for orient, and the stale-injection rate (injected
-    items that are superseded, or wrong as of today).
-  - Stored as a fixture in `tests/memory_eval/`.
-- **WI-0.3 Replay A/B.**
-  - 20 closed work items that have a fix commit and a test, spread across
-    repos.
-  - The dispatcher runs each one headless at the parent commit, once with
-    agent-notes orient and memory hooks on and once with them off.
-  - Score test pass, turns and tokens. Expensive, so run it monthly and
-    before any change to injection policy, not per commit.
-- **WI-0.4 Detail-retention check.** A deterministic validator for curation
-  outputs:
-  - extract SHAs, paths, version strings, dates and WI/BC identifiers from
-    each op's sources;
-  - report the share that survive in the result;
-  - flag any op below its threshold, and refuse to auto-apply it.
-
-**Exit:** a baseline report for precision@k, stale rate and A/B is committed
-under `docs/memory-eval/`.
-
-### Phase 1: Store hygiene, no LLM
-
-- **WI-1.1** Migration 860 (§4). Backfill `valid_from = created_at`, and set
-  `valid_to` from existing `supersedes` chains.
-- **WI-1.2 Default recall respects validity.**
-  - `active AND valid_to IS NULL AND review_state IS NULL` everywhere.
-  - Reflections are excluded from orient. Recall includes them only when
-    they haven't been distilled (D5).
-- **WI-1.3 Write-time dedup with the agent as judge.**
-  - `memory add` runs a composed hybrid search over the same tier and its
-    parent tiers, and returns the top 5 candidates with similarity scores.
+- **WI-1.1 Write-time dedup.**
+  - `memory add` runs a composed hybrid search over the target tier and its
+    parent tiers, and prints the top-5 candidates with scores.
   - Above a threshold, it requires `--supersedes NAME`, `--related NAME`
     (writes a link) or `--distinct`.
-  - The skill text explains the choice. This is the Mem0 update phase
-    without the second LLM call (P6).
-- **WI-1.4 Size discipline.**
-  - `project`, `user` and `feedback` bodies over 2,000 characters are
-    refused unless `--summary` is given. `reference` may be long but always
-    needs a summary.
-  - orient injects the `summary` line, falling back to the first 280
-    characters, never the whole body.
-  - Large existing rows get summaries through the Phase 3 backfill op.
-- **WI-1.5 Injection as data, with byte budgets and per-source caps.**
-  - orient tiers move from counts (5/3/3) to byte budgets: project 3 KB,
-    VM 1 KB, global 1.5 KB.
-  - At most 2 injected items may come from the same `source.session_key`.
-  - Memory content gets Plan 025's peer-data framing (`[agent-notes memory
-    from <origin>/<harness> …]`).
-- **WI-1.6 Ranking.**
-  - Hybrid score × recency decay per type: half-life 30 days for
-    reflections, 180 days for project facts, none for user/feedback.
-  - Multiplied by a usage boost from `memory_recalls`, with a log damper.
-  - There is no hard deletion anywhere.
+  - The `add-memory` skill explains the choice.
+- **WI-1.2 `contradicts` link kind.**
+  - `memory link A B --kind contradicts`.
+  - `memory get` and `recall` show a one-line warning when a returned memory
+    has an open contradiction.
+- **WI-1.3 Reflections are episodes.** Default `memory recall` and `search`
+  rank `memory_type = 'reflection'` below facts, or exclude them with
+  `--no-episodes`. Choose whichever WI-0.3 shows is better, and record the
+  choice here.
+- **WI-1.4 Size guidance.** `memory add` and `memory update` warn when a
+  `project`, `user` or `feedback` body is over 2,000 characters, suggesting a
+  `reference` or a split. Warn only; never refuse.
+- **WI-1.5 `memory hygiene [--project P | --all] [--json]`.** Deterministic,
+  read-only. It reports:
+  - near-duplicate pairs;
+  - oversized fact bodies;
+  - the same name across tiers, where one shadows another;
+  - open `contradicts` links;
+  - facts not updated in 180 days that mention paths or versions;
+  - reflections with no follow-up fact.
 
-**Exit:**
-- Phase 0 metrics show no regression.
-- `doctor` reports rows over budget, missing summaries and near-duplicate
-  pairs.
+**Exit:** WI-0.3 doesn't regress. `memory hygiene --all` runs in under 5
+seconds.
 
-### Phase 2: Harvest harness-native memory
+### Phase 2: Periodic curation v1 (deterministic)
 
-- **WI-2.1 `agent-notes memory harvest [--harness claude|codex|hermes|all] [--dry-run]`.**
-  It runs per machine, because the files are machine-local. Sources:
-  - Claude Code: `~/.claude/projects/<dir>/memory/*.md`. The frontmatter
-    `type` maps 1:1, and `name`/`description` become `name`/`summary`.
-  - Codex: the sections of `~/.codex/memories/MEMORY.md`. Use
-    `memory_summary.md` only as evidence, never as items.
-  - Hermes: `MEMORY.md`.
-- **WI-2.2 Project mapping.** Map the harness directory to an agent-notes
-  project through Plan 025's per-VM checkout map (WI-2.6). Unmapped items
-  land in the VM tier as proposals.
-- **WI-2.3 Idempotency.** `source.path` + `source.sha256`. A changed file
-  produces a new proposal that supersedes the earlier harvested row. An
-  unchanged file is a no-op.
-- **WI-2.4 Schedule.** A per-machine timer (systemd on Linux, launchd on the
-  Mac, a logon task on Windows), daily. It can also run after
-  `install-harness`.
-- **Never auto-activated.** Harvested items wait for review (Phase 3 can
-  propose merges for them).
+- **WI-2.1 Schedule.**
+  - A nightly timer on mvmcc02 runs `memory hygiene --all --json`.
+  - Each project with actionable findings gets one Plan 025 `notice` in its
+    inbox. Subject: "memory curation: N items". The body is a short list,
+    capped at 2 KB, with `memory hygiene --project P` for the full report.
+  - An unchanged report doesn't repost.
+- **WI-2.2 Skill `curate-memory`.** Tells a session how to act on the notice
+  with existing commands:
+  - merge with `--supersedes`;
+  - split oversized bodies;
+  - resolve or annotate contradictions;
+  - distil a reflection cluster into a fact, keeping dates, paths, SHAs and
+    IDs verbatim.
+  - Promotions to global scope and edits to `user`/`feedback` memories need
+    the human's go-ahead.
 
-**Exit:** both machines are harvested; proposals are deduplicated against
-the store; a reviewer can accept or reject them with `memory review`.
+**Exit:** after a month, measure whether notices get acted on. If not, cut
+it.
 
-### Phase 3: Curation ("dream")
+### Phase 3: Periodic curation v2, LLM drafting (gated)
 
-- **WI-3.1 Job.**
-  - Job type `curate` on the dispatcher, with payload `{project | tier,
-    since_watermark, max_ops}`.
-  - Runs `claude -p` through Plan 023's runner in safe mode: read-only
-    tools, no network, `--json-schema` output.
-  - The job builds the prompt input; the model gets no database access.
-  - Default model: whatever reviewer model the dispatcher already holds a
-    credential for. The run records its model and lineage.
-- **WI-3.2 Triggers.**
-  - A nightly timer on mvmcc02 for projects with new input since their
-    watermark.
-  - Earlier when a project gains 10 or more undistilled reflections or
-    harvested proposals.
-  - Limits per run: projects processed, tokens, and ops. A
-    `pg_try_advisory_lock` per workspace.
-- **WI-3.3 Input.** Per project, presented as data with peer-data framing:
-  - active facts, with summaries and usage counts from `memory_recalls`;
-  - reflections not yet distilled;
-  - harvested proposals;
-  - open `contradicts` links.
-  - Raw transcripts are never included, which follows Codex's v2 rule and
-    avoids leaking secrets.
-- **WI-3.4 Operations.** The model emits typed ops only (§4 `curation_ops`).
-  Each op must list non-empty `source_ids` and a rationale.
+Starts only if Phase 2 notices are being acted on **and** Phase 0 has a
+baseline.
 
-  | Op | Effect when applied |
-  |---|---|
-  | `merge` | New row from N near-duplicates; sources get `valid_to` and `derived_from` links |
-  | `supersede` | Newer claim wins; the old row gets `valid_to` |
-  | `distill` | Reflections → subtask-level lessons, **including failures and dead ends** (ReasoningBank, Memento); reflections marked distilled (D5) |
-  | `contradiction` | Writes a `contradicts` link; if one side is clearly newer and confirmed, also proposes `supersede` |
-  | `retire` | `valid_to` set; only when every source is gone or the claim is refuted |
-  | `promote_scope` | repo → VM/global for facts seen in 3+ projects; **always human-reviewed** |
-  | `digest` | Regenerates a per-project digest (≤ 2 KB) from active facts (sleep-time precompute) |
-  | `skill_candidate` | Lesson reinforced across ≥ 3 sessions → suggested SKILL.md text; **never auto-applied** (P8) |
-- **WI-3.5 Apply policy.**
-  - Auto-applied: `merge` of near-identical rows (cosine distance < 0.03 and
-    the retention check passes), `digest`, and summary backfill.
-  - Everything else is proposed.
-  - Ops touching `user`/`feedback` or the global tier always need a human.
-- **WI-3.6 Review surface.**
-  - `agent-notes memory review [list|show|accept|reject] [--run ID]`.
-  - The web UI gets a read-only "pending curation" page.
-  - `memory curation rollback RUN` reverts every applied op of a run.
-- **WI-3.7 Prompt contract.** The prompt instructs the model to:
-  - keep dates, versions, file paths, SHAs and WI/BC IDs verbatim (P5);
-  - prefer leaving an item alone over rewriting it;
-  - emit no op that has no source.
-  - The WI-0.4 validator enforces this mechanically.
+- **WI-3.1** Add a `curate` job type to the dispatcher allowlist, next to
+  `review`.
+  - It runs `claude -p` with **no tools** and a hard timeout and token cap.
+  - Its input is the hygiene report plus the bodies of the flagged memories,
+    framed as data (Plan 025 D6), with secrets redacted.
+  - Its output is **suggested text**: a merged body, a distilled lesson, or
+    a contradiction summary, each citing source memory names. That text is
+    appended to the curation notice.
+  - It never writes memories itself.
+- **WI-3.2** Check that every SHA, path, version string and WI/BC ID in the
+  sources appears in the suggestion, or is listed as deliberately dropped.
+  Suggestions that fail are dropped from the notice.
 
-**Exit:**
-- One month of nightly runs on two projects (agent-notes plus one other).
-- Reviewer acceptance ≥ 70% of proposals.
-- The detail-retention validator passes on all auto-applied ops.
-- Phase 0 precision@k and stale rate improve, or at least don't regress.
+**Exit:** sessions adopt at least half of the suggestions without
+rewriting them, and WI-0.3 doesn't regress.
 
-### Phase 4: Use the curated store
+### Phase 4: Harvest of harness-native memory (one-shot)
 
-- **WI-4.1 Digest injection trial.** orient injects the project digest instead
-  of the top-k memories, in an A/B against Phase 0. It is adopted only if
-  precision and A/B results improve (D1).
-- **WI-4.2 Contradiction-aware injection (D4).**
-- **WI-4.3 Entity mentions.** Regex-extract paths, WI/BC IDs, repos and tools
-  into `mentions` links at write time. Use entity overlap with the current
-  prompt or cwd as a ranking feature.
-- **WI-4.4 Skill promotion flow.** Accepted `skill_candidate` ops open a
-  work item that has a draft SKILL.md attached. A human edits and commits
-  the skill, and the source lessons link to it.
+This is independent of Phases 1–3, but needs D5's redaction.
 
-## 6. Security (P9)
+- **WI-4.1 `memory harvest --harness claude [--dry-run|--apply NAMES]`.**
+  - **Claude Code only** at first. Codex's store on mvmcc02 is SQLite
+    (`~/.codex/memories_1.sqlite`), not files, so it's out of scope until a
+    fixture exists.
+  - Read `~/.claude/projects/*/memory/*.md`, skipping `MEMORY.md` index
+    files, except where `MEMORY.md` is the only file and holds the content.
+  - Parse `type` from either top-level frontmatter or `metadata.type`.
+    Files with no frontmatter go to the report as "needs typing", not
+    imported.
+- **WI-4.2 Project mapping.**
+  - Encode known checkout paths forward (`/projects/foo-bar` →
+    `-projects-foo-bar`) from Plan 025's per-VM checkout map. Never decode
+    directory names backward.
+  - `-projects` (the workspace root) and unmapped directories go to the VM
+    tier.
+- **WI-4.3 Redaction.**
+  - Run the hook redactor (`hooks/common.py` `redact`), plus token patterns
+    (bearer tokens, `nbt_`, `ghp_`, `sk-`, and so on).
+  - Any file with a hit is imported only with the secret replaced, and is
+    listed in the report so the owner can rotate it.
+- **WI-4.4 Idempotency.** Key on `attributes.source = {vm, harness, path,
+  sha256}`. A changed file is shown in `--dry-run` as a proposed supersede,
+  never applied silently.
 
-- Every row carries `origin` and `source` (harness, session, VM).
-  Unattributed writes are refused.
-- Injected memory is always framed as data from a named origin, never as
-  operator instructions.
-- Per-source caps on injected slots (WI-1.5).
-- Curation input is framed the same way. The curation model has no tools
-  that write, and its output is a schema-validated list of ops.
-- Promotion to global, `user`/`feedback` changes, and skill candidates need a
-  human.
-- No secrets in memory. Harvest skips files that match the existing
-  identifier-gate denylist patterns, and the curation prompt input is
-  scanned with the same gate.
+**Exit:** both machines are dry-run reviewed, and the chosen items are
+imported with provenance.
 
-## 7. Sequencing and cost
+## 5. Deferred, with the evidence that would bring each back
+
+| Deferred | Revisit when |
+|---|---|
+| Per-project digests injected at session start | Phase 0 shows agents miss relevant memories that a digest would have surfaced |
+| Recall telemetry table and usage-weighted ranking | Retrieval frequency can be linked to usefulness, not just counted |
+| Replay A/B on historical tasks | Isolated execution, hidden tests and history-filtered memory snapshots exist. Without them, replay leaks the answers |
+| Validity columns (`valid_from`/`valid_to`) | `active` + `supersedes` proves insufficient for a real query |
+| Auto-applied curation, staging tables, rollback | Phase 3 suggestions are adopted unchanged at a high rate for months |
+| Entity-mention links and ranking | The fixture shows misses that identifier overlap would fix |
+| Skill-promotion pipeline | Already covered: Phase 2's skill says a human writes skills |
+
+## 6. Security
+
+- Provenance (`attributes.source`) on every harvested or curated write.
+- Memory and curation input are always framed as data from a named origin.
+- Secrets:
+  - Harvest redacts (WI-4.3). On 2026-10-29 the Argon review found a live
+    NetBox token in a Claude Code `MEMORY.md` on mvmcc02.
+  - Hygiene adds a "possible secret" check to the existing memories.
+- `agent-notes-web` is unauthenticated (decision 43) and shows memory bodies
+  on the LAN. That's acceptable only while memories hold no secrets, which is
+  one more reason for the redaction check.
+
+## 7. Sequencing
 
 | Phase | Depends on | Size |
 |---|---|---|
-| 0 | none (WI-0.3 needs the dispatcher, already deployed) | M |
-| 1 | Plan 026 Phase 2b (native-only engine) | M |
-| 2 | 1 | S–M |
-| 3 | 0, 1 (2 recommended) | L |
-| 4 | 3 | M |
+| 0 | none | S |
+| 1 | Plan 026 Phase 2b (native-only engine) | S–M |
+| 2 | 1, plus the Plan 025 mailbox (deployed) | S |
+| 3 | 0, plus Phase 2 being used | M |
+| 4 | Redaction (WI-4.3) | S–M |
 
-Phases 0 and 1 can run in parallel. LLM spend runs only in Phase 0's
-labelling and A/B, and in Phase 3's nightly runs, which are capped per run
-and reported in `curation_runs.usage`.
+## 8. Review record (2026-10-29)
 
-## 8. Non-goals
+GPT-6.1-sol: "rework". Gemini 4 Argon: "rework". Raw reviews are on mvmcc02
+under `~/reviews/plans-026-027/`. Adopted:
 
-- An LLM on the write path, a learned-memory service, or a graph database
-  (P6, D2).
-- Hard automatic forgetting. Ranking decays instead, and nothing is deleted
-  by automation.
-- Writing back into harness-native memory directories.
-- Chasing LoCoMo or LongMemEval scores. Our measure is Phase 0's evaluation
-  on our own sessions.
-- Auto-generated skills.
+- **R1.** orient injects names, types and ages, not bodies. Codex gets only
+  counts. Per-prompt hooks carry messages, not memories (GPT, verified at
+  `cli/orient.py:214`). → §1, and digests deferred.
+- **R2.** The schema conflicted with `memories_name_active_unique` and the
+  partial indexes. `valid_to` duplicated `active`. A single `result_id`
+  couldn't represent 1→N distillation (both reviewers). → D2: no new
+  lifecycle columns.
+- **R3.** Rollback lacked before-state, and links key on names, not revisions
+  (GPT). → D4: no rollback machinery; existing `change_log` and `supersedes`.
+- **R4.** Auto-merges can launder poisoned or negated claims, and the
+  identifier gate isn't a secret scanner (GPT). → D4: nothing auto-applies;
+  §6.
+- **R5.** Harvest assumptions were wrong on real files:
+  - Claude's `metadata.type`;
+  - files with no frontmatter;
+  - `MEMORY.md` used as content;
+  - lossy directory encoding;
+  - Codex memories stored in SQLite;
+  - a plaintext NetBox token (Argon; the counts were confirmed by GPT).
+  
+  → Phase 4.
+- **R6.** Phase 0 claimed no dependencies but needed Phase 1's table, the
+  `agent_sessions` table has no first prompt, the runner is a reviewer
+  rather than a task solver, and replay leaks answers (GPT). Recall logging
+  turns read paths into writers (Argon). → Phase 0 is a static fixture.
+- **Cuts both reviewers recommended:** the nightly LLM curator, digests,
+  telemetry, usage ranking, entity links, skill promotion and replay A/B.
+  - All are deferred (§5), except that the owner asked for periodic
+    curation, which is kept as D4.
+  - It is deterministic first; LLM drafting is gated.
+  - Argon proposed exactly this deterministic hygiene report in place of
+    Phase 3.
 
-## 9. Open questions
+## 9. Exposure inventory (Phase 0, WI-0.1)
 
-1. **Digest vs top-k at session start.** Decided by WI-4.1's evaluation, not
-   up front.
-2. **Curation model.**
-   - Option: the dispatcher's existing Claude credential.
-   - Alternative: alternate Claude and Codex by night, so neither model
-     family alone shapes the store. Same cost, more diversity.
-   - Decide after Phase 3 begins.
-3. **Should the Codex `memory_summary.md` and Claude `MEMORY.md` index lines
-   be re-injected by agent-notes at all?** Each harness already injects its
-   own, so the default is no; harvested content enters the shared tiers only
-   after review.
-
-## 10. Sources
-
-**Harness and product documentation:**
-- Claude Code memory: https://code.claude.com/docs/en/memory
-- Anthropic Dreams (research preview, verified 2026-10-29): https://platform.claude.com/docs/en/managed-agents/dreams
-- Managed Agents memory stores: https://platform.claude.com/docs/en/managed-agents/memory
-- Codex memories:
-  - pipeline source: https://github.com/openai/codex/blob/main/codex-rs/memories/README.md
-  - consolidation prompt: https://github.com/openai/codex/blob/main/codex-rs/memories/write/templates/memories/consolidation.md
-- Gemini CLI auto memory: https://geminicli.com/docs/cli/auto-memory.md
-- Letta Code memory: https://docs.letta.com/letta-code/memory
-- Hermes memory: https://hermes-agent.nousresearch.com/docs/user-guide/features/memory
-- Mem0 v3 add-only (verified 2026-10-29): https://docs.mem0.ai/migration/oss-v2-to-v3
-
-**Open-source systems:**
-- Zep/Graphiti: arXiv 2501.13956
-- A-MEM: arXiv 2502.12110
-- MemOS: arXiv 2507.03724
-- MIRIX: arXiv 2507.07957
-- Hindsight: arXiv 2512.12818
-- LangMem: https://langchain-ai.github.io/langmem/
-- Basic Memory: https://docs.basicmemory.com/
-- mcp-memory-service: https://github.com/doobidoo/mcp-memory-service
-- SodaMem: arXiv 2608.08055
-
-**Papers:**
-- ACE: arXiv 2510.04618 (ICLR 2026)
-- ReasoningBank: arXiv 2509.25140
-- Agent Workflow Memory: arXiv 2409.07429
-- Sleep-time compute: arXiv 2504.13171
-- Memento: arXiv 2508.16153
-- *The Sleeping Agent*: arXiv 2608.11775
-- RSPM: arXiv 2610.25561
-- SWE-ContextBench: arXiv 2602.08316 (verified 2026-10-29)
-- VibeMemBench: arXiv 2609.23570
-- Subtask-level memory: arXiv 2602.21611
-- SkillsBench: arXiv 2602.12670
-- Memory management and error propagation: arXiv 2505.16067
-- The Memory Trust Gap: arXiv 2609.01852 (verified 2026-10-29)
-- MemStrata: arXiv 2606.26511
-- MemoryAgentBench: arXiv 2507.05257
-- DreamBench-SWE: arXiv 2608.20664
-- Beyond Downstream QA: arXiv 2610.22209
-- MINJA: arXiv 2503.03704
-- AgentPoison: arXiv 2407.12784
-- MPBench: arXiv 2606.04329
-- Utility Under Attack: arXiv 2608.21230
-- Surveys: arXiv 2512.13564; arXiv 2606.30306
-
-Except where marked verified, these citations were gathered by research
-subagents from abstracts and documentation. Check the figures before quoting
-them elsewhere.
+To be filled in.
