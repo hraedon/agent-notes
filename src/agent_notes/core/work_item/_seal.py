@@ -99,7 +99,7 @@ def seal(conn: psycopg.Connection, row: dict, actor_id: str) -> list[str]:
     if the written ops still do not reproduce the row (e.g. a tombstoned
     entity that still has a cache row).
     """
-    _folded, diffs = drift(conn, row)
+    folded, diffs = drift(conn, row)
     if not diffs:
         return []
 
@@ -119,7 +119,10 @@ def seal(conn: psycopg.Connection, row: dict, actor_id: str) -> list[str]:
     sealed = {f: row.get(f) for f in SEALED_FIELDS}
     sealed["external_refs"] = dict(sealed["external_refs"] or {})
     sealed["diagnostic_keys"] = dict(sealed["diagnostic_keys"] or {})
-    sealed["embedding"] = _embedding_list(row.get("embedding"))
+    # The vector is large; carry it only when the fold would not already
+    # reproduce it (a chainless row, or a drifted embedding).
+    if folded is None or "embedding" in diffs:
+        sealed["embedding"] = _embedding_list(row.get("embedding"))
     kernel.commit_op(
         conn,
         entity_id=entity_id,
