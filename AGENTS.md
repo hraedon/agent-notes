@@ -159,11 +159,13 @@ orientation, agent messages, turn extension) in
 `$CODEX_HOME/hooks.json`; the component plugin bundles the same canonical hook
 definitions below `plugins/agent-notes` (with drift checks against the canonical
 top-level skills). Hook trust remains an explicit operator action through `/hooks`.
-`claude` also installs user-level hooks in `~/.claude/settings.json`, and `agy`
-merges a named hook into `~/.gemini/config/hooks.json`; all of them run the lean
-`agent-notes-hook <harness> <event>` entry point. `all` is Claude + OpenCode,
-plus Codex and agy where their home directory exists; private Hermes is
-excluded. All are
+`claude` also installs user-level hooks in `~/.claude/settings.json`, `agy`
+merges a named hook into `~/.gemini/config/hooks.json`, and `hermes` adds a
+`pre_llm_call` shell hook under `hooks:` in `~/.hermes/config.yaml` (Hermes asks
+the operator to approve it; install-harness never writes its allowlist); all of
+them run the lean `agent-notes-hook <harness> <event>` entry point. `all` is
+Claude + OpenCode, plus Codex, agy and Hermes where their home directory
+exists. All are
 idempotent; `--dry-run` / `--uninstall` supported. See
 Plan 017 §Implementation log for the opencode env-via-config-file
 decision (D1).
