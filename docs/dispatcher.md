@@ -136,6 +136,7 @@ the usual `~/.config/agent-notes/config.json` or `AGENT_NOTES_DSN`.
 | `AGENT_NOTES_REVIEW_MODEL` | `claude-opus-5-5` | The reviewer model when the request doesn't name one |
 | `AGENT_NOTES_REVIEW_TIMEOUT` | `600` | The reviewer timeout in seconds, clamped to 30–1800 |
 | `AGENT_NOTES_REVIEW_CLAUDE_BIN` | `claude` | The Claude Code executable |
+| `AGENT_NOTES_REVIEW_DIFF_BUDGET` | `49152` | Byte budget for the unified diff in the reviewer prompt (the reviewer has no Git tool). Whole per-file diffs go in, in path order; files that don't fit are listed for the reviewer to Read. Clamped to 0–1 MiB; an invalid value means the default |
 | `AGENT_NOTES_REVIEW_CREDENTIAL_ENV` | (none) | Comma-separated names of the variables passed to the reviewer, for example `CLAUDE_CODE_OAUTH_TOKEN`. The reviewer runs with a minimal environment and an isolated `HOME` (023 WI-054/056), so without a credential it can't authenticate |
 | `AGENT_NOTES_REVIEW_ACCEPT_MODELS` | (none) | Comma-separated reported-model aliases to accept for the requested model (023's `accepted_reported_models`) |
 | `AGENT_NOTES_REVIEW_VM` | the current VM | Requester side: where `review request` sends jobs |
