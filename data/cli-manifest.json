@@ -502,6 +502,55 @@
       "aliases": []
     },
     {
+      "name": "who",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "msg send",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "msg reply",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "msg inbox",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "msg await",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "msg prune",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "session policy",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
       "name": "contract",
       "aliases": [],
       "mutability": "read-only",
