@@ -26,7 +26,7 @@ def scope(monkeypatch) -> KnowledgeScope:
     workspace = SimpleNamespace(id=7, slug="shared", name="Shared")
     project = SimpleNamespace(id=11, workspace_id=7, slug="alpha", name="Alpha")
     monkeypatch.setattr(db, "list_workspaces", lambda: [workspace])
-    monkeypatch.setattr(db, "list_projects", lambda workspace_id=None: [project])
+    monkeypatch.setattr(db, "list_projects", lambda workspace_id=None, kinds=("repo",): [project])
     monkeypatch.setattr(memory_model, "knowledge_index_health", lambda *_: _healthy_index())
     return KnowledgeScope("shared", "alpha")
 

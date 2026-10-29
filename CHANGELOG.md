@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Memory tiers (Plan 025 Phase 2):** memories now live at `repo`, `vm`, or
+  `global` scope. `memory add|get|update|delete --scope repo|vm|global [--vm ID]`;
+  `memory list|search|recall --scope ...|composed` (`search` and the new `recall`
+  default to `composed`: one similarity query over repo, vm, and global, repo >
+  vm > global on name collisions, hidden entries in `shadows`). `--scope vm|global`
+  works outside a registered repo. VM ID: `--vm`, then `AGENT_NOTES_VM`
+  (env or suite.env), then the short hostname; generated hostnames (pods,
+  containers, `localhost`) are refused. `doctor` reports the resolved ID.
+- **orient:** additive `memories_vm` / `memories_global` sections (cap 3 each,
+  `--full` / `--limit` as for the other sections), `vm`, and `--vm`. Outside a
+  registered repo, orient succeeds with just those sections (`project` is null).
+- **Schema 850:** `projects.kind` (`repo`|`vm`|`global`). Run the migration
+  before upgrading clients. The synthetic rows are excluded from every project
+  listing (`workspace list`, web UI, export `projects`, project resolution by slug
+  or path); `export` carries them separately under `memory_scopes`.
+
 ## [1.1.1] - 2026-10-17
 
 ### Fixed

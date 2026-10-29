@@ -45,7 +45,7 @@ One Postgres database (`agent_notes`), one Python package (`agent_notes`), one `
 
 ## Schema conventions
 
-- **All kinds are project-scoped** (decision 13). Cross-cutting memories live in a `global` project per workspace.
+- **All kinds are project-scoped** (decision 13). Cross-cutting memories live in a `global` project per workspace, and per-machine memories in a `vm:<id>` project (Plan 025 D3); `projects.kind` (`repo`|`vm`|`global`) keeps those synthetic rows out of every project listing, and only the scope helpers in `core/db.py` return them.
 - **Vocabularies live in data, not `CHECK` constraints** (decision 5). Trigger-load-bearing attributes (`is_terminal`, `is_open`, `sort_order`) are first-class columns; presentation-only metadata stays in `attributes JSONB` (decision 23).
 - **`change_log` is the sole audit/history source** (decision 7). Per-kind history tables are not used.
 - **`links` table accepts dangling rows**; filter at query time. `links_audit` reports orphans (Phase 6.3).

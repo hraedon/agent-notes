@@ -62,16 +62,15 @@ def _resolve_scope(scope: MemoryScope) -> tuple[int, int]:
 
     Raises ValueError if the workspace or project does not exist.
     """
-    from agent_notes.core.db import list_projects, list_workspaces
+    from agent_notes.core.db import get_project, list_workspaces
 
     ws = next((w for w in list_workspaces() if w.slug == scope.workspace_slug), None)
     if ws is None:
         raise ValueError(f"Workspace '{scope.workspace_slug}' not found")
 
-    proj = next(
-        (p for p in list_projects(workspace_id=ws.id) if p.slug == scope.project_slug),
-        None,
-    )
+    # The engine scope names its project explicitly, so the vm/global memory
+    # tiers (Plan 025) resolve here too; listings never surface them.
+    proj = get_project(ws.id, scope.project_slug, kinds=("repo", "vm", "global"))
     if proj is None:
         raise ValueError(
             f"Project '{scope.project_slug}' not found in workspace '{scope.workspace_slug}'"

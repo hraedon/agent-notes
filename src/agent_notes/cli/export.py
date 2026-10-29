@@ -18,12 +18,36 @@ from agent_notes.cli.common import (
 )
 
 
+def _dump_memories(ws_id: int, proj_id: int) -> list[dict]:
+    from agent_notes.core.memory_model import get_memory, list_memories
+
+    out = []
+    for m in list_memories(workspace_id=ws_id, project_id=proj_id, limit=10000):
+        full = get_memory(ws_id, proj_id, m["name"])
+        if full:
+            out.append(
+                {
+                    "name": full["name"],
+                    "memory_type": full["memory_type"],
+                    "body": full["body"],
+                    "attributes": full.get("attributes", {}),
+                    "created_at": (
+                        full["created_at"].isoformat() if full.get("created_at") else None
+                    ),
+                    "updated_at": (
+                        full["updated_at"].isoformat() if full.get("updated_at") else None
+                    ),
+                }
+            )
+    return out
+
+
 def cmd_export(args: argparse.Namespace) -> int:
     """Export all data for a project (or entire workspace) as JSON."""
     from agent_notes.core.db import list_projects, list_workspaces
-    from agent_notes.core.memory_model import get_memory, list_memories
     from agent_notes.core.work_item_model import WorkItemModel
 
+    scope_workspaces: list = []  # workspaces whose vm/global memories are exported too
     if args.path or (args.workspace and args.project):
         try:
             ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
@@ -57,6 +81,7 @@ def cmd_export(args: argparse.Namespace) -> int:
             print(f"Workspace '{args.workspace}' not found.{hint}{suggestion}", file=sys.stderr)
             return EXIT_NOT_CONFIGURED
         projects = list_projects(workspace_id=ws.id)
+        scope_workspaces = [ws]
         workspaces = [
             {
                 "ws_id": ws.id,
@@ -68,6 +93,7 @@ def cmd_export(args: argparse.Namespace) -> int:
         ]
     else:
         all_ws = list_workspaces()
+        scope_workspaces = all_ws
         workspaces = []
         for ws in all_ws:
             for p in list_projects(workspace_id=ws.id):
@@ -111,30 +137,21 @@ def cmd_export(args: argparse.Namespace) -> int:
                 }
             )
 
-        mem_summaries = list_memories(
-            workspace_id=entry["ws_id"],
-            project_id=entry["proj_id"],
-            limit=10000,
-        )
-        for m in mem_summaries:
-            full = get_memory(entry["ws_id"], entry["proj_id"], m["name"])
-            if full:
-                proj_data["memories"].append(
-                    {
-                        "name": full["name"],
-                        "memory_type": full["memory_type"],
-                        "body": full["body"],
-                        "attributes": full.get("attributes", {}),
-                        "created_at": (
-                            full["created_at"].isoformat() if full.get("created_at") else None
-                        ),
-                        "updated_at": (
-                            full["updated_at"].isoformat() if full.get("updated_at") else None
-                        ),
-                    }
-                )
-
+        proj_data["memories"] = _dump_memories(entry["ws_id"], entry["proj_id"])
         result["projects"].append(proj_data)
+
+    # The vm/global memory tiers are not projects (they stay out of "projects"),
+    # but a workspace backup must still carry them.
+    result["memory_scopes"] = [
+        {
+            "workspace": ws.slug,
+            "scope": p.kind,
+            "scope_key": p.slug.removeprefix("vm:"),
+            "memories": _dump_memories(ws.id, p.id),
+        }
+        for ws in scope_workspaces
+        for p in list_projects(workspace_id=ws.id, kinds=("vm", "global"))
+    ]
 
     json.dump(result, sys.stdout, indent=2, default=str, ensure_ascii=False)
     print()  # trailing newline
@@ -156,7 +173,8 @@ def cmd_import(args: argparse.Namespace) -> int:
         return EXIT_GENERIC
 
     projects = data.get("projects", [])
-    if not projects:
+    memory_scopes = data.get("memory_scopes", [])
+    if not projects and not memory_scopes:
         print("No projects found in export file.", file=sys.stderr)
         return EXIT_GENERIC
 
@@ -217,6 +235,35 @@ def cmd_import(args: argparse.Namespace) -> int:
                     f"  Skipped memory {mem.get('name')}: {exc}",
                     file=sys.stderr,
                 )
+
+    from agent_notes.core.db import get_or_create_scope_project
+
+    for scope_data in memory_scopes:
+        ws = get_or_create_workspace(
+            scope_data.get("workspace", "default"),
+            scope_data.get("workspace", "default").replace("-", " ").title(),
+        )
+        scope = scope_data.get("scope")
+        if scope not in ("vm", "global"):
+            print(f"  Skipped unknown memory scope {scope!r}", file=sys.stderr)
+            continue
+        proj = get_or_create_scope_project(ws.id, scope, scope_data.get("scope_key"))
+        for mem in scope_data.get("memories", []):
+            body = mem.get("body", "")
+            vec = embed(body, task="document").tolist() if body.strip() else None
+            try:
+                add_memory(
+                    workspace_id=ws.id,
+                    project_id=proj.id,
+                    name=mem["name"],
+                    memory_type=mem.get("memory_type", "note"),
+                    body=body,
+                    attributes=mem.get("attributes"),
+                    embedding=vec,
+                )
+                total_mem += 1
+            except (ValueError, KeyError) as exc:
+                print(f"  Skipped memory {mem.get('name')}: {exc}", file=sys.stderr)
 
     print(f"Imported {total_wi} work item(s) and {total_mem} memory(ies).")
     return EXIT_SUCCESS

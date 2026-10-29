@@ -16,6 +16,8 @@ from uuid import UUID
 
 SCHEMA_VERSION = "agent-notes.knowledge.v1"
 PROVIDER_NAME = "agent-notes"
+# Project kinds whose slugs may label an item (selection is repo-only).
+_ALL_KINDS = ("repo", "vm", "global")
 
 
 class KnowledgeState(Enum):
@@ -473,7 +475,12 @@ class AgentNotesKnowledgeProvider:
             if workspace is None:
                 return self._response(scope, KnowledgeState.UNAVAILABLE, "Workspace is unavailable")
             projects = list_projects(workspace_id=workspace.id)
-            project_map = {project.id: project.slug for project in projects}
+            # Labels for rendering items only: memory tiers (vm/global) stay out
+            # of project selection but their memories still carry a project name.
+            project_map = {
+                project.id: project.slug
+                for project in list_projects(workspace_id=workspace.id, kinds=_ALL_KINDS)
+            }
             if scope.project is None:
                 if require_project:
                     return self._response(
@@ -524,7 +531,7 @@ def _scope_name_maps() -> tuple[dict[int, str], dict[int, str]]:
     from agent_notes.core.db import list_projects, list_workspaces
 
     workspaces = {workspace.id: workspace.slug for workspace in list_workspaces()}
-    projects = {project.id: project.slug for project in list_projects()}
+    projects = {project.id: project.slug for project in list_projects(kinds=_ALL_KINDS)}
     return workspaces, projects
 
 

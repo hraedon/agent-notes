@@ -206,6 +206,10 @@ def _orientation_for_cwd(cwd: Path) -> str | None:
     parsed = json.loads(stdout.getvalue())
     if not isinstance(parsed, dict) or "error" in parsed:
         return None
+    if parsed.get("project") is None:
+        # Unregistered cwd: orient reports only the VM/global tiers; this hook
+        # injects project orientation only.
+        return None
     return _format_orientation(parsed)
 
 

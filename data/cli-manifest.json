@@ -285,6 +285,13 @@
       "aliases": []
     },
     {
+      "name": "memory recall",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
       "name": "memory update",
       "mutability": "mutating",
       "json": true,

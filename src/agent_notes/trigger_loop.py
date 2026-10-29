@@ -80,7 +80,10 @@ def _resolve_project_wake_channel(
     if project_id is not None:
         cur.execute("SELECT wake_channel FROM projects WHERE id = %s", (project_id,))
     elif project_slug is not None:
-        cur.execute("SELECT wake_channel FROM projects WHERE slug = %s", (project_slug,))
+        cur.execute(
+            "SELECT wake_channel FROM projects WHERE slug = %s AND kind = 'repo'",
+            (project_slug,),
+        )
     else:
         return None
     row = cur.fetchone()
