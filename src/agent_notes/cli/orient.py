@@ -26,9 +26,6 @@ from agent_notes.cli.common import (
     report_resolution_failure,
     scope_workspace,
 )
-from agent_notes.core import config as reg_config
-from agent_notes.core import outbox, projection
-from agent_notes.core.db import _conn
 from agent_notes.core.memory_engine import OriginClass
 
 DEFAULT_LIMIT = 5
@@ -242,22 +239,6 @@ def cmd_orient(args: argparse.Namespace) -> int:
             project_slug=_proj_slug,
         )
 
-    cfg = reg_config.regista_config()
-    regista_sync: dict[str, Any] = {
-        "enabled": cfg.enabled,
-        "project": cfg.project,
-        "outbox_pending": 0,
-        "outbox_conflicts": 0,
-        "outbox_rejected": 0,
-        "pending_sync_rows": 0,
-    }
-    if cfg.enabled:
-        regista_sync["outbox_pending"] = outbox.count_ops(cfg.project)
-        regista_sync["outbox_conflicts"] = outbox.count_sidecar(cfg.project, "conflicts.jsonl")
-        regista_sync["outbox_rejected"] = outbox.count_sidecar(cfg.project, "rejected.jsonl")
-        with _conn() as conn:
-            regista_sync["pending_sync_rows"] = projection.count_pending(conn, proj_id)
-
     # Plan 020 WI-3.2: optional bounded recall from the configured memory
     # engine. Additive and never-blocking — orient always succeeds even if
     # recall fails. Lazy imports keep the default (no --recall) path cheap.
@@ -359,7 +340,6 @@ def cmd_orient(args: argparse.Namespace) -> int:
             {"identifier": ident, "commit": info["commit"], "subject": info["subject"]}
             for ident, info in sorted(drift.items())
         ],
-        "regista_sync": regista_sync,
     }
 
     if learned_context is not None:
@@ -389,20 +369,6 @@ def cmd_orient(args: argparse.Namespace) -> int:
             )
             for ident, info in sorted(drift.items()):
                 print(f"  - {ident} — {info['commit']} {info['subject']!r}")
-        pending = regista_sync["outbox_pending"]
-        if cfg.enabled and (
-            pending
-            or regista_sync["outbox_conflicts"]
-            or regista_sync["outbox_rejected"]
-            or regista_sync["pending_sync_rows"]
-        ):
-            print(
-                f"\n⚠ STALE — {pending} op(s) pending sync"
-                f" (+{regista_sync['outbox_conflicts']} conflicts, "
-                f"{regista_sync['outbox_rejected']} rejected, "
-                f"{regista_sync['pending_sync_rows']} stale projection rows); "
-                "run 'agent-notes outbox reconcile'"
-            )
         print(
             f"\nChanges in last {args.days}d "
             f"({_shown_label(changes, has_more['recent_changes'], sampled=not full)}):"

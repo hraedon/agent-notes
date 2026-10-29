@@ -1,5 +1,5 @@
 {
-  "description": "Agent-notes project orientation and best-effort outbox reconciliation. Review and trust these commands with /hooks before use.",
+  "description": "Agent-notes project orientation and a turn-end hook. Review and trust these commands with /hooks before use.",
   "hooks": {
     "SessionStart": [
       {

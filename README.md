@@ -128,7 +128,8 @@ drift-checked bundle for suite marketplace composition. Keeping the plugin
 below `plugins/agent-notes` prevents Codex from packaging the checkout's
 multi-gigabyte `.venv`. Both paths install the same narrow lifecycle
 adapter: `SessionStart` injects bounded metadata-only orientation and `Stop`
-performs best-effort outbox reconciliation without requesting another turn.
+is a no-op that never requests another turn (its regista outbox reconcile
+was retired in Plan 025; Phase 4 extends it).
 The direct fallback hash-owns only its groups in `$CODEX_HOME/hooks.json` and
 preserves Cairn/user hooks. Review and trust command hooks explicitly with
 Codex `/hooks`; doctor reports that trust as unverified because Codex exposes no
