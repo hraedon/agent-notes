@@ -1,8 +1,8 @@
 # Plan 025 — Coordination after AOS: memory tiers, a Postgres mailbox, and wake through Paseo
 
-**Status:** Proposed 2026-10-28. Alternative to Plan 024. Same goals, different
-split of responsibilities. The owner's answers (§10) and Argon's review are
-folded in, the same day.
+**Status:** Implemented and deployed 2026-10-29: Phases 0–7, with Hermes at
+L0/L1 only (see §12). Proposed 2026-10-28 as an alternative to Plan 024.
+The owner's answers (§10) and Argon's review were folded in the same day.
 **Owner:** `agent-notes` (memory, mailbox, dispatcher). Wake transport is
 adopted from Paseo (operator-console trial), not built.
 **Retires:** `agent-wake` (frozen now, service disabled after Phase 5),
@@ -603,3 +603,47 @@ Researched 2026-10-28, from official docs and source where available.
 | **ACC** (agents-can-communicate) | Not adopted (local only, unclear licence terms). Its issues #171 and #177 are the best public captures of agy's hook payloads; use them as Phase 0 fixtures |
 | **Claude cross-session messaging** | Native and wakes idle sessions, but it's Claude-only, and cross-machine messages go through Anthropic and Remote Control. Usable as a Claude-only L3 for sessions not hosted by Paseo, if Phase 0 can post to the socket |
 | A2A adapters, claude-peers-mcp | Not adopted. A2A adds an HTTP surface we don't need with a shared Postgres. claude-peers is superseded by Claude's native messaging |
+
+## 12. Implementation log
+
+### 2026-10-28/29: Phases 0–7, deployed
+
+- **Phase 0:** spikes in `docs/spikes/025-phase0.md`.
+- **Phase 1:** regista retired. Cutover runbook and findings are in
+  `docs/spikes/025-regista-cutover.md`.
+  - Production steps:
+    - imported 11 work items that existed only in regista;
+    - turned regista writes off on mvmcc02;
+    - sealed the op-log, so all 2,291 rows now fold back to the cache.
+  - Three tombstoned rows that the regista mirror had re-created needed a
+    kernel fix.
+  - 177 seal snapshots pointed at a legacy entity ID. They are accepted by a
+    verifier allowance and were not rewritten.
+- **Phase 2:** memory tiers.
+- **WI-2.6:** per-VM checkouts. Windows (`shodan`) resolves 12 projects and
+  mvmcc02 resolves 28.
+- **Phase 3:** mailbox.
+- **Phase 4:** hooks for Claude, Codex (`codex-hook` delegates to them),
+  agy and OpenCode.
+- **Phase 5:** dispatcher and review jobs, plus a bounded diff in the
+  reviewer prompt.
+- **Phase 7:** Hermes at L0/L1, through a `pre_llm_call` shell hook.
+- **Reviews:** two independent Codex rounds found 18 defects (5+2 and 10+1).
+  All were reproduced with failing tests first and then fixed.
+- **Migrations:** 840 (never applied before) and 850–854 are applied to
+  production. The database was backed up first.
+- **Headline test (§6a), 2026-10-29:**
+  1. A Paseo-hosted Codex agent on `shodan` ran `review request`, then went idle.
+  2. `mvmcc02` ran the Claude review (Haiku accepted in 21 s).
+  3. The reply woke the Codex agent through the `shodan` dispatcher's
+     `paseo send`, and Codex summarized the verdict.
+- **agent-wake:** the `agent-waked` service is stopped and disabled, and its
+  Claude MCP and OpenCode plugin references are removed. The install is kept
+  for rollback.
+- **Owner follow-ups:**
+  - Create a long-lived reviewer credential: `claude setup-token` on mvmcc02,
+    saved into `~/.config/agent-notes/dispatch-secret.env` as
+    `CLAUDE_CODE_OAUTH_TOKEN`.
+  - Refresh the Codex plugins (both machines are still on the 1.1.0 cache) and
+    re-trust them with `/hooks`, which adds UserPromptSubmit.
+  - Approve the Hermes hook once Hermes is installed.
