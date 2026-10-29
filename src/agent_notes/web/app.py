@@ -245,7 +245,7 @@ def _search_all(query_vec: list[float], limit: int = 20) -> list[dict]:
             FROM all_notes_search_v v
             JOIN projects p ON p.id = v.project_id
             JOIN workspaces w ON w.id = v.workspace_id
-            WHERE v.embedding IS NOT NULL
+            WHERE v.embedding IS NOT NULL AND p.kind = 'repo'
             ORDER BY v.embedding <=> %s::vector
             LIMIT %s
             """,

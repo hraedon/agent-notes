@@ -201,6 +201,14 @@ def cmd_init(
     repo_root = os.path.abspath(git_root)
     name = slug or os.path.basename(repo_root)
 
+    if name == "global" or name.startswith("vm:"):
+        print(
+            f"Error: '{name}' is reserved for memory tiers (global / vm:<id>) and cannot "
+            "name a project. Pass --slug to register this repo under another slug.",
+            file=sys.stderr,
+        )
+        return EXIT_CONFLICT
+
     missing = _regista_schema_missing(name)
     if missing is not None:
         print(

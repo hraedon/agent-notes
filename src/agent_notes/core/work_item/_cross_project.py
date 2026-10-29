@@ -215,7 +215,7 @@ def add_cross_project_link(
         # Resolve the target project by slug (optional — may be foreign).
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
-            "SELECT id, workspace_id FROM projects WHERE slug = %s",
+            "SELECT id, workspace_id FROM projects WHERE slug = %s AND kind = 'repo'",
             (to_project_slug,),
         )
         to_proj = cur.fetchone()

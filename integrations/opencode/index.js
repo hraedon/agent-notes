@@ -234,7 +234,12 @@ export default {
 
       const reply = await invokeAgentNotes(["orient", "--path", dir, "--json"]);
 
-      if (reply.status === "ok" && reply.data && typeof reply.data === "object") {
+      if (reply.status === "ok" && reply.data && reply.data.project === null) {
+        // Unregistered directory: orient now succeeds with only the VM and global
+        // memory tiers. Session injection of those is a separate change; keep the
+        // old behaviour of injecting nothing here.
+        log(`no registered project for ${dir}; skipping orientation`);
+      } else if (reply.status === "ok" && reply.data && typeof reply.data === "object") {
         event.system.push({
           type: "text",
           text: formatOrientPayload(reply.data),

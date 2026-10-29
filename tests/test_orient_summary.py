@@ -85,7 +85,8 @@ def test_default_is_bounded_with_honest_freshness_and_independent_handoff(summar
         == len(payload["recent_changes"])
         == 5
     )
-    assert all(payload["has_more"].values())
+    more = payload["has_more"]
+    assert all(more[k] for k in ("open_work_items", "recent_changes", "memories"))
     item = payload["open_work_items"][0]
     assert item["age_days"] == 60 and item["freshness"] == "aged"
     assert item["updated_at"] and payload["generated_at"]
