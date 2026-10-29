@@ -1,9 +1,10 @@
-"""Native op-log write path for work items (degrade mode — no regista face).
+"""Native op-log write path for work items (the default; Plan 025 D7).
 
 These functions implement the work-item mutations against the local op-log
 and ``work_items`` cache directly. They are used when ``face_factory.get_face()``
-returns ``None`` (regista writes disabled, or coordinator-absent). Each
-preserves the behavior of the original ``WorkItemModel`` native branches.
+returns ``None``, which is normal operation: regista write-through is retired
+and only runs when explicitly enabled. Each preserves the behavior of the
+original ``WorkItemModel`` native branches unless noted.
 """
 
 from __future__ import annotations
@@ -196,20 +197,11 @@ def update_work_item(
         # Plan 013 WI-5: pre-flight transition check on the native path.
         # Both paths (regista + native) now reject the same illegal
         # transitions. ``force=True`` is the explicit admin escape hatch.
+        # Plan 025 D7: native is the authority, so ``accept`` (in_human_review
+        # → done) is an ordinary transition here; Plan 014 WI-2's block assumed
+        # regista would run the gate.
         if not force:
-            transition = _lifecycle_transition_for(old["status"], status)
-            # Plan 014 WI-2: degrade mode cannot run the cross-lineage
-            # review gate, so it must not *complete* work unilaterally.
-            # The only gate transition into a terminal state is `accept`
-            # (in_human_review → done); block it off-regista. `close_from_open`
-            # (the review-exempt won't-fix/duplicate dismissal) stays allowed,
-            # matching the regista path.
-            if transition == "accept":
-                raise ValueError(
-                    f"Cannot accept {identifier!r} to 'done' in degrade mode: "
-                    "completion requires regista's cross-lineage review gate. "
-                    "Use force=True only for admin/repair."
-                )
+            _lifecycle_transition_for(old["status"], status)
         status_op = kernel.commit_op(
             conn,
             entity_id=entity_id,
@@ -513,15 +505,15 @@ def review_transition(
     transition_name: str,
     review_note: str,
 ) -> dict:
-    """Native (degrade) review transition — stores note, defers gate.
+    """Native review transition — stores the note and moves the status.
 
     The status transition is written as a ``set_status`` op whose payload
     includes the ``review_note`` (making the op_id unique — the op-log
     content-addresses ops by ``(entity_type, op_type, payload,
     parent_op_ids)``, so a bare ``{"status": "in_progress"}`` collides
     when the same status is revisited, e.g. ``reject`` → ``in_progress``
-    after ``start`` → ``in_progress``).  ``accept`` is blocked (Plan 014
-    WI-2) because the cross-lineage gate cannot run off-regista.
+    after ``start`` → ``in_progress``). ``accept`` completes the item
+    (Plan 025 D7; Plan 014 WI-2 blocked it while regista ran the gate).
     """
     from datetime import datetime, timezone
 
@@ -533,17 +525,6 @@ def review_transition(
         _seal.seal_for_write(conn, project_id, identifier, actor.actor_id)
         old = _common.load_work_item_row(conn, project_id, identifier)
         entity_id = old["entity_id"]
-
-        # Plan 014 WI-2: degrade mode cannot run the gate, so accept
-        # (in_human_review → done) is blocked — it would fake the
-        # cross-lineage requirement.
-        if transition_name == "accept":
-            raise ValueError(
-                f"Cannot accept {identifier!r} to 'done' in degrade mode: "
-                "completion requires regista's cross-lineage review gate. "
-                "For admin/repair use 'agent-notes work-item close --force' "
-                "or 'work-item update --status done --force'."
-            )
 
         if old["status"] == target_status:
             raise ValueError(

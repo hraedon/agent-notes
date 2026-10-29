@@ -108,9 +108,9 @@ class TestDegradeModeClose:
         )
         assert passed["status"] == "in_human_review"
 
-    def test_native_accept_to_done_is_blocked_without_force(self, default_project, monkeypatch):
-        # WI-2: degrade mode cannot run the gate, so `accept` (in_human_review →
-        # done) must be refused — it would fake the cross-lineage requirement.
+    def test_native_accept_to_done_is_allowed(self, default_project, monkeypatch):
+        # Plan 025 D7 lifts Plan 014 WI-2's block: native is the authority, and
+        # verify_gate_integrity still flags an accept with no adversarial pass.
         _native(monkeypatch)
         WorkItemModel.file_work_item(
             project_id=default_project.id,
@@ -125,12 +125,12 @@ class TestDegradeModeClose:
                 identifier="DG-04",
                 status=st,
             )
-        with pytest.raises(ValueError, match="review gate"):
-            WorkItemModel.update_work_item(
-                project_id=default_project.id,
-                identifier="DG-04",
-                status="done",
-            )
+        out = WorkItemModel.update_work_item(
+            project_id=default_project.id,
+            identifier="DG-04",
+            status="done",
+        )
+        assert out["status"] == "done"
 
     def test_native_force_close_writes_terminal(self, default_project, monkeypatch):
         # The admin/repair escape hatch keeps the legacy terminal close.

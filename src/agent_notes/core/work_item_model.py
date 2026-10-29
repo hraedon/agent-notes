@@ -6,8 +6,8 @@ op-log and then folds into the `work_items` cache (native path) or drives the
 regista face and mirrors the result (regista path).
 
 The implementation is split across the ``core/work_item/`` subpackage:
-- ``_regista``  — regista-face write path (the converged store is SoT).
-- ``_native``   — native op-log write path (degrade mode).
+- ``_regista``  — retired regista write-through (only when explicitly enabled).
+- ``_native``   — native op-log write path (the authority; Plan 025 D7).
 - ``_queries``  — read-only queries, delete, diagnose.
 - ``_cross_project`` — P3 request / wait / cross-project links.
 - ``_common``   — shared helpers.
