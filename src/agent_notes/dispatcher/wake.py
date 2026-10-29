@@ -187,8 +187,7 @@ class L3Waker:
         try:
             self.paseo.send(agent_id, text)
         except PaseoError as exc:
-            for row in claimed:
-                messaging.release_claim(row["id"], self.claimer)
+            messaging.release_claims([row["id"] for row in claimed], self.claimer)
             return WakeResult(FAILED, f"{exc}; left for L1", session_key, ids, agent_id, refused)
         count = messaging.bump_auto_continue(session_key)
         sent_ids = tuple(row["id"] for row in claimed)

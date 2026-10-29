@@ -847,18 +847,6 @@ def claim_message(message_id: int, claimer: str) -> dict | None:
     return dict(row) if row else None
 
 
-def release_claim(message_id: int, claimer: str) -> bool:
-    """Undo :func:`claim_message` so L1/L2 can still deliver (a failed wake)."""
-    with _conn() as conn:
-        cur = conn.execute(
-            "UPDATE agent_messages SET claimed_by = NULL, claimed_at = NULL "
-            "WHERE id = %s AND claimed_by = %s",
-            (message_id, claimer),
-        )
-        conn.commit()
-    return cur.rowcount > 0
-
-
 def replies_to(message_id: int) -> list[dict]:
     """Every reply to a message, oldest first (``review show``)."""
     with _conn() as conn:
