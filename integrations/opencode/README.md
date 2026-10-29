@@ -20,8 +20,8 @@ Q4).
   `agent-notes orient --json` output into the system prompt on the first model
   request of each session, so the agent starts with open work items, recent
   changes, and active memories already loaded.
-- **Compaction reconciliation:** the `compaction` hook appends the outbox sync
-  block and reconciliation checklist to the summary request, enforcing the
+- **Compaction reconciliation:** the `compaction` hook appends the
+  reconciliation checklist to the summary request, enforcing the
   `/end` discipline (close work items, file new ones, run `/reflect`, commit)
   before context is lost.
 
@@ -60,7 +60,6 @@ resolves `index.js` at its root. Do not point at the file, and do not import
 | Environment variable | Default | Description |
 |---|---|---|
 | `AGENT_NOTES_ORIENT_TIMEOUT_MS` | `15000` | Timeout for `agent-notes orient` subprocess |
-| `AGENT_NOTES_RECONCILE_TIMEOUT_MS` | `60000` | Timeout for `agent-notes outbox reconcile` |
 | `AGENT_NOTES_DSN` | — | Postgres connection string; the CLI also reads its own config file |
 
 ## Troubleshooting

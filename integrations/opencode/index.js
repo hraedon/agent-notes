@@ -18,10 +18,10 @@
  *     (which did not see per-session directories up front; V2 hooks
  *     carry `sessionID`, so the session's real directory is resolved
  *     via `ctx.session.get`).
- *   - `ctx.session.hook("compaction", …)` — appends the regista sync
- *     block and reconciliation checklist to the compaction request's
- *     system parts (replacing V1's `experimental.session.compacting`
- *     `output.context` append), so they steer the summary the same way.
+ *   - `ctx.session.hook("compaction", …)` — appends the reconciliation
+ *     checklist to the compaction request's system parts (replacing V1's
+ *     `experimental.session.compacting` `output.context` append), so it
+ *     steers the summary the same way.
  *
  * Logging: V1 used `ctx.client.app.log`; the V2 context has no app.log,
  * so diagnosable output goes to stderr (console), which lands in the
@@ -39,10 +39,6 @@ import { spawn } from "node:child_process";
 
 const ORIENT_TIMEOUT_MS = parseInt(
   process.env.AGENT_NOTES_ORIENT_TIMEOUT_MS ?? "15000",
-  10
-);
-const RECONCILE_TIMEOUT_MS = parseInt(
-  process.env.AGENT_NOTES_RECONCILE_TIMEOUT_MS ?? "60000",
   10
 );
 
@@ -128,72 +124,6 @@ function formatOrientPayload(payload) {
   return lines.join("\n");
 }
 
-async function buildRegistaSyncBlock() {
-  // dossier-006 §6: Stop/PreCompact must reconcile and loudly report pending
-  // ops. Reconcile is best-effort — if regista is unreachable it replays nothing
-  // and the ops stay in the outbox; we then surface the stale count loudly.
-  const lines = ["", "## Regista Sync"];
-
-  let recData = null;
-  try {
-    const rec = await invokeAgentNotes(
-      ["outbox", "reconcile", "--json"],
-      RECONCILE_TIMEOUT_MS
-    );
-    // Reconcile exits non-zero on conflicts/rejected but still prints a JSON
-    // report, so parse the data regardless of status.
-    if (rec.data && typeof rec.data === "object") {
-      recData = rec.data;
-    }
-  } catch {
-    recData = null;
-  }
-  if (recData && (recData.replayed !== undefined || recData.error)) {
-    if (recData.error) {
-      lines.push(`Reconcile: not run — ${recData.error}`);
-    } else {
-      lines.push(
-        `Reconcile: replayed ${recData.replayed ?? 0}, rejected ${recData.rejected ?? 0}, ` +
-          `conflicts ${recData.conflicts ?? 0}.`
-      );
-    }
-  } else {
-    lines.push("Reconcile: unavailable (see logs).");
-  }
-
-  let totalPending = 0;
-  let detail = "";
-  try {
-    const status = await invokeAgentNotes(["outbox", "status", "--json"]);
-    if (status.data && Array.isArray(status.data.projects)) {
-      for (const p of status.data.projects) {
-        totalPending += p.pending ?? 0;
-      }
-      if (status.data.projects.length > 0) {
-        detail = status.data.projects
-          .map((p) => `${p.project}: ${p.pending} pending/${p.conflicts} conflicts`)
-          .join("; ");
-      }
-    }
-  } catch {
-    totalPending = -1;
-  }
-  if (totalPending > 0) {
-    lines.push(
-      `⚠ STALE — ${totalPending} op(s) still pending sync. ` +
-        `Resolve before relying on work-item state. ` +
-        (detail ? `(${detail}) ` : "") +
-        `Run: agent-notes outbox reconcile`
-    );
-  } else if (totalPending === 0) {
-    lines.push("No ops pending sync.");
-  } else {
-    lines.push("Outbox status unavailable (see logs).");
-  }
-  lines.push("");
-  return lines.join("\n");
-}
-
 export default {
   id: "agent-notes",
   async setup(ctx) {
@@ -252,8 +182,6 @@ export default {
     });
 
     const compactionHook = await ctx.session.hook("compaction", async (event) => {
-      const syncBlock = await buildRegistaSyncBlock();
-
       const reconcilePrompt = [
         "",
         "## Reconciliation Checklist",
@@ -268,10 +196,10 @@ export default {
         "---",
       ].join("\n");
 
-      // V1 appended these to the compaction context; V2 pushes them
-      // into the compaction request's system parts so the summarizer
-      // sees (and carries forward) the sync state and checklist.
-      event.system.push({ type: "text", text: syncBlock + reconcilePrompt });
+      // V1 appended this to the compaction context; V2 pushes it into the
+      // compaction request's system parts so the summarizer sees (and
+      // carries forward) the checklist.
+      event.system.push({ type: "text", text: reconcilePrompt });
       log(`injected reconciliation prompt for compaction (session ${event.sessionID})`);
     });
 

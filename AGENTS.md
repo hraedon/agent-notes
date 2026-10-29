@@ -181,7 +181,7 @@ subagent to perform adversarial review. In Claude Code the equivalent is the
 **Opencode plugin** (Plan 007 Piece 2, OpenCode 2): `integrations/opencode/index.js`
 uses `ctx.session.hook("context")` to inject `agent-notes orient` output into the
 first model request of every session, and `ctx.session.hook("compaction")` to
-append the outbox sync block and reconciliation checklist before compaction.
+append the reconciliation checklist before compaction.
 This is the non-optional enforcement layer that complements the opt-in skills.
 `agent-notes install-harness opencode` copies the package to
 `~/.config/opencode/agent-notes` and registers the V2 `plugins` entry.
