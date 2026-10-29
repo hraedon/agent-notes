@@ -393,7 +393,19 @@ called. Two agents trading messages through tool calls would never hit them.
 The per-prompt hook can't tell a human prompt from a wake. Claude fires
 UserPromptSubmit on turns it starts on its own, and a Paseo `send` looks like
 a user prompt. So the reset only applies when the prompt doesn't begin with
-the D6 framing marker.
+the D6 framing marker. agy has no per-prompt hook: its PreInvocation fires
+before every model call. Its `invocationNum` is 0 on a turn's first call and
+keeps counting through a Stop continuation (checked on agy 1.4.10;
+`initialNumSteps` grows on every call, so it can't mark a turn). The reset
+there is `invocationNum == 0` plus the marker check, with no local state.
+
+L2 and L3 apply one wake rule, `messaging.may_wake`: a direct `wake=true`
+message, a `wake_policy` that allows it, and a sender that isn't
+`untrusted-input` (D6). The cap and the Stop switch sit on top. A message the
+rule refuses is still delivered at L1. A hook's claim, the release of what
+didn't fit and its bookkeeping are one transaction, so a failure leaves
+nothing claimed and unshown. Rendering shortens a message (subject, sender,
+then body) to fit the budget, and unclaims what still doesn't fit.
 
 **Dispatcher** (`agent-notes-bridge --dispatch`, one per machine, next to the
 Paseo daemon). It does `LISTEN agent_notes_messages` and, for each direct
@@ -403,14 +415,22 @@ Paseo daemon). It does `LISTEN agent_notes_messages` and, for each direct
 2. Re-reads the row. If it's still unclaimed and the session has
    `paseo_agent_id`, `wake_policy` allows it, the trust rule passes (D6), and
    `auto_continues < cap`: claim it, then run
-   `paseo send --no-wait <id> --prompt-file <framed message>`.
+   `paseo send --no-wait --behavior steer <id> --prompt-file <framed message>`.
+   It sends one message per session per pass. Paseo's `inspect` and `send`
+   aren't atomic, so a human can start a turn between them. `--behavior
+   steer` makes that race a mid-turn steer with framed peer content, never
+   an interrupt (without it, Paseo uses the agent's default, else interrupt).
 3. If the session isn't Paseo-hosted, it leaves the message for L1 and logs
    once. The exception is OpenCode 2, where the agent-notes plugin claims
    and prompts its own idle session in-process, so no dispatcher is needed.
 
 The dispatcher also claims `request` rows addressed to its VM and runs them
 as jobs (D8, §6a). It runs at most two jobs at once, and the rest wait their
-turn.
+turn. A request is answered at most once (`messaging.answer_request` locks the
+request row while it checks for a reply). Every sweep retries replies it
+couldn't post and answers its claimed requests that have no reply and no job
+running with `JOB_INTERRUPTED`. On shutdown it waits for running jobs (25 s)
+before closing the connection that holds the VM lock.
 
 Before treating a session as gone, the dispatcher can check `paseo ls --json`.
 It runs under systemd on Linux, launchd on the Mac, and as a logon task on
