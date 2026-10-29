@@ -69,19 +69,26 @@ example `agent:worker`, `human:operator`, or `service:hooks`; missing or
 invalid identity fails closed. There are no per-command actor or model-lineage
 overrides.
 
-The signed v6 `producer` member belongs to regista and is resolved from the
-process environment: `REGISTA_PRODUCER_HARNESS`,
-`REGISTA_PRODUCER_HARNESS_VERSION`, and optional
-`REGISTA_PRODUCER_MODEL` / `REGISTA_PRODUCER_MODEL_LINEAGE`. Configure these in
-the operator's suite environment. **The reviewer of a verdict IS the running
-producer** — there is one identity source: `core/producer.py`
-(`require_reviewer_model_lineage`) validates the model and canonical lineage
-that regista signs in the envelope. agent-notes sends no reviewer-lineage copy
-in the payload; v6 rejects the obsolete `reviewer_claims` vehicle. A producer
-that declares no canonical model lineage can author ordinary writes but is
-refused — `ProducerConfigurationError`, before any write — from casting a
-review verdict; run an independently configured process (different model
-lineage, or a human) for an independent review.
+**Producer and the native review gate (Plan 026 D2).** Every authored
+work-item op carries a `producer` block inside its hashed payload: harness,
+model, coarse vendor lineage, and session. The model comes from
+`AGENT_NOTES_MODEL` (or the transitional `REGISTA_PRODUCER_MODEL`), otherwise
+from the calling session's model, which hooks register in
+`agent_sessions.model`. `model_lineages` (data, migration 860) maps models to
+vendor lineages.
+
+`work-item review pass|accept`, and any close or update that completes review
+work, run `core/work_item/_independence.py::check`. The reviewer must have a
+known lineage that no implementer since the last bounce shares; for legacy
+items with no recorded model, the reviewer's actor must differ. `human:*`
+reviewers skip the lineage check, not the actor check.
+`--same-lineage-acknowledged REASON` overrides and records why. `--attempt ID`
+applies a validated delegated review (Plan 023/025) as the reviewer, once.
+
+This is cooperative enforcement: identity is self-reported. It prevents
+accidental self-approval and records overrides; it is not authentication.
+`core/producer.py` (`require_reviewer_model_lineage`) still guards the
+retired regista path only, and goes away in Plan 026 Phase 2.
 Optional signed action-delegation evidence is loaded
 from the configured `AGENT_NOTES_ACTION_DELEGATION_PATHS` files.
 

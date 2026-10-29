@@ -72,8 +72,14 @@ def _native(monkeypatch):
 
 
 def _to_in_review(project_id, identifier, monkeypatch):
-    """Drive a work item to in_review on the native path."""
+    """Drive a work item to in_review on the native path, then become a reviewer.
+
+    The implementer and the reviewer are different actors from different model
+    families, as the native gate requires (Plan 026 D2).
+    """
     _native(monkeypatch)
+    monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:native-author")
+    monkeypatch.setenv("AGENT_NOTES_MODEL", "glm-5.3")
     WorkItemModel.file_work_item(
         project_id=project_id,
         identifier=identifier,
@@ -92,6 +98,8 @@ def _to_in_review(project_id, identifier, monkeypatch):
         identifier=identifier,
         status="in_review",
     )
+    monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:native-reviewer")
+    monkeypatch.setenv("AGENT_NOTES_MODEL", "kimi-k2.5")
 
 
 def _author_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -143,7 +151,10 @@ def test_review_transition_has_no_identity_override_parameters():
 
     assert "actor_id" not in parameters
     assert "model_lineage" not in parameters
-    assert "same_lineage_acknowledged" in parameters
+    # Plan 026 D2.6/D2.7: a recorded override reason, and a delegated review
+    # attempt whose identity comes from the attempt journal, not the caller.
+    assert "acknowledgement" in parameters
+    assert "attempt_id" in parameters
 
 
 def test_write_actor_requires_canonical_ambient_identity(monkeypatch):
@@ -221,7 +232,7 @@ class TestNativeReviewTransition:
         assert notes[0]["transition"] == "adversarial_pass"
         # v6: the note is attributed to the ambient actor (the running
         # reviewer), never to a per-call identity.
-        assert notes[0]["actor_id"] == "agent:worker"
+        assert notes[0]["actor_id"] == "agent:native-reviewer"
 
     def test_reject_moves_back_to_in_progress(self, default_project, monkeypatch):
         _to_in_review(default_project.id, "RV-03", monkeypatch)
@@ -447,7 +458,7 @@ class TestRegistaReviewTransition:
                 "RV-REG-03",
                 transition_name="adversarial_pass",
                 review_note="same-lineage review acknowledged",
-                same_lineage_acknowledged=True,
+                acknowledgement="same-lineage review acknowledged for the test",
             )
             assert result["status"] == "in_human_review"
 

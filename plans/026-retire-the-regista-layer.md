@@ -99,9 +99,12 @@ hash: `create`, `claim`, `set_status`, `set_field` and `close`.
 
 The producer is resolved in this order:
 
-1. `AGENT_NOTES_MODEL` (and optionally `AGENT_NOTES_MODEL_LINEAGE`) in the
-   process environment. `REGISTA_PRODUCER_MODEL` and
-   `REGISTA_PRODUCER_MODEL_LINEAGE` are still read during the transition.
+1. `AGENT_NOTES_MODEL` in the process environment. `REGISTA_PRODUCER_MODEL`
+   is still read during the transition. The lineage is always derived from
+   the model and is never declared separately, as implemented: a declared
+   lineage that disagrees with the model would be a false identity claim.
+   The repo's identity-override test already forbids
+   `AGENT_NOTES_MODEL_LINEAGE`.
 2. The calling session's registered model. Plan 025 D5's `resolve_session()`
    finds the session. A new `agent_sessions.model` column is filled by
    SessionStart/per-prompt hooks from the harness's own hook input. Phase 1a
@@ -121,14 +124,27 @@ family, so old settings keep working.
 the item since its last `reject` or `request_changes` transition (or since
 creation), excluding the review transitions themselves.
 
-**D2.4 Gated transitions.** Each of these runs the check:
+**D2.4 Gated transitions.** Any move out of `in_review` or
+`in_human_review` to `in_human_review`, `done` or `closed` is a positive
+verdict, whichever command makes it:
 
-- `adversarial_pass` and `accept`;
-- `close`, and `update --status done`, when the item is in `in_review` or
-  `in_human_review`.
+- `review pass` and `review accept`;
+- `close`, including `close --force`;
+- `update --status`, including `--force`.
 
-The other close paths are unchanged. Plan 025 D7 deliberately lets `close`
-complete an item that never entered review, and review stays opt-in.
+Moves out of review are marked with the verdict they amount to
+(`review_transition`), so they never count as implementation, and a bounce
+back to `in_progress` resets the implementer set. Three more rules close the
+remaining bypasses:
+
+- an approving update can't also edit the item;
+- `release` only reopens a `claimed` item;
+- `kernel.reconcile_entity` refuses to reconcile an item while it's in
+  review. It has no callers today, and a merge records only merged state,
+  not who changed what.
+
+Plan 025 D7 deliberately lets `close` complete an item that never entered
+review, and that stays ungated: review is opt-in.
 
 **D2.5 The rule.**
 
@@ -142,11 +158,11 @@ complete an item that never entered review, and review stays opt-in.
   every implementer's actor.
 - Refusals name the matching implementer and point to the escape hatches.
 
-**D2.6 Escape hatches, both recorded on the op.**
-
-- `--same-lineage-acknowledged "<reason>"` passes the gate with an explicit
-  reason.
-- `attest_gate_waiver` gains a pre-completion mode.
+**D2.6 Escape hatch, recorded on the op.** `--same-lineage-acknowledged
+"<reason>"` on `review pass|accept` passes the gate. The reason is required
+and is recorded on the op. `attest-gate` is unchanged: it records a waiver
+after completion, for items completed before this gate existed. A separate
+pre-completion waiver would only duplicate the acknowledgement.
 
 **D2.7 Delegated reviews.** `work-item review pass|accept --attempt <id>`
 takes the reviewer identity from a `review_delegation_attempts` row in
@@ -158,6 +174,11 @@ takes the reviewer identity from a `review_delegation_attempts` row in
 It does not take it from the running process. Without this, Plan 025's
 headline flow fails: the Codex implementer that receives Claude's verdict
 would be refused. Brief-mode attempts (no work item) can't be used this way.
+
+Work items don't record git heads, so the attempt can't be bound to the head
+it reviewed. Instead, any content edit to the item after the attempt was
+requested makes the attempt stale. Code pushed without touching the item
+isn't detected; that's a judgement call, recorded here.
 
 **D2.8 Lands with:**
 
@@ -378,6 +399,84 @@ regista's lineage vocabulary splits Claude Opus from Claude Sonnet and has
 no Gemini family. → D2.1's session-model source and D2.2's coarse vendor
 lineage.
 
-## 9. Harness model matrix (Phase 1a)
+## 9. Harness model matrix (Phase 1a, 2026-10-29)
 
-To be filled in.
+| Harness | Model source in hook input | Notes |
+|---|---|---|
+| Codex | `model` on **every** event | From the official hooks docs ("Codex-specific extension. Active model slug.") |
+| agy (Antigravity) | `modelName` on every event | From the Plan 025 Phase 0 spike (`docs/spikes/025-phase0.md`) |
+| Hermes | `extra.model` on `pre_llm_call` | `hooks/hermes.py` contract notes |
+| Claude Code | `model` on **SessionStart only**, "not always" | Model switches arrive as `PostModelSwitch.to_model`, which isn't wired. There's no model environment variable. A Claude session whose SessionStart omitted the model, or that switched models, needs `AGENT_NOTES_MODEL` to review |
+| OpenCode 2 | Not wired | The plugin could pass the model from its chat hooks. Until then, OpenCode reviewers set `AGENT_NOTES_MODEL` (their agent definitions say so) |
+
+## 10. Implementation log
+
+### 2026-10-29: Phase 1 (D2)
+
+- **Migration 860.** Adds `agent_sessions.model` and the `model_lineages`
+  vocabulary (10 vendor families).
+- **`core/work_item/_independence.py`.** Covers producer resolution,
+  implementer derivation, the check, and delegated attempts.
+- **Stamping.** Native `create`, `set_field`, `set_status`, `claim`, `close`
+  and the gate waiver stamp `producer` into the hashed payload.
+- **Gated paths.** `review pass/accept`, `close` from review, and `update`
+  into `in_human_review`/`done` from review. A gated move made through
+  `update` or `close` is marked with the equivalent `review_transition`, so
+  it's review bookkeeping, not implementation.
+- **Delegated attempts.** `--attempt` requires a `result_validated` attempt
+  for the same item, with an `accept` verdict and non-degraded identity
+  assurance. It then moves the attempt to `transition_applied` with the
+  native op ID in the same transaction, so the attempt can be used once.
+- **D2.6 as built.** `--same-lineage-acknowledged` now takes a REASON, which
+  is required and recorded. `attest-gate` is unchanged and still applies only
+  after completion; the acknowledgement covers the pre-completion case.
+- **Hooks.** Hooks register the session model (Codex, agy, Hermes, Claude
+  SessionStart). `messaging` returns `model` in session rows.
+- **Docs.** Updated the skill, its bundled copy, the four OpenCode reviewer
+  agents, the file-breadcrumb skill, README and AGENTS.md.
+  - `adversarial-reviewer-minimax-m3.md` actually runs
+    `ollama-cloud/nemotron-3-ultra`. Its identity line now declares that
+    real model, and the file name mismatch is left for the owner.
+- **Implementation review (GPT-6.1-sol, read-only, "rework").** It found
+  eleven issues. All but one were fixed, each with a test:
+  - forced moves and the `closed` alias bypassed the gate;
+  - `release` could take an item out of review;
+  - `reconcile_entity` could merge an approval in;
+  - an approving update could also add new work;
+  - delegated attempts weren't checked for staleness;
+  - every `service:*` author was ignored, even one reporting a model;
+  - seal stubs made the first toucher an implementer;
+  - bookkeeping detection was too broad;
+  - plain-update bounces didn't reset the implementer set;
+  - producer lookups could abort a write (now run in a savepoint).
+
+  The pre-completion waiver was resolved as a spec change (D2.6).
+- **Round 2 (same reviewer, "rework": 7 fixed, 4 partial, 3 new).** All
+  addressed, each with a test:
+  - `reconcile_entity` reads the folded local status, not the last
+    `set_status` op.
+  - Model-less `service:*` authors count, with an unknown lineage, under the
+    legacy actor rule.
+  - The pre-D2 review-notes adjacency heuristic applies only to ops without a
+    `producer` block. Every op since D2 has one, and marks review notes
+    explicitly.
+  - Delegated-attempt staleness looks at the item's whole content history.
+    It compares op lamports against a new `item_lamport` watermark, which
+    `plan_attempt` records in migration 860, instead of transaction-start
+    timestamps.
+- **Round 3 ("rework": two remaining edges, both fixed with tests).**
+  - Reconcile is refused for items in review, and `merge` ops count as
+    authored content.
+  - Attempts with no `item_lamport` (planned before migration 860) are
+    refused as unverifiable rather than judged by timestamp.
+  - The reviewer found no other blocker or major issue.
+- **Latent bug surfaced and fixed.** `update`'s `set_status` payload was just
+  `{"status": ...}`. Revisiting a status, for example resubmitting for review
+  after a bounce, by the same actor collided on the content-addressed op ID.
+  It now carries `changed_at`, as `close` already carried `closed_at`.
+  `claim` and `release` had the same flaw for an actor who claims again, and
+  now carry `claimed_at` and `released_at`.
+- **Bug found by the tests.** `kernel._get_entity_ops` doesn't select
+  `actor_id`, so a first version of the check saw no implementers and passed
+  everything as `no-recorded-implementers`. `_independence` now has its own
+  query, and the tests pin the implementer set's contents.

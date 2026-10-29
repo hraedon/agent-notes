@@ -51,6 +51,12 @@ def _gate_violations(result):
     return [v for v in result.violations if v.rule == "gate"]
 
 
+def _become_reviewer(monkeypatch):
+    """Switch to a different actor and model family (Plan 026 D2 gate)."""
+    monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:parity-reviewer")
+    monkeypatch.setenv("AGENT_NOTES_MODEL", "kimi-k2.5")
+
+
 class TestDegradeModeClose:
     def test_native_close_completes_to_done(self, default_project, monkeypatch):
         # Plan 025 D7: native is the authority, so close completes the item.
@@ -100,6 +106,7 @@ class TestDegradeModeClose:
                 status=st,
             )
         assert out["status"] == "in_review"
+        _become_reviewer(monkeypatch)
         passed = WorkItemModel.review_transition(
             default_project.id,
             "DG-03",
@@ -120,6 +127,8 @@ class TestDegradeModeClose:
             embedding=_vec768(),
         )
         for st in ("in_progress", "in_review", "in_human_review"):
+            if st == "in_human_review":
+                _become_reviewer(monkeypatch)
             WorkItemModel.update_work_item(
                 project_id=default_project.id,
                 identifier="DG-04",
@@ -210,7 +219,9 @@ class TestGateIntegrityDetector:
             identifier="DG-GATE-02",
             status="in_review",
         )
-        # Force-bypass WI-2: in_review → done is not a valid transition.
+        # Force-bypass WI-2: in_review → done is not a valid transition. Plan
+        # 026 D2 still requires an independent reviewer to force it.
+        _become_reviewer(monkeypatch)
         WorkItemModel.update_work_item(
             project_id=default_project.id,
             identifier="DG-GATE-02",
@@ -240,6 +251,7 @@ class TestGateIntegrityDetector:
             status="in_human_review",
             force=True,
         )
+        _become_reviewer(monkeypatch)
         WorkItemModel.update_work_item(
             project_id=default_project.id,
             identifier="DG-GATE-03",
@@ -293,6 +305,7 @@ class TestGateIntegrityDetector:
             identifier="DG-GATE-05",
             status="in_review",
         )
+        _become_reviewer(monkeypatch)
         WorkItemModel.update_work_item(
             project_id=default_project.id,
             identifier="DG-GATE-05",

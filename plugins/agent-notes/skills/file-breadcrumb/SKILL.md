@@ -76,10 +76,10 @@ Do **not** file one when:
 
     Identity is ambient v6 configuration, never a command-line override. Set a
     canonical `AGENT_NOTES_ACTOR_ID` (or the suite fallback
-    `REGISTA_PRINCIPAL_ID`) and the regista producer variables in the process
-    environment or `~/.config/agent-suite/suite.env`. A reviewer that needs a
-    distinct lineage must run in a separately configured process with a
-    different `REGISTA_PRODUCER_MODEL_LINEAGE`.
+    `REGISTA_PRINCIPAL_ID`) in the process environment or
+    `~/.config/agent-suite/suite.env`. Your model is recorded on the work item
+    from your session (or `AGENT_NOTES_MODEL`), so a reviewer from another
+    model family can later pass it (see the adversarial-review skill).
 
    Parse the JSON; the returned `identifier` is the canonical handle
    (e.g. `WI-001`). Tell the user that identifier so they can

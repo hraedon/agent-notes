@@ -21,6 +21,7 @@ from agent_notes.cli.common import (
 # Work items live only in repo projects: `--workspace` alone never selects the
 # workspace's `global` memory tier here (Plan 025 D3).
 from agent_notes.cli.common import resolve_repo_project as _resolve
+from agent_notes.core.work_item._independence import IndependenceError
 
 
 def _wi_format(wi: dict) -> str:
@@ -148,6 +149,13 @@ def cmd_wi_update(args: argparse.Namespace) -> int:
             identifier=args.identifier,
             force=getattr(args, "force", False),
             **fields,
+        )
+    except IndependenceError as exc:
+        return emit_error(
+            "VALIDATION_FAILED",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_CONFLICT,
         )
     except ValueError as exc:
         return emit_error(
@@ -400,6 +408,13 @@ def cmd_wi_close(args: argparse.Namespace) -> int:
             args.identifier,
             force=getattr(args, "force", False),
         )
+    except IndependenceError as exc:
+        return emit_error(
+            "VALIDATION_FAILED",
+            str(exc),
+            use_json=use_json,
+            exit_code=EXIT_CONFLICT,
+        )
     except ValueError as exc:
         return emit_error(
             "NOT_FOUND",
@@ -488,6 +503,12 @@ def cmd_wi_attest_gate(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
+def _acknowledgement(args: argparse.Namespace) -> str | None:
+    """``--same-lineage-acknowledged REASON``; anything but a string is absent."""
+    value = getattr(args, "same_lineage_acknowledged", None)
+    return value if isinstance(value, str) else None
+
+
 def _review_resolve(args: argparse.Namespace) -> tuple[int, str, bool]:
     """Resolve project + return (proj_id, proj_slug, use_json)."""
     use_json = getattr(args, "json", False)
@@ -543,7 +564,8 @@ def cmd_wi_review_pass(args: argparse.Namespace) -> int:
             args.identifier,
             transition_name="adversarial_pass",
             review_note=args.note,
-            same_lineage_acknowledged=getattr(args, "same_lineage_acknowledged", False),
+            acknowledgement=_acknowledgement(args),
+            attempt_id=getattr(args, "attempt", None),
         )
     except (ValueError, RegistaError) as exc:
         return emit_error(
@@ -562,7 +584,7 @@ def cmd_wi_review_pass(args: argparse.Namespace) -> int:
 
 
 def cmd_wi_review_accept(args: argparse.Namespace) -> int:
-    """Drive accept (in_human_review → done). Requires regista (gate runs)."""
+    """Drive accept (in_human_review → done); runs the independence check."""
     proj_id, proj_slug, use_json = _review_resolve(args)
     if proj_id < 0:
         return EXIT_NOT_CONFIGURED
@@ -575,7 +597,8 @@ def cmd_wi_review_accept(args: argparse.Namespace) -> int:
             args.identifier,
             transition_name="accept",
             review_note=args.note,
-            same_lineage_acknowledged=getattr(args, "same_lineage_acknowledged", False),
+            acknowledgement=_acknowledgement(args),
+            attempt_id=getattr(args, "attempt", None),
         )
     except (ValueError, RegistaError) as exc:
         return emit_error(
@@ -607,7 +630,8 @@ def cmd_wi_review_reject(args: argparse.Namespace) -> int:
             args.identifier,
             transition_name="reject",
             review_note=args.note,
-            same_lineage_acknowledged=getattr(args, "same_lineage_acknowledged", False),
+            acknowledgement=_acknowledgement(args),
+            attempt_id=getattr(args, "attempt", None),
         )
     except (ValueError, RegistaError) as exc:
         return emit_error(
@@ -639,7 +663,8 @@ def cmd_wi_review_request_changes(args: argparse.Namespace) -> int:
             args.identifier,
             transition_name="request_changes",
             review_note=args.note,
-            same_lineage_acknowledged=getattr(args, "same_lineage_acknowledged", False),
+            acknowledgement=_acknowledgement(args),
+            attempt_id=getattr(args, "attempt", None),
         )
     except (ValueError, RegistaError) as exc:
         return emit_error(
@@ -1132,14 +1157,22 @@ def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
     _add_common(wi_review_list)
     wi_review_list.set_defaults(func=cmd_wi_review_list)
 
-    def _add_review_identity(parser: argparse.ArgumentParser) -> None:
+    def _add_review_identity(parser: argparse.ArgumentParser, *, positive: bool = False) -> None:
         parser.add_argument(
             "--same-lineage-acknowledged",
-            action="store_true",
-            default=False,
-            help="Acknowledge same-lineage review (regista validator requires this if the "
-            "reviewer shares a model lineage with an author)",
+            metavar="REASON",
+            default=None,
+            help="Record why a reviewer who shares a model lineage (or actor) with "
+            "the implementers may approve this anyway (Plan 026 D2.6)",
         )
+        if positive:
+            parser.add_argument(
+                "--attempt",
+                metavar="ATTEMPT_ID",
+                default=None,
+                help="Apply a validated delegated review (agent-notes review request) "
+                "as the reviewer, instead of this process (Plan 026 D2.7)",
+            )
 
     wi_review_pass = wi_review_sub.add_parser(
         "pass", help="Record an adversarial review pass (in_review → in_human_review)"
@@ -1148,19 +1181,20 @@ def register_work_item_parsers(sub: argparse._SubParsersAction) -> None:
     wi_review_pass.add_argument(
         "--note", required=True, help="Review findings (required by the gate validator)"
     )
-    _add_review_identity(wi_review_pass)
+    _add_review_identity(wi_review_pass, positive=True)
     _add_common(wi_review_pass)
     wi_review_pass.set_defaults(func=cmd_wi_review_pass)
 
     wi_review_accept = wi_review_sub.add_parser(
         "accept",
-        help="Accept the work item (in_human_review → done). Requires regista (gate runs).",
+        help="Accept the work item (in_human_review → done). The reviewer must not "
+        "share a model lineage with the implementers.",
     )
     wi_review_accept.add_argument("identifier")
     wi_review_accept.add_argument(
         "--note", required=True, help="Acceptance rationale (required by the gate validator)"
     )
-    _add_review_identity(wi_review_accept)
+    _add_review_identity(wi_review_accept, positive=True)
     _add_common(wi_review_accept)
     wi_review_accept.set_defaults(func=cmd_wi_review_accept)
 

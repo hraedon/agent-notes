@@ -5,11 +5,12 @@ description: Perform a cross-lineage adversarial review of work items awaiting r
 
 # /adversarial-review — Cross-Lineage Review Gate
 
-Work items reach `done` only after a cross-lineage adversarial review pass
-(Plan 010/014, Invariant G). When an author closes their work, the item
-moves to `in_review` — it sits there until a **different actor** (ideally
-a different model lineage) reviews it and either passes it to the human
-gate, requests changes, or (after a prior adversarial pass) accepts it.
+Review is opt-in: an item enters review when someone moves it to
+`in_review`. From there it can't be passed, accepted or closed by anyone who
+shares a **model lineage** (vendor family: anthropic, openai, google, ...)
+with the people who worked on it (Plan 026 D2). A reviewer from another
+family passes it to the human gate, requests changes, or (after a pass)
+accepts it.
 
 This skill is how an adversarial-review subagent discovers, reviews, and
 advances work items through the gate.
@@ -22,50 +23,41 @@ You need `agent-notes` on PATH and `AGENT_NOTES_DSN` set. Verify:
 agent-notes doctor --json
 ```
 
-If `coordinator-absent / local-lease` mode is active, review transitions
-other than `accept` work but the gate does not actually run (the review
-note is stored in `diagnostic_keys` for provenance). `accept` is blocked
-in degrade mode — completion requires regista's cross-lineage gate.
-
 ## Identity
 
-The gate enforces two identity checks:
+Every work-item write records who made it: the actor
+(`AGENT_NOTES_ACTOR_ID`) and the model (`producer` in the op). The model
+comes from `AGENT_NOTES_MODEL` if set, otherwise from your session, which the
+harness hooks register. Codex, agy and Hermes report it on every hook event;
+Claude Code reports it at session start.
 
-1. **Separation of duties** — your `actor_id` must differ from every
-   actor who worked the item (no self-review).
-2. **Cross-lineage** — if you are an agent, the process-level producer
-   `REGISTA_PRODUCER_MODEL_LINEAGE` must be declared and distinct from the
-   authors' lineages. Configure it in the process environment or suite.env:
+Positive verdicts (`pass`, `accept`), and closing an item that's in review,
+are refused when:
 
-   POSIX shells:
+1. your model lineage is unknown (set `AGENT_NOTES_MODEL`, for example
+   `claude-opus-5-5`, if the refusal says so);
+2. you share a lineage with anyone who worked on the item since it last
+   bounced back from review; or
+3. the implementer's model is unknown (work filed before this gate existed)
+   and your `actor_id` is theirs.
 
-   ```sh
-   AGENT_NOTES_ACTOR_ID=agent:reviewer REGISTA_PRODUCER_MODEL_LINEAGE=<your-lineage> agent-notes work-item review pass ...
-   ```
+`human:*` reviewers skip the lineage check but not the actor check.
+`request-changes` and `reject` are findings, not approvals, and anyone may
+record them.
 
-   PowerShell (in the independently configured reviewer process):
+This is cooperative enforcement: identity is self-reported. It stops
+accidental self-approval, and every override is recorded on the op.
 
-   ```powershell
-   $env:AGENT_NOTES_ACTOR_ID = "agent:reviewer"
-   $env:REGISTA_PRODUCER_MODEL_LINEAGE = "<your-lineage>"
-   agent-notes work-item review pass ...
-   ```
+**Delegated reviews.** If you are the implementer and requested a review
+from another model (`agent-notes review request`), apply its verdict with
+`--attempt <attempt-id>`. The gate then treats the delegated reviewer as the
+reviewer. Each attempt can be applied once, and only an `accept` verdict can
+pass or accept.
 
-   Lineage values are regista's closed registry families — the family, never a
-   versioned build or harness name: `kimi`, `glm`, `nemotron`, `minimax`,
-   `deepseek`, `qwen`, `claude-opus`, `claude-sonnet`, `fable`, `gpt-sol`.
-   If you share a lineage with an author, the gate allows the review only with
-   `--same-lineage-acknowledged` (the note must justify why same-lineage review
-   is acceptable here). There are no `--actor-id` or `--model-lineage`
-   command-line overrides.
-
-   Both identity checks gate the *positive* verdicts (`pass`, `accept`).
-   Under canonical workflow v3 (regista WI-284), `request-changes` is
-   `finding_only`: any actor — including one whose independence is
-   unprovable — may record a negative finding, provided the note is
-   substantive. No independence claim is made or required for it. (A
-    deployment still on canonical v2 gates `request-changes` on
-    independence too; configure your producer lineage either way.)
+**Overrides.** `--same-lineage-acknowledged "<reason>"` passes the gate
+anyway and records the reason. Use it only when a same-family review is
+genuinely acceptable (a trivial change, or no other model available), and
+say why.
 
 ## Step 1: Discover what's awaiting review
 
@@ -128,15 +120,15 @@ the work item's `diagnostic_keys.review_notes`.
 
 ### Accept (in_human_review → done)
 
-After a prior adversarial pass, finalize the work (requires regista):
+After a prior adversarial pass, finalize the work:
 
 ```
 agent-notes work-item review accept <identifier> --path <repo-path> --note "<acceptance rationale>" --json
 ```
 
-Your `actor_id` must differ from whoever ran the `adversarial_pass`
-(two-stage independence). In relaxed mode (homelab default) the original
-author may accept, but a different reviewer is still preferred.
+The same independence check applies to `accept`. The adversarial pass
+itself doesn't count as implementation work, so the passer may also accept.
+A different accepter is still preferred.
 
 ### Reject (in_human_review → in_progress)
 
@@ -148,17 +140,16 @@ agent-notes work-item review reject <identifier> --path <repo-path> --note "<rej
 
 ## Error handling
 
-If the gate rejects your transition, the error explains why:
+If the gate refuses your transition, the error says why:
 
-- **"review_note is required"** — you forgot `--note`.
-- **"reviewer must differ from every actor"** — your configured canonical
-  `AGENT_NOTES_ACTOR_ID` matches an author. Use a distinct principal.
-- **"model lineage is not confirmed distinct"** — your lineage collides
-  with an author. Either use a different lineage or pass
-  `--same-lineage-acknowledged` with a justification in the note.
-- **"Cannot accept in degrade mode"** — regista is not connected. The
-  item stays in `in_human_review` until regista is available to run the
-  final gate.
+- **"review_note is required"**: you forgot `--note`.
+- **"the reviewer's model lineage is unknown"**: set `AGENT_NOTES_MODEL` in
+  the reviewing process, or use `--attempt`.
+- **"... shares the reviewer's model lineage"**: you're the same model family
+  as an implementer. Hand the review to another family (or request a
+  delegated review), or pass `--same-lineage-acknowledged "<reason>"`.
+- **"... worked on this item (model unknown)"**: legacy work by your own
+  actor. Use a different reviewer.
 
 Parse the JSON response and confirm the new status to the user.
 

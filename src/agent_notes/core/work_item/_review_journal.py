@@ -75,9 +75,10 @@ def plan_attempt(
             work_item_entity_id, work_item_identifier,
             repository_identity, repository_root,
             base_sha, head_sha, merge_base_sha, prompt_digest,
-            harness, model_identity, status
+            harness, model_identity, status, item_lamport
         ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'planned'
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'planned',
+            (SELECT max(lamport) FROM op_log WHERE entity_id = %s)
         )
         ON CONFLICT (idempotency_key) DO NOTHING
         RETURNING *
@@ -96,6 +97,7 @@ def plan_attempt(
             prompt_digest,
             request.harness,
             request.requested_model,
+            request.work_item_entity_id,
         ),
     )
     row = cur.fetchone()

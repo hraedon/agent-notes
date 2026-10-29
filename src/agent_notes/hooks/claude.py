@@ -54,6 +54,7 @@ def _input(payload: Mapping[str, Any], env: Mapping[str, str]) -> common.HookInp
         str(sid) if sid else None,
         str(cwd) if isinstance(cwd, str) and cwd else None,
         env.get("PASEO_AGENT_ID") or None,
+        common.model_name(payload.get("model")),
     )
 
 

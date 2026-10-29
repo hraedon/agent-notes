@@ -483,8 +483,9 @@ class TestWorkItemClose:
         assert WorkItemModel.close_work_item(default_project.id, "WI-ATOMIC")["status"] == "done"
 
     @pytest.mark.parametrize("path", [(), ("in_progress",), ("in_progress", "in_review")])
-    def test_close_reaches_done_from_active_states(self, default_project, path):
+    def test_close_reaches_done_from_active_states(self, default_project, path, monkeypatch):
         ident = "WI-CL-" + str(len(path))
+        monkeypatch.setenv("AGENT_NOTES_MODEL", "glm-5.3")
         WorkItemModel.file_work_item(
             project_id=default_project.id,
             identifier=ident,
@@ -494,6 +495,11 @@ class TestWorkItemClose:
         )
         for st in path:
             WorkItemModel.update_work_item(default_project.id, ident, status=st)
+        if path and path[-1] == "in_review":
+            # Closing out of review completes the review: Plan 026 D2 needs a
+            # reviewer from another model family.
+            monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:closer")
+            monkeypatch.setenv("AGENT_NOTES_MODEL", "kimi-k2.5")
         assert WorkItemModel.close_work_item(default_project.id, ident)["status"] == "done"
 
     def test_file_claim_close_reaches_done_and_releases_lease(self, default_project):

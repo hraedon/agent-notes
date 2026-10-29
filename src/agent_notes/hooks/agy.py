@@ -62,7 +62,11 @@ def _input(payload: Mapping[str, Any], env: Mapping[str, str]) -> common.HookInp
     if isinstance(paths, list):
         cwd = next((p for p in paths if isinstance(p, str) and p and "\x00" not in p), None)
     return common.HookInput(
-        HARNESS, str(sid) if sid else None, cwd, env.get("PASEO_AGENT_ID") or None
+        HARNESS,
+        str(sid) if sid else None,
+        cwd,
+        env.get("PASEO_AGENT_ID") or None,
+        common.model_name(payload.get("modelName")),
     )
 
 

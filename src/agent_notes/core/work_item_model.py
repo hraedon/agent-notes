@@ -278,7 +278,8 @@ class WorkItemModel:
         identifier: str,
         transition_name: str,
         review_note: str,
-        same_lineage_acknowledged: bool = False,
+        acknowledgement: str | None = None,
+        attempt_id: str | None = None,
     ) -> dict:
         """Drive a review-gate transition with a review_note payload.
 
@@ -293,8 +294,11 @@ class WorkItemModel:
         ``accept`` is blocked (Plan 014 WI-2) because the gate cannot run
         off-regista.
 
-        ``same_lineage_acknowledged`` passes through to the regista validator
-        for the explicit same-lineage-review case.
+        On the native path, positive verdicts run the reviewer independence
+        check (Plan 026 D2). ``acknowledgement`` is the recorded same-lineage
+        override, and ``attempt_id`` applies a validated delegated review as
+        the reviewer. On the regista path, a non-empty ``acknowledgement``
+        passes through as regista's same-lineage flag.
         """
         if transition_name not in cls._REVIEW_TRANSITION_TO_STATUS:
             raise ValueError(
@@ -312,13 +316,15 @@ class WorkItemModel:
                 identifier,
                 transition_name,
                 review_note,
-                same_lineage_acknowledged,
+                bool(acknowledgement),
             )
         return _native.review_transition(
             project_id,
             identifier,
             transition_name,
             review_note,
+            acknowledgement=acknowledgement,
+            attempt_id=attempt_id,
         )
 
     # ------------------------------------------------------------------

@@ -70,7 +70,7 @@ _SESSION_SELECT = """
            s.wake_policy, s.wake_policy_explicit, s.trust, s.auto_continues,
            s.auto_continue_at,
            EXTRACT(EPOCH FROM now() - s.auto_continue_at)::float8 AS auto_continue_age,
-           s.started_at, s.last_seen_at
+           s.model, s.started_at, s.last_seen_at
     FROM agent_sessions s
     LEFT JOIN projects p ON p.id = s.project_id
 """
@@ -318,6 +318,7 @@ def register_session(
     paseo_agent_id: str | None = None,
     trust: str | None = None,
     replace_location: bool = True,
+    model: str | None = None,
     conn: psycopg.Connection | None = None,
 ) -> dict:
     """Upsert a session and heartbeat it.
@@ -344,11 +345,11 @@ def register_session(
             f"""
             INSERT INTO agent_sessions
                 (session_key, workspace_id, vm_id, harness, session_id, paseo_agent_id,
-                 project_id, cwd, wake_policy, trust)
+                 project_id, cwd, wake_policy, trust, model)
             VALUES (%(key)s, %(ws)s, %(vm)s, %(harness)s, %(sid)s, %(paseo)s,
                     %(proj)s, %(cwd)s,
                     CASE WHEN %(paseo)s::text IS NULL THEN 'none' ELSE 'direct' END,
-                    COALESCE(%(trust)s, 'normal'))
+                    COALESCE(%(trust)s, 'normal'), %(model)s)
             ON CONFLICT (session_key) DO UPDATE SET
                 workspace_id = COALESCE(
                     (SELECT p.workspace_id FROM projects p WHERE p.id = {proj_expr}),
@@ -364,6 +365,7 @@ def register_session(
                     ELSE 'none'
                 END,
                 trust = COALESCE(%(trust)s, agent_sessions.trust),
+                model = COALESCE(EXCLUDED.model, agent_sessions.model),
                 last_seen_at = now()
             """,  # noqa: S608 - the two expressions are fixed literals chosen above
             {
@@ -376,6 +378,7 @@ def register_session(
                 "proj": project_id,
                 "cwd": cwd,
                 "trust": trust,
+                "model": model,
             },
         )
         conn.commit()

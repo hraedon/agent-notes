@@ -532,6 +532,16 @@ def reconcile_entity(
         # No create op in the merged chain — nothing to reconcile.
         return None
 
+    # Plan 026 D2.4: no reconcile while an item is in review. Remote ops are
+    # folded in memory and only the merged state is written, so the review
+    # gate can't see who changed or approved what.
+    local_status = (fold_work_item_state(conn, entity_id) or {}).get("status")
+    if local_status in ("in_review", "in_human_review"):
+        raise ValueError(
+            f"{state['identifier']!r} is {local_status}; reconcile it after review "
+            "completes (Plan 026 D2.4)"
+        )
+
     parent_op_ids = [op["op_id"] for op in merged_ops]
     merge_payload = {
         "merged_state": {

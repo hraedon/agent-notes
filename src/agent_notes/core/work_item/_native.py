@@ -9,6 +9,7 @@ original ``WorkItemModel`` native branches unless noted.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 import psycopg
@@ -24,7 +25,7 @@ from agent_notes.core.lifecycle import (
     transition_for as _lifecycle_transition_for,
 )
 
-from . import _common, _seal
+from . import _common, _independence, _seal
 
 KIND = "work_item"
 ENTITY_TYPE = "work_item"
@@ -80,6 +81,7 @@ def file_work_item(
             "embedding": embedding,
             "frontmatter_version": frontmatter_version,
         }
+        payload = _independence.authored(payload, _independence.resolve_producer(conn))
 
         # The entity_id is the hash of the create op itself.
         entity_id = kernel._make_op_id(ENTITY_TYPE, "create", payload, [])
@@ -150,6 +152,7 @@ def update_work_item(
     actor_id = face_factory.write_actor().actor_id
     workspace_id = _common.resolve_workspace_for_project(conn, project_id)
     _seal.seal_for_write(conn, project_id, identifier, actor_id)
+    producer = _independence.resolve_producer(conn)
     cur = conn.cursor(row_factory=dict_row)
     cur.execute(
         "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
@@ -203,12 +206,34 @@ def update_work_item(
         # regista would run the gate.
         if not force:
             _lifecycle_transition_for(old["status"], status)
+        # ``changed_at`` keeps the op_id unique when a status is revisited
+        # (op_ids are content hashes), e.g. resubmitting for review after a
+        # bounce; ``close`` does the same with ``closed_at``.
+        status_payload: dict = {
+            "status": status,
+            "changed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        # Plan 026 D2.4: a move out of review is a review verdict, whichever
+        # command makes it. It's marked as one, so it never counts its author
+        # as an implementer, and a bounce back to in_progress resets them.
+        verdict = _independence.review_transition_for(old["status"], status)
+        if verdict is not None:
+            status_payload["review_transition"] = verdict
+        if _independence.gated(old["status"], status):
+            if payload:
+                raise _independence.IndependenceError(
+                    "approving review work and editing the item in one update isn't "
+                    "allowed: make the edit first, then approve it separately"
+                )
+            status_payload["independence"] = _independence.check(
+                conn, entity_id, _independence.process_reviewer(conn, actor_id)
+            )
         status_op = kernel.commit_op(
             conn,
             entity_id=entity_id,
             entity_type=ENTITY_TYPE,
             op_type="set_status",
-            payload={"status": status},
+            payload=_independence.authored(status_payload, producer),
             parent_op_ids=[old["entity_id"]],  # simplistic parent chaining
             actor_id=actor_id,
         )
@@ -232,7 +257,7 @@ def update_work_item(
             entity_id=entity_id,
             entity_type=ENTITY_TYPE,
             op_type="set_field",
-            payload=payload,
+            payload=_independence.authored(payload, producer),
             parent_op_ids=[entity_id],
             actor_id=actor_id,
         )
@@ -325,16 +350,23 @@ def close_work_item(
         entity_id = old["entity_id"]
         # ``closed_at`` keeps the op_id unique when an item is reopened and
         # closed again (op_ids are content hashes of payload + parents).
+        close_payload: dict = {
+            "status": "done",
+            "transition": "close",
+            "closed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if _independence.gated(state, "done"):
+            # Plan 026 D2.4: closing an item in review completes the review.
+            close_payload["review_transition"] = "accept"
+            close_payload["independence"] = _independence.check(
+                conn, entity_id, _independence.process_reviewer(conn, actor_id)
+            )
         op = kernel.commit_op(
             conn,
             entity_id=entity_id,
             entity_type=ENTITY_TYPE,
             op_type="set_status",
-            payload={
-                "status": "done",
-                "transition": "close",
-                "closed_at": datetime.now(timezone.utc).isoformat(),
-            },
+            payload=_independence.authored(close_payload, _independence.resolve_producer(conn)),
             parent_op_ids=[entity_id],
             actor_id=actor_id,
         )
@@ -385,12 +417,20 @@ def close_work_item_force(
 
         entity_id = old["entity_id"]
         force_close_payload: dict = {"reason": "manual_close"}
+        if _independence.gated(old["status"], "closed"):
+            # Plan 026 D2.4: forcing doesn't skip the review gate.
+            force_close_payload["review_transition"] = "accept"
+            force_close_payload["independence"] = _independence.check(
+                conn, entity_id, _independence.process_reviewer(conn, actor_id)
+            )
         op = kernel.commit_op(
             conn,
             entity_id=entity_id,
             entity_type=ENTITY_TYPE,
             op_type="close",
-            payload=force_close_payload,
+            payload=_independence.authored(
+                force_close_payload, _independence.resolve_producer(conn)
+            ),
             parent_op_ids=[entity_id],
             actor_id=actor_id,
         )
@@ -466,7 +506,10 @@ def attest_gate_waiver(
             entity_id=entity_id,
             entity_type=ENTITY_TYPE,
             op_type="set_field",
-            payload={"diagnostic_keys": {"gate_attestation": attestation}},
+            payload=_independence.authored(
+                {"diagnostic_keys": {"gate_attestation": attestation}},
+                _independence.resolve_producer(conn),
+            ),
             parent_op_ids=[entity_id],
             actor_id=actor.actor_id,
         )
@@ -506,8 +549,16 @@ def review_transition(
     identifier: str,
     transition_name: str,
     review_note: str,
+    acknowledgement: str | None = None,
+    attempt_id: str | None = None,
 ) -> dict:
     """Native review transition — stores the note and moves the status.
+
+    Positive verdicts (``adversarial_pass``, ``accept``) run the reviewer
+    independence check (Plan 026 D2). The reviewer is the running process, or
+    a validated delegated review when ``attempt_id`` is given (D2.7), which
+    is then consumed. ``acknowledgement`` is the recorded same-lineage
+    override (D2.6). Negative verdicts are findings and stay ungated.
 
     The status transition is written as a ``set_status`` op whose payload
     includes the ``review_note`` (making the op_id unique — the op-log
@@ -536,22 +587,38 @@ def review_transition(
 
         _lifecycle_transition_for(old["status"], target_status)
 
+        producer = _independence.resolve_producer(conn)
         # Write the set_status op with review_note in the payload so the
         # op_id is unique (avoids collision on revisited statuses).
-        status_payload = {
+        status_payload: dict = {
             "status": target_status,
             "review_transition": transition_name,
             "review_note": review_note,
         }
+        reviewer = None
+        if transition_name in _independence.POSITIVE_TRANSITIONS:
+            if attempt_id:
+                reviewer = _independence.attempt_reviewer(
+                    conn, attempt_id, project_id=project_id, entity_id=entity_id
+                )
+            else:
+                reviewer = {"actor_id": actor.actor_id, **producer}
+            status_payload["independence"] = _independence.check(
+                conn, entity_id, reviewer, acknowledgement=acknowledgement
+            )
+        elif attempt_id:
+            raise ValueError("--attempt applies only to pass and accept")
         status_op = kernel.commit_op(
             conn,
             entity_id=entity_id,
             entity_type=ENTITY_TYPE,
             op_type="set_status",
-            payload=status_payload,
+            payload=_independence.authored(status_payload, producer),
             parent_op_ids=[entity_id],
             actor_id=actor.actor_id,
         )
+        if reviewer is not None:
+            _independence.consume_attempt(conn, reviewer, transition_name, status_op["op_id"])
         kernel.emit_event(
             conn,
             op_id=status_op["op_id"],
@@ -584,7 +651,10 @@ def review_transition(
             entity_id=entity_id,
             entity_type=ENTITY_TYPE,
             op_type="set_field",
-            payload={"diagnostic_keys": merged_diag},
+            payload=_independence.authored(
+                {"diagnostic_keys": merged_diag, "review_transition": transition_name},
+                producer,
+            ),
             parent_op_ids=[entity_id],
             actor_id=actor.actor_id,
         )
@@ -648,15 +718,21 @@ def claim_work_item(
             raise ValueError(f"Work item {identifier!r} is already claimed")
 
         # Write claim op
+        producer = _independence.resolve_producer(conn)
         op = kernel.commit_op(
             conn,
             entity_id=entity_id,
             entity_type=ENTITY_TYPE,
             op_type="claim",
-            payload={
-                "actor_id": stamped_actor,
-                "ttl_seconds": ttl_seconds,
-            },
+            payload=_independence.authored(
+                {
+                    "actor_id": stamped_actor,
+                    "ttl_seconds": ttl_seconds,
+                    # Unique op_id when the same actor claims again later.
+                    "claimed_at": datetime.now(timezone.utc).isoformat(),
+                },
+                producer,
+            ),
             parent_op_ids=[entity_id],
             actor_id=stamped_actor,
         )
@@ -680,7 +756,7 @@ def claim_work_item(
             entity_id=entity_id,
             entity_type=ENTITY_TYPE,
             op_type="set_status",
-            payload={"status": "claimed"},
+            payload=_independence.authored({"status": "claimed"}, producer),
             parent_op_ids=[op["op_id"]],
             actor_id=stamped_actor,
         )
@@ -738,6 +814,7 @@ def release_work_item(
             raise ValueError(f"Work item not found: {identifier!r} in project {project_id}")
 
         entity_id = old["entity_id"]
+        producer = _independence.resolve_producer(conn)
 
         # Write release op
         op = kernel.commit_op(
@@ -745,7 +822,13 @@ def release_work_item(
             entity_id=entity_id,
             entity_type=ENTITY_TYPE,
             op_type="release",
-            payload={"actor_id": stamped_actor},
+            payload=_independence.authored(
+                {
+                    "actor_id": stamped_actor,
+                    "released_at": datetime.now(timezone.utc).isoformat(),
+                },
+                producer,
+            ),
             parent_op_ids=[entity_id],
             actor_id=stamped_actor,
         )
@@ -756,15 +839,19 @@ def release_work_item(
             (entity_id,),
         )
 
-        kernel.commit_op(
-            conn,
-            entity_id=entity_id,
-            entity_type=ENTITY_TYPE,
-            op_type="set_status",
-            payload={"status": "open"},
-            parent_op_ids=[op["op_id"]],
-            actor_id=stamped_actor,
-        )
+        # Releasing gives up a claim. It never reopens an item that has moved
+        # on (in progress, in review, done): that would let an implementer
+        # take an item out of review and close it ungated (Plan 026 D2.4).
+        if old["status"] == "claimed":
+            kernel.commit_op(
+                conn,
+                entity_id=entity_id,
+                entity_type=ENTITY_TYPE,
+                op_type="set_status",
+                payload=_independence.authored({"status": "open"}, producer),
+                parent_op_ids=[op["op_id"]],
+                actor_id=stamped_actor,
+            )
 
         kernel.emit_event(
             conn,

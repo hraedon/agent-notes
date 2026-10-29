@@ -28,9 +28,10 @@ When reviewing an agent-notes work item, use the CLI to read the item, inspect t
   producer lineage: `agent-notes work-item review pass|request-changes|reject <id> --path <repo-path> --note "..." --json`
 
 Use `AGENT_NOTES_ACTOR_ID=agent:reviewer-glm` and
-`REGISTA_PRODUCER_MODEL_LINEAGE=glm` in the process environment so the
-cross-lineage gate can distinguish you from the author. If you share a lineage
-with the author, add `--same-lineage-acknowledged` and justify it in the note.
+`AGENT_NOTES_MODEL=ollama-cloud/glm-5.2` in the process environment so the
+review gate knows your model lineage and can tell you apart from the
+implementers. If you share a lineage with them, the gate refuses `pass` and
+`accept`; override only with `--same-lineage-acknowledged "<reason>"`.
 
 Focus on:
 - Issues that are easy to overlook: subtle logic errors, implicit assumptions, missing null checks

@@ -66,6 +66,23 @@ class HookInput:
     session_id: str | None
     cwd: str | None
     paseo_agent_id: str | None = None
+    model: str | None = None  # the session's active model, when the harness reports it
+
+
+def model_name(value: object) -> str | None:
+    """A hook payload's model field as a plain identifier, or ``None``.
+
+    Claude Code may send a string or an object with an ``id``; others send a
+    string. Anything else, or an implausible value, is ignored.
+    """
+    if isinstance(value, Mapping):
+        value = value.get("id") or value.get("name")
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value or len(value) > 200 or "\x00" in value:
+        return None
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +275,7 @@ def ensure_session(conn: Any, inp: HookInput, *, full: bool = False) -> dict | N
         project_id=project_id,
         cwd=inp.cwd,
         paseo_agent_id=inp.paseo_agent_id,
+        model=inp.model,
         conn=conn,
     )
 
