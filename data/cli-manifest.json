@@ -579,6 +579,27 @@
       "aliases": []
     },
     {
+      "name": "review request",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "review show",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "review list",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
       "name": "contract",
       "aliases": [],
       "mutability": "read-only",

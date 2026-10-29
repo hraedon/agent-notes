@@ -1,0 +1,28 @@
+[Unit]
+Description=agent-notes dispatcher (Plan 025: Paseo L3 wake and review jobs)
+Documentation=file:///projects/agent-notes/docs/dispatcher.md
+After=network-online.target
+Wants=network-online.target
+
+# A systemd *user* unit: install as ~/.config/systemd/user/agent-notes-dispatch.service,
+# then `systemctl --user daemon-reload && systemctl --user enable --now agent-notes-dispatch`.
+# Run `loginctl enable-linger $USER` once so it runs without a login session.
+# The DSN comes from ~/.config/agent-notes/config.json (or AGENT_NOTES_DSN); put
+# everything else in dispatch.env (see docs/dispatcher.md). Never put secrets here.
+
+[Service]
+Type=simple
+EnvironmentFile=-%h/.config/agent-notes/dispatch.env
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/bin/agent-notes-dispatch
+Restart=on-failure
+RestartSec=5s
+# Exit 3: no usable VM ID (set AGENT_NOTES_VM); restarting won't fix it.
+RestartPreventExitStatus=3
+# A review job's reviewer runs in its own session; control-group kill stops it
+# with the dispatcher. Interrupted requests are answered on the next start.
+KillMode=control-group
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

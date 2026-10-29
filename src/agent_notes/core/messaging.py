@@ -828,6 +828,69 @@ def claim_requests(vm: str, *, limit: int = 1, claimer: str | None = None) -> li
     return sorted((dict(r) for r in rows), key=lambda r: r["id"])
 
 
+def claim_message(message_id: int, claimer: str) -> dict | None:
+    """Claim one unclaimed, unexpired message by ID (the dispatcher's L3 wake).
+
+    Returns the claimed row, or ``None`` if someone else got there first.
+    """
+    with _conn() as conn:
+        row = conn.execute(
+            f"""
+            UPDATE agent_messages SET claimed_by = %s, claimed_at = now()
+            WHERE id = %s AND claimed_by IS NULL AND kind <> 'notice'
+              AND expires_at > now()
+            RETURNING {_MESSAGE_COLUMNS}
+            """,  # noqa: S608 - column list is a module constant
+            (claimer, message_id),
+        ).fetchone()
+        conn.commit()
+    return dict(row) if row else None
+
+
+def replies_to(message_id: int) -> list[dict]:
+    """Every reply to a message, oldest first (``review show``)."""
+    with _conn() as conn:
+        rows = conn.execute(
+            f"SELECT {_MESSAGE_COLUMNS} FROM agent_messages "  # noqa: S608
+            "WHERE reply_to = %s AND kind = 'reply' ORDER BY id",
+            (message_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_requests(
+    workspace_id: int,
+    *,
+    job: str | None = None,
+    from_session: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """Recent ``request`` rows, newest first, each with ``reply_id`` (or None)."""
+    conditions = ["m.kind = 'request'", "m.workspace_id = %s"]
+    params: list[Any] = [workspace_id]
+    if job is not None:
+        conditions.append("m.payload->>'job' = %s")
+        params.append(job)
+    if from_session is not None:
+        conditions.append("m.from_session = %s")
+        params.append(from_session)
+    columns = ", ".join(f"m.{c.strip()}" for c in _MESSAGE_COLUMNS.split(","))
+    with _conn() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT {columns},
+                   (SELECT min(r.id) FROM agent_messages r
+                    WHERE r.reply_to = m.id AND r.kind = 'reply') AS reply_id
+            FROM agent_messages m
+            WHERE {" AND ".join(conditions)}
+            ORDER BY m.id DESC
+            LIMIT %s
+            """,  # noqa: S608 - fixed fragments and a module constant
+            [*params, limit],
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def await_message(
     session: str | None,
     *,
