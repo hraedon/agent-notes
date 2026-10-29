@@ -8,6 +8,7 @@ import json
 import sys
 
 from agent_notes import codex_lifecycle as lifecycle
+from agent_notes.hooks import common
 
 
 def _session_payload(tmp_path, **extra):
@@ -39,7 +40,15 @@ def _stop_payload(tmp_path, **extra):
     }
 
 
+def _no_store(monkeypatch) -> None:
+    def unavailable():
+        raise RuntimeError("store unavailable")
+
+    monkeypatch.setattr(common, "connect", unavailable)
+
+
 def test_session_start_injects_only_bounded_orientation(monkeypatch, tmp_path) -> None:
+    _no_store(monkeypatch)
     monkeypatch.setattr(
         lifecycle,
         "_orientation_for_cwd",
@@ -61,6 +70,7 @@ def test_session_start_injects_only_bounded_orientation(monkeypatch, tmp_path) -
 
 
 def test_session_start_unregistered_or_unavailable_never_blocks(monkeypatch, tmp_path) -> None:
+    _no_store(monkeypatch)
     monkeypatch.setattr(lifecycle, "_orientation_for_cwd", lambda _cwd: None)
     assert lifecycle.run_session_start(_session_payload(tmp_path)) == {"continue": True}
 
@@ -127,24 +137,22 @@ def test_orientation_freshness_is_visible_without_exposing_handoff_text() -> Non
     assert "must-not-enter-hook" not in context
 
 
-def test_stop_reconciles_once_and_never_requests_continuation(monkeypatch, tmp_path) -> None:
-    calls = []
-    monkeypatch.setattr(lifecycle, "_reconcile_cwd", lambda cwd: calls.append(cwd))
+def test_stop_without_a_store_never_requests_continuation(monkeypatch, tmp_path) -> None:
+    def unavailable():
+        raise RuntimeError("dsn=postgresql://user:password@example.invalid/db")
 
+    monkeypatch.setattr(common, "connect", unavailable)
     assert lifecycle.run_stop(_stop_payload(tmp_path)) == {"continue": True}
-    assert calls == [tmp_path]
-
     assert lifecycle.run_stop(_stop_payload(tmp_path, stop_hook_active=True)) == {"continue": True}
-    assert calls == [tmp_path]
 
 
 def test_stop_failure_and_malformed_input_always_emit_valid_json(
     monkeypatch, capsys, tmp_path
 ) -> None:
-    def fail(_cwd):
+    def fail():
         raise RuntimeError("password=must-not-escape")
 
-    monkeypatch.setattr(lifecycle, "_reconcile_cwd", fail)
+    monkeypatch.setattr(common, "connect", fail)
     assert lifecycle.run_stop(_stop_payload(tmp_path)) == {"continue": True}
 
     monkeypatch.setattr(sys, "stdin", io.StringIO("not-json"))
@@ -153,7 +161,8 @@ def test_stop_failure_and_malformed_input_always_emit_valid_json(
     assert json.loads(capsys.readouterr().out) == {"continue": True}
 
 
-def test_wrong_event_and_relative_cwd_are_non_blocking(tmp_path) -> None:
+def test_wrong_event_and_relative_cwd_are_non_blocking(monkeypatch, tmp_path) -> None:
+    _no_store(monkeypatch)
     assert lifecycle.run_session_start(_session_payload(tmp_path, hook_event_name="Stop")) == {
         "continue": True
     }

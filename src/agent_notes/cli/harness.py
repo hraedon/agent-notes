@@ -81,7 +81,10 @@ _OPENCODE_AGENT_FILES: tuple[str, ...] = (
 EXIT_DRY_RUN = 2
 
 _STABLE_HARNESS_TARGETS = ("claude", "opencode")
-_CANDIDATE_HARNESS_TARGETS = ("codex",)
+# Codex and agy join `all` only on machines where the harness is present
+# (its home directory exists); see _targets_for. Their hooks are inert until
+# trusted (Codex /hooks) and are hash-owned like everything else.
+_CANDIDATE_HARNESS_TARGETS = ("codex", "agy")
 _PRIVATE_HARNESS_TARGETS = ("hermes",)
 _HARNESS_TARGETS = _STABLE_HARNESS_TARGETS + _CANDIDATE_HARNESS_TARGETS + _PRIVATE_HARNESS_TARGETS
 
@@ -324,6 +327,11 @@ def _codex_home(home: Path | None = None) -> Path:
     return Path(env) if env else Path.home() / ".codex"
 
 
+def _agy_config_dir(home: Path | None = None) -> Path:
+    """Antigravity's global customization root, ``~/.gemini/config``."""
+    return (home or Path.home()) / ".gemini" / "config"
+
+
 def _harness_paths(harness: str, home: Path | None = None) -> dict[str, Path]:
     """Return the config/skill/manifest/agent paths for a harness target."""
     resolved = home or Path.home()
@@ -360,6 +368,18 @@ def _harness_paths(harness: str, home: Path | None = None) -> dict[str, Path]:
         return {
             "skills_dest": resolved / ".agents" / "skills",
             "config": base / "config.toml",  # never written; present for shape
+            "manifest": base / MANIFEST_FILENAME,
+            "agent_config": agent_config,
+            "agents_dest": base / "agents",
+            "hooks": base / "hooks.json",
+        }
+    if harness == "agy":
+        # Antigravity's global customization root (bundled agy-customizations
+        # docs): named hooks in hooks.json, skills as skills/<name>/SKILL.md.
+        base = _agy_config_dir(home)
+        return {
+            "skills_dest": base / "skills",
+            "config": base / "config.json",  # never written; present for shape
             "manifest": base / MANIFEST_FILENAME,
             "agent_config": agent_config,
             "agents_dest": base / "agents",
@@ -427,53 +447,47 @@ def _normalize_hook_hashes(raw: object) -> dict[str, str | None]:
     return _normalize_hash_map(raw)
 
 
-def _hook_group_has_command(group: object, command: str) -> bool:
+def _hook_group_has_command(group: object, command: str | tuple[str, ...]) -> bool:
+    commands = (command,) if isinstance(command, str) else command
     if not isinstance(group, dict):
         return False
     handlers = group.get("hooks")
     if not isinstance(handlers, list):
         return False
     return any(
-        isinstance(handler, dict) and handler.get("command") == command for handler in handlers
+        isinstance(handler, dict) and handler.get("command") in commands for handler in handlers
     )
 
 
-def _wire_codex_hooks(
-    hooks_path: Path,
-    dry_run: bool,
+def _merge_owned_groups(
+    hooks: dict,
+    canonical_groups: dict[str, dict],
     prev_hashes: dict[str, str | None],
+    *,
+    label: str,
+    legacy_commands: dict[str, tuple[str, ...]] | None = None,
 ) -> tuple[list[dict], dict[str, str], list[str], bool]:
-    """Merge only agent-notes' two matcher groups into a shared hooks file.
+    """Merge one owned matcher group per event into a harness ``hooks`` object.
 
-    A same-command group without prior hash ownership is a conflict even when
-    byte-equivalent.  This mirrors skill ownership: compatibility is not proof
-    that a later uninstall may delete another installer's entry.
+    Shared by the Codex ``hooks.json`` and Claude ``settings.json`` wiring. A
+    group is ours when it runs our command (or a command an earlier version
+    installed) *and* the manifest recorded it. A same-command group without
+    prior hash ownership is a conflict even when byte-equivalent.  This
+    mirrors skill ownership: compatibility is not proof that a later uninstall
+    may delete another installer's entry.
     """
-    from agent_notes.codex_lifecycle import canonical_hook_groups
-
-    existed_before = hooks_path.is_file()
-    document = _load_json(hooks_path)
-    raw_hooks = document.get("hooks", {})
-    if not isinstance(raw_hooks, dict):
-        raise RuntimeError(f"{hooks_path} has a non-object 'hooks' value; refusing to overwrite")
-    hooks = raw_hooks
-    document["hooks"] = hooks
-
+    legacy_commands = legacy_commands or {}
     actions: list[dict] = []
     owned_hashes: dict[str, str] = {}
     conflicts: list[str] = []
     changed = False
-    for event, canonical in canonical_hook_groups().items():
-        command = canonical["hooks"][0]["command"]
+    for event, canonical in canonical_groups.items():
+        commands = (str(canonical["hooks"][0]["command"]), *legacy_commands.get(event, ()))
         groups = hooks.get(event, [])
         if not isinstance(groups, list):
-            raise RuntimeError(
-                f"{hooks_path} has a non-array hooks.{event} value; refusing to overwrite"
-            )
+            raise RuntimeError(f"non-array hooks.{event} value; refusing to overwrite")
         candidates = [
-            index
-            for index, group in enumerate(groups)
-            if _hook_group_has_command(group, str(command))
+            index for index, group in enumerate(groups) if _hook_group_has_command(group, commands)
         ]
         canonical_hash = _json_hash(canonical)
         status: str
@@ -485,7 +499,7 @@ def _wire_codex_hooks(
             changed = True
         elif len(candidates) > 1:
             status = "conflict"
-            conflicts.append(f"Codex {event} hook: duplicate same-command groups, preserved")
+            conflicts.append(f"{label} {event} hook: duplicate same-command groups, preserved")
             if event in prev_hashes and prev_hashes[event] is not None:
                 owned_hashes[event] = str(prev_hashes[event])
         else:
@@ -495,7 +509,7 @@ def _wire_codex_hooks(
             if event not in prev_hashes:
                 status = "conflict"
                 conflicts.append(
-                    f"Codex {event} hook: pre-existing and not owned by agent-notes, preserved"
+                    f"{label} {event} hook: pre-existing and not owned by agent-notes, preserved"
                 )
             elif current_hash == canonical_hash:
                 status = "unchanged"
@@ -503,7 +517,7 @@ def _wire_codex_hooks(
             elif prev_hashes[event] is not None and current_hash != prev_hashes[event]:
                 status = "conflict"
                 owned_hashes[event] = str(prev_hashes[event])
-                conflicts.append(f"Codex {event} hook: locally modified, preserved")
+                conflicts.append(f"{label} {event} hook: locally modified, preserved")
             else:
                 groups[index] = canonical
                 hooks[event] = groups
@@ -511,15 +525,107 @@ def _wire_codex_hooks(
                 status = "updated"
                 changed = True
 
-        action = _act(
-            "merge_json",
-            [f"hooks.{event}"],
-            f"install Codex {event} lifecycle hook ({status})",
-            status=status,
+        actions.append(
+            _act(
+                "merge_json",
+                [f"hooks.{event}"],
+                f"install {label} {event} lifecycle hook ({status})",
+                status=status,
+            )
         )
-        action["path"] = str(hooks_path)
-        actions.append(action)
+    return actions, owned_hashes, conflicts, changed
 
+
+def _remove_owned_groups(
+    hooks: dict,
+    canonical_groups: dict[str, dict],
+    recorded_hashes: dict[str, str | None],
+    *,
+    label: str,
+    legacy_commands: dict[str, tuple[str, ...]] | None = None,
+) -> tuple[list[dict], dict[str, str], list[str], bool]:
+    """Remove only unchanged, hash-owned agent-notes matcher groups."""
+    legacy_commands = legacy_commands or {}
+    actions: list[dict] = []
+    preserved: dict[str, str] = {}
+    warnings: list[str] = []
+    changed = False
+    for event in recorded_hashes:
+        canonical = canonical_groups.get(event)
+        current_command = (str(canonical["hooks"][0]["command"]),) if canonical else ()
+        known = current_command + legacy_commands.get(event, ())
+        groups = hooks.get(event, [])
+        if not isinstance(groups, list):
+            if recorded_hashes[event] is not None:
+                preserved[event] = str(recorded_hashes[event])
+            warnings.append(f"{label} {event} hook: malformed event group, preserved")
+            continue
+        candidates = [
+            index for index, group in enumerate(groups) if _hook_group_has_command(group, known)
+        ]
+        matching = [
+            index
+            for index in candidates
+            if recorded_hashes[event] is None or _json_hash(groups[index]) == recorded_hashes[event]
+        ]
+        if len(matching) == 1:
+            groups.pop(matching[0])
+            if groups:
+                hooks[event] = groups
+            else:
+                hooks.pop(event, None)
+            actions.append(
+                _act(
+                    "remove_key",
+                    [f"hooks.{event}"],
+                    f"removed owned {label} {event} lifecycle hook",
+                )
+            )
+            changed = True
+        elif not candidates:
+            # Already absent is safe and needs no retained ownership record.
+            continue
+        else:
+            if recorded_hashes[event] is not None:
+                preserved[event] = str(recorded_hashes[event])
+            warnings.append(f"{label} {event} hook: modified or duplicated, preserved")
+            actions.append(
+                _act(
+                    "skip_key",
+                    [f"hooks.{event}"],
+                    f"{label} {event} lifecycle hook modified or duplicated, preserved",
+                    status="conflict",
+                )
+            )
+    return actions, preserved, warnings, changed
+
+
+def _wire_codex_hooks(
+    hooks_path: Path,
+    dry_run: bool,
+    prev_hashes: dict[str, str | None],
+) -> tuple[list[dict], dict[str, str], list[str], bool]:
+    """Merge only agent-notes' matcher groups into Codex's shared hooks file."""
+    from agent_notes.codex_lifecycle import LEGACY_COMMANDS, canonical_hook_groups
+
+    existed_before = hooks_path.is_file()
+    document = _load_json(hooks_path)
+    raw_hooks = document.get("hooks", {})
+    if not isinstance(raw_hooks, dict):
+        raise RuntimeError(f"{hooks_path} has a non-object 'hooks' value; refusing to overwrite")
+    document["hooks"] = raw_hooks
+    try:
+        actions, owned_hashes, conflicts, changed = _merge_owned_groups(
+            raw_hooks,
+            canonical_hook_groups(),
+            prev_hashes,
+            label="Codex",
+            legacy_commands=LEGACY_COMMANDS,
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(f"{hooks_path} has a {exc}") from exc
+    for action in actions:
+        action["path"] = str(hooks_path)
     if changed and not dry_run:
         _save_json(hooks_path, document)
     return actions, owned_hashes, conflicts, not existed_before
@@ -532,7 +638,7 @@ def _unwire_codex_hooks(
     remove_created_file: bool,
 ) -> tuple[list[dict], dict[str, str], list[str]]:
     """Remove only unchanged, hash-owned agent-notes matcher groups."""
-    from agent_notes.codex_lifecycle import canonical_hook_groups
+    from agent_notes.codex_lifecycle import LEGACY_COMMANDS, canonical_hook_groups
 
     if not recorded_hashes:
         return [], {}, []
@@ -544,61 +650,15 @@ def _unwire_codex_hooks(
             {event: value for event, value in recorded_hashes.items() if value is not None},
             ["Codex hooks: malformed shared hooks object, preserved"],
         )
-
-    actions: list[dict] = []
-    preserved: dict[str, str] = {}
-    warnings: list[str] = []
-    changed = False
-    for event, canonical in canonical_hook_groups().items():
-        if event not in recorded_hashes:
-            continue
-        command = canonical["hooks"][0]["command"]
-        groups = raw_hooks.get(event, [])
-        if not isinstance(groups, list):
-            if recorded_hashes[event] is not None:
-                preserved[event] = str(recorded_hashes[event])
-            warnings.append(f"Codex {event} hook: malformed event group, preserved")
-            continue
-        candidates = [
-            index
-            for index, group in enumerate(groups)
-            if _hook_group_has_command(group, str(command))
-        ]
-        matching = [
-            index
-            for index in candidates
-            if recorded_hashes[event] is None or _json_hash(groups[index]) == recorded_hashes[event]
-        ]
-        if len(matching) == 1:
-            groups.pop(matching[0])
-            if groups:
-                raw_hooks[event] = groups
-            else:
-                raw_hooks.pop(event, None)
-            action = _act(
-                "remove_key",
-                [f"hooks.{event}"],
-                f"removed owned Codex {event} lifecycle hook",
-            )
-            action["path"] = str(hooks_path)
-            actions.append(action)
-            changed = True
-        elif not candidates:
-            # Already absent is safe and needs no retained ownership record.
-            continue
-        else:
-            if recorded_hashes[event] is not None:
-                preserved[event] = str(recorded_hashes[event])
-            warnings.append(f"Codex {event} hook: modified or duplicated, preserved")
-            action = _act(
-                "skip_key",
-                [f"hooks.{event}"],
-                f"Codex {event} lifecycle hook modified or duplicated, preserved",
-                status="conflict",
-            )
-            action["path"] = str(hooks_path)
-            actions.append(action)
-
+    actions, preserved, warnings, changed = _remove_owned_groups(
+        raw_hooks,
+        canonical_hook_groups(),
+        recorded_hashes,
+        label="Codex",
+        legacy_commands=LEGACY_COMMANDS,
+    )
+    for action in actions:
+        action["path"] = str(hooks_path)
     if changed:
         document["hooks"] = raw_hooks
         if remove_created_file and not raw_hooks and set(document) == {"hooks"}:
@@ -606,6 +666,145 @@ def _unwire_codex_hooks(
         else:
             _save_json(hooks_path, document)
     return actions, preserved, warnings
+
+
+# ---------------------------------------------------------------------------
+# Claude Code lifecycle hooks (Plan 025 Phase 4)
+# ---------------------------------------------------------------------------
+
+
+def _claude_orient_hook_warnings(settings: dict) -> list[str]:
+    """Name ``agent-notes orient`` SessionStart hooks we don't own."""
+    from agent_notes.hooks.claude import ORIENT_COMMAND_PREFIX
+
+    hooks = settings.get("hooks")
+    groups = hooks.get("SessionStart") if isinstance(hooks, dict) else None
+    found: list[str] = []
+    for group in groups if isinstance(groups, list) else []:
+        handlers = group.get("hooks") if isinstance(group, dict) else None
+        for handler in handlers if isinstance(handlers, list) else []:
+            command = handler.get("command") if isinstance(handler, dict) else None
+            if isinstance(command, str) and command.strip().startswith(ORIENT_COMMAND_PREFIX):
+                found.append(command)
+    return [
+        f"settings.json SessionStart already runs {command!r}; the agent-notes-hook "
+        "SessionStart skips its orient summary while that hook exists. Remove it to "
+        "let agent-notes-hook own orientation"
+        for command in found
+    ]
+
+
+def _wire_claude_hooks(
+    settings: dict, prev_hashes: dict[str, str | None]
+) -> tuple[list[dict], dict[str, str], list[str], bool]:
+    """Merge the owned Claude hook groups into ``settings['hooks']`` (in memory)."""
+    from agent_notes.hooks.claude import claude_hook_groups
+
+    hooks = settings.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        raise RuntimeError("settings.json has a non-object 'hooks' value; refusing to overwrite")
+    try:
+        return _merge_owned_groups(hooks, claude_hook_groups(), prev_hashes, label="Claude")
+    except RuntimeError as exc:
+        raise RuntimeError(f"settings.json has a {exc}") from exc
+
+
+def _unwire_claude_hooks(
+    settings: dict, recorded_hashes: dict[str, str | None]
+) -> tuple[list[dict], dict[str, str], list[str], bool]:
+    """Remove the owned Claude hook groups from ``settings['hooks']`` (in memory)."""
+    from agent_notes.hooks.claude import claude_hook_groups
+
+    if not recorded_hashes:
+        return [], {}, [], False
+    hooks = settings.get("hooks", {})
+    if not isinstance(hooks, dict):
+        preserved = {k: v for k, v in recorded_hashes.items() if v is not None}
+        return [], preserved, ["Claude hooks: malformed settings hooks object, preserved"], False
+    actions, preserved, warnings, changed = _remove_owned_groups(
+        hooks, claude_hook_groups(), recorded_hashes, label="Claude"
+    )
+    if changed and not hooks:
+        settings.pop("hooks", None)
+    return actions, preserved, warnings, changed
+
+
+# ---------------------------------------------------------------------------
+# Antigravity (agy) named hook (Plan 025 Phase 4)
+# ---------------------------------------------------------------------------
+
+
+def _wire_agy_hook(
+    hooks_path: Path, dry_run: bool, prev_hash: str | None, owned_before: bool
+) -> tuple[list[dict], str | None, list[str], bool]:
+    """Merge the named ``agent-notes`` hook into ``~/.gemini/config/hooks.json``.
+
+    agy's file is a JSON object of named hooks, so ownership is one hashed
+    key. Returns ``(actions, owned_hash, conflicts, file_created)``.
+    """
+    from agent_notes.hooks.agy import HOOK_NAME, agy_hook_entry
+
+    existed_before = hooks_path.is_file()
+    document = _load_json(hooks_path)
+    canonical = agy_hook_entry()
+    canonical_hash = _json_hash(canonical)
+    conflicts: list[str] = []
+    owned: str | None = None
+    changed = False
+    current = document.get(HOOK_NAME)
+    if current is None:
+        document[HOOK_NAME] = canonical
+        owned, status, changed = canonical_hash, "created", True
+    elif not owned_before:
+        status = "conflict"
+        conflicts.append(f"agy hook {HOOK_NAME!r}: pre-existing and not owned by agent-notes")
+    elif _json_hash(current) == canonical_hash:
+        owned, status = canonical_hash, "unchanged"
+    elif prev_hash is not None and _json_hash(current) != prev_hash:
+        owned, status = prev_hash, "conflict"
+        conflicts.append(f"agy hook {HOOK_NAME!r}: locally modified, preserved")
+    else:
+        document[HOOK_NAME] = canonical
+        owned, status, changed = canonical_hash, "updated", True
+    action = _act(
+        "merge_json",
+        [HOOK_NAME],
+        f"install agy {HOOK_NAME} lifecycle hooks ({status})",
+        status=status,
+    )
+    action["path"] = str(hooks_path)
+    if changed and not dry_run:
+        _save_json(hooks_path, document)
+    return [action], owned, conflicts, not existed_before
+
+
+def _unwire_agy_hook(
+    hooks_path: Path, recorded_hash: str | None, *, remove_created_file: bool
+) -> tuple[list[dict], str | None, list[str]]:
+    """Remove the named hook if unchanged. Returns ``(actions, preserved_hash, warnings)``."""
+    from agent_notes.hooks.agy import HOOK_NAME
+
+    document = _load_json(hooks_path)
+    current = document.get(HOOK_NAME)
+    if current is None:
+        return [], None, []
+    if recorded_hash is not None and _json_hash(current) != recorded_hash:
+        action = _act(
+            "skip_key",
+            [HOOK_NAME],
+            f"agy {HOOK_NAME} hook modified, preserved",
+            status="conflict",
+        )
+        action["path"] = str(hooks_path)
+        return [action], recorded_hash, [f"agy hook {HOOK_NAME!r}: modified, preserved"]
+    document.pop(HOOK_NAME)
+    if remove_created_file and not document:
+        hooks_path.unlink(missing_ok=True)
+    else:
+        _save_json(hooks_path, document)
+    action = _act("remove_key", [HOOK_NAME], f"removed owned agy {HOOK_NAME} hook")
+    action["path"] = str(hooks_path)
+    return [action], None, []
 
 
 # ---------------------------------------------------------------------------
@@ -674,7 +873,7 @@ def _install_skills(
     for src in skills:
         name = src.parent.name
         src_content = src.read_text(encoding="utf-8")
-        if target in ("claude", "hermes", "codex"):
+        if target in ("claude", "hermes", "codex", "agy"):
             dest = dest_root / name / "SKILL.md"
             payload = src_content
         else:
@@ -1025,8 +1224,7 @@ def _install_opencode_plugin(
     """
     if not (src / "index.js").is_file() or not (src / "package.json").is_file():
         raise RuntimeError(
-            f"OpenCode 2 plugin package not found at {src} "
-            "(expected index.js and package.json)."
+            f"OpenCode 2 plugin package not found at {src} (expected index.js and package.json)."
         )
 
     actions: list[dict] = []
@@ -1059,9 +1257,7 @@ def _install_opencode_plugin(
     return actions, installed_now, warns
 
 
-def _wire_plugin(
-    opencode_cfg: dict, dry_run: bool
-) -> tuple[list[dict], bool, bool]:
+def _wire_plugin(opencode_cfg: dict, dry_run: bool) -> tuple[list[dict], bool, bool]:
     """Register the V2 plugin directory and migrate the obsolete V1 entry.
 
     Returns ``(actions, registered_now, already_present)``. Only entries this
@@ -1212,7 +1408,7 @@ def _install_harness_one(
             continue
         sf = (
             skills_dest / name / "SKILL.md"
-            if harness in ("claude", "hermes", "codex")
+            if harness in ("claude", "hermes", "codex", "agy")
             else skills_dest / f"{name}.md"
         )
         if sf.is_file():
@@ -1242,7 +1438,7 @@ def _install_harness_one(
     # --- config + env + plugin ---
     # Hermes config is a .env file and Codex's is TOML — neither is JSON, and
     # Codex config is never touched at all (Decision 4), so skip the JSON load.
-    config = _load_json(config_path) if harness not in ("hermes", "codex") else {}
+    config = _load_json(config_path) if harness not in ("hermes", "codex", "agy") else {}
     config_actions: list[dict] = []
     installed_hook_hashes: dict[str, str] = {}
     hooks_file_created = bool(prev.get("hooks_file_created", False))
@@ -1266,6 +1462,14 @@ def _install_harness_one(
                 if k not in env_managed and k in env_block:
                     env_managed.append(k)
         warns += w
+        # Plan 025 Phase 4: user-level SessionStart / UserPromptSubmit / Stop.
+        hook_actions, installed_hook_hashes, hook_conflicts, _ = _wire_claude_hooks(
+            config, prev_hook_hashes
+        )
+        for a in hook_actions:
+            a["path"] = str(config_path)
+        config_actions += hook_actions
+        warns += hook_conflicts + _claude_orient_hook_warnings(config)
         if not dry_run and config:
             _save_json(config_path, config)
     elif harness == "hermes":
@@ -1304,6 +1508,21 @@ def _install_harness_one(
         config_actions += hook_actions
         warns += hook_conflicts
         hooks_file_created = hooks_file_created or created_now
+    elif harness == "agy":
+        # agy: skills plus one named hook in ~/.gemini/config/hooks.json. No
+        # env is written; hooks read the agent-notes config file like the CLI.
+        from agent_notes.hooks.agy import HOOK_NAME
+
+        agy_actions, agy_hash, agy_conflicts, created_now = _wire_agy_hook(
+            paths["hooks"],
+            dry_run,
+            prev_hook_hashes.get(HOOK_NAME),
+            HOOK_NAME in prev_hook_hashes,
+        )
+        config_actions += agy_actions
+        warns += agy_conflicts
+        installed_hook_hashes = {HOOK_NAME: agy_hash} if agy_hash else {}
+        hooks_file_created = hooks_file_created or (created_now and agy_hash is not None)
     else:  # opencode
         # env -> agent-notes config file (the harness-independent fallback)
         agent_cfg = _load_json(agent_config_path)
@@ -1366,9 +1585,11 @@ def _install_harness_one(
             "skills": skill_hashes,
             "plugin": plugin_managed,
         }
-        if harness == "codex":
+        if harness in ("codex", "agy"):
             manifest_payload["hooks"] = installed_hook_hashes
             manifest_payload["hooks_file_created"] = hooks_file_created
+        if harness == "claude":
+            manifest_payload["hooks"] = installed_hook_hashes
         if harness == "opencode":
             manifest_payload["agents"] = installed_agent_hashes
         _write_manifest(
@@ -1426,8 +1647,7 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
         plugins = oc_cfg.get("plugins", [])
         legacy = oc_cfg.get("plugin", [])
         if (isinstance(plugins, list) and OPENCODE_PLUGIN_ENTRY in plugins) or (
-            isinstance(legacy, list)
-            and any(_is_legacy_opencode_plugin_entry(p) for p in legacy)
+            isinstance(legacy, list) and any(_is_legacy_opencode_plugin_entry(p) for p in legacy)
         ):
             manifest["plugin"] = True
 
@@ -1441,11 +1661,29 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
         )
         actions += hook_actions
         warns += hook_warnings
+    elif harness == "agy":
+        from agent_notes.hooks.agy import HOOK_NAME
+
+        recorded = _normalize_hook_hashes(manifest.get("hooks", {}))
+        if HOOK_NAME in recorded:
+            hook_actions, kept_hash, hook_warnings = _unwire_agy_hook(
+                paths["hooks"],
+                recorded[HOOK_NAME],
+                remove_created_file=bool(manifest.get("hooks_file_created", False)),
+            )
+            actions += hook_actions
+            warns += hook_warnings
+            if kept_hash is not None:
+                preserved_hooks[HOOK_NAME] = kept_hash
 
     # --- remove env keys ---
     env_keys: list[str] = manifest.get("env_keys", [])
     if harness == "claude":
         settings = _load_json(paths["config"])
+        hook_actions, preserved_hooks, hook_warnings, hooks_changed = _unwire_claude_hooks(
+            settings, _normalize_hook_hashes(manifest.get("hooks", {}))
+        )
+        warns += hook_warnings
         env_block = settings.get("env", {})
         if isinstance(env_block, dict):
             for key in env_keys:
@@ -1454,7 +1692,10 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
                     a = _act("remove_key", [f"env.{key}"], "removed env var")
                     a["path"] = str(paths["config"])
                     actions.append(a)
-        if actions:
+        for a in hook_actions:
+            a["path"] = str(paths["config"])
+        actions += hook_actions
+        if hooks_changed or any(a["kind"] == "remove_key" for a in actions):
             _save_json(paths["config"], settings)
     elif harness == "hermes":
         # Hermes .env: remove the sentinel-wrapped managed block entirely.
@@ -1578,7 +1819,7 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
     preserved_skills: dict[str, str] = {}
     skills_dest = paths["skills_dest"]
     for name, recorded_hash in skill_hashes.items():
-        if harness in ("claude", "hermes", "codex"):
+        if harness in ("claude", "hermes", "codex", "agy"):
             skill_file = skills_dest / name / "SKILL.md"
         else:
             skill_file = skills_dest / f"{name}.md"
@@ -1599,7 +1840,7 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
             # Clean up empty parent dir (claude/hermes/codex lay out <name>/SKILL.md).
             parent = skill_file.parent
             if (
-                harness in ("claude", "hermes", "codex")
+                harness in ("claude", "hermes", "codex", "agy")
                 and parent.is_dir()
                 and not any(parent.iterdir())
             ):
@@ -1621,9 +1862,11 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
         }
         if harness == "opencode" and preserved_agents:
             reduced["agents"] = preserved_agents
-        if harness == "codex" and preserved_hooks:
+        if harness in ("codex", "agy") and preserved_hooks:
             reduced["hooks"] = preserved_hooks
             reduced["hooks_file_created"] = bool(manifest.get("hooks_file_created", False))
+        if harness == "claude" and preserved_hooks:
+            reduced["hooks"] = preserved_hooks
         _write_manifest(paths["manifest"], reduced)
     else:
         _remove_manifest(paths["manifest"])
@@ -1647,9 +1890,21 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
 # ---------------------------------------------------------------------------
 
 
-def _targets_for(harness: str) -> list[str]:
+def _harness_detected(harness: str, home: Path | None = None) -> bool:
+    """True when a candidate harness is present on this machine (``all``)."""
+    if harness == "codex":
+        return _codex_home(home).is_dir()
+    if harness == "agy":
+        return _agy_config_dir(home).parent.is_dir()
+    return True
+
+
+def _targets_for(harness: str, home: Path | None = None) -> list[str]:
     if harness == "all":
-        return list(_STABLE_HARNESS_TARGETS)
+        # Stable targets always; Codex and agy where installed (Plan 025 Phase 4).
+        return list(_STABLE_HARNESS_TARGETS) + [
+            t for t in _CANDIDATE_HARNESS_TARGETS if _harness_detected(t, home)
+        ]
     if harness in _HARNESS_TARGETS:
         return [harness]
     return []
@@ -1665,10 +1920,10 @@ def cmd_install_harness(args: argparse.Namespace) -> int:
     dest = Path(args.dest) if getattr(args, "dest", None) else None
     home = Path(args.home) if getattr(args, "home", None) else None
 
-    targets = _targets_for(harness)
+    targets = _targets_for(harness, home)
     if not targets:
         print(
-            f"Unknown harness: {harness!r} (expected: claude|opencode|codex|hermes|all)",
+            f"Unknown harness: {harness!r} (expected: claude|opencode|codex|agy|hermes|all)",
             file=sys.stderr,
         )
         return EXIT_GENERIC
@@ -1744,7 +1999,7 @@ def register_harness_parser(sub: argparse._SubParsersAction) -> None:
     )
     # harness is validated in cmd_install_harness (not via choices=) so an
     # unknown value exits 1 (failure) per the contract, not argparse's 2.
-    p.add_argument("harness", help="claude | opencode | codex | hermes | all")
+    p.add_argument("harness", help="claude | opencode | codex | agy | hermes | all")
     p.add_argument(
         "--dry-run",
         action="store_true",
