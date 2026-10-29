@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -113,13 +112,9 @@ class ResolvedSession:
 
 
 def _resolve_vm_id() -> str:
-    # Phase 3 private fallback. On merge with Phase 2, replace with
-    # core.config.resolve_vm_id (which also reads suite.env and refuses
-    # generated hostnames).
-    vm = os.environ.get("AGENT_NOTES_VM")
-    if vm and vm.strip():
-        return vm.strip()
-    return socket.gethostname().split(".", 1)[0].lower()
+    from agent_notes.core.config import resolve_vm_id as _config_resolve_vm_id
+
+    return _config_resolve_vm_id()
 
 
 def resolve_vm_id() -> str:
