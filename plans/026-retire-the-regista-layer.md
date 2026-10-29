@@ -470,6 +470,37 @@ lineage.
   - Attempts with no `item_lamport` (planned before migration 860) are
     refused as unverifiable rather than judged by timestamp.
   - The reviewer found no other blocker or major issue.
+- **Deployed 2026-10-29 (`d6da05f`).**
+  - Database: backed up to
+    `/mnt/bulk/agent-notes-backups/agent_notes-pre-860-20261029T194546Z.dump`,
+    then migration 860 was applied.
+  - mvmcc02, Windows (`shodan`) and `mvmhermes01` reinstalled from `main`.
+    - Windows now installs from `C:\projects\agent-notes`, mvmcc02 from
+      `/projects/agent-notes`, and mvmhermes01 from `~/agent-notes-025`
+      (moved to `main`).
+    - mvmhermes01 needed `uv tool install --reinstall`. With an unchanged path
+      and version, uv reuses its cached build.
+    - On Windows, `Stop-ScheduledTask` doesn't stop the dispatcher's wrapper
+      script, and the running dispatcher locked the tool directory. The first
+      reinstall failed partway; it took about 2 minutes to recover.
+  - Skills refreshed on every harness.
+    - agy was deliberately **not** newly wired on Windows: whether agy hooks
+      work there is still unverified (Plan 025 Phase 0).
+  - Hindsight configuration was also still live on mvmhermes01, which the
+    D6 audit missed. It's now retired there too (same backups suffix).
+  - Dispatchers restarted.
+  - **Production checks.**
+    - A Codex session's hook registered `gpt-6.1-sol` in `agent_sessions.model`.
+    - Smoke item WI-083:
+      - filed by a GPT implementer;
+      - a same-family pass was refused with `VALIDATION_FAILED`, naming the
+        implementer;
+      - a Claude pass moved it to `in_human_review`;
+      - the item was then deleted.
+    - `doctor` is healthy on mvmcc02 and mvmhermes01.
+    - Windows showed the doctor's Codex probe failing with
+      `FileNotFoundError` (an npm `.cmd` shim launched by bare name). That is
+      fixed in the commit after the deploy.
 - **Latent bug surfaced and fixed.** `update`'s `set_status` payload was just
   `{"status": ...}`. Revisiting a status, for example resubmitting for review
   after a bounce, by the same actor collided on the content-addressed op ID.

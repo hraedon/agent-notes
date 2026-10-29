@@ -685,7 +685,8 @@ def _probe_codex_agent_notes_plugin() -> tuple[str, str]:
     import shutil
     import subprocess
 
-    if shutil.which("codex") is None:
+    codex = shutil.which("codex")
+    if codex is None:
         return "absent", "Codex CLI not installed"
     # An unfiltered list can wait on unrelated remote marketplaces. Query the
     # configured agent-notes sources directly so local readiness remains local.
@@ -710,7 +711,9 @@ def _probe_codex_agent_notes_plugin() -> tuple[str, str]:
     installed: list[object] = []
     try:
         for market in markets or [None]:
-            command = ["codex", "plugin", "list", "--json"]
+            # The resolved path: on Windows ``codex`` is an npm ``.cmd`` shim
+            # that subprocess can't launch by its bare name.
+            command = [codex, "plugin", "list", "--json"]
             if market is not None:
                 command.extend(["--marketplace", market])
             completed = subprocess.run(command, capture_output=True, text=True, timeout=15)
