@@ -36,49 +36,6 @@ _PRODUCER_ENV_KEYS = (
 )
 
 
-def shape_valid_delegation(*, subject_principal_id: str) -> dict:
-    """A structurally parseable action-delegation document.
-
-    The signature is inert zeros — ``parse_action_delegation`` checks shape,
-    not cryptography; the chain is verified by regista at write time. This is
-    for refusal-path tests only (checks that run before any verification,
-    like the terminal-subject match or the reconciliation credential-hash
-    comparison), never for a write that must be accepted as delegated.
-    """
-
-    import base64
-    import uuid as _uuid
-    from datetime import datetime, timedelta, timezone
-
-    now = datetime.now(timezone.utc)
-    fmt = "%Y-%m-%dT%H:%M:%S.%fZ"
-    return {
-        "type": "regista.action-delegation",
-        "version": 1,
-        "credential_id": str(_uuid.uuid4()),
-        "trust_domain_id": str(_uuid.uuid4()),
-        "issuer_principal_id": "human:operator",
-        "subject_principal_id": subject_principal_id,
-        "issuer_key_id": "pk_test",
-        "issuer_key_binding_event_hash": "sha256:" + "ab" * 32,
-        "parent_credential_hash": None,
-        "scope": {
-            "project_instance_ids": [str(_uuid.uuid4())],
-            "entity_kinds": ["work_item"],
-            "workflow_names": ["canonical"],
-            "transitions": ["amend"],
-        },
-        "not_before": (now - timedelta(hours=1)).strftime(fmt),
-        "not_after": (now + timedelta(hours=1)).strftime(fmt),
-        "max_uses": None,
-        "delegation_allowed": False,
-        "signature": {
-            "scheme_id": "ed25519",
-            "value": base64.b64encode(b"\x00" * 64).decode("ascii"),
-        },
-    }
-
-
 @pytest.fixture(autouse=True, scope="session")
 def _hermetic_config(tmp_path_factory):
     """Hermetic config isolation for the test session.

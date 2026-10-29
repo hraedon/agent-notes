@@ -7,10 +7,12 @@ Cross-layer checks ensure the status vocabulary stays in sync:
    ``lifecycle.IS_TERMINAL``/``IS_OPEN``, and every lifecycle state must be
    present in the vocab. This catches a missed SQL seed edit.
 
-2. **lifecycle.VALID_TRANSITIONS vs canonical.workflow.yaml** (no DB) —
-   every non-amend transition in the YAML must appear in
-   ``VALID_TRANSITIONS`` and vice versa. This catches a missed transition
-   table edit when the workflow YAML changes.
+2. **lifecycle.VALID_TRANSITIONS vs the canonical workflow** (no DB) —
+   every non-amend transition of the canonical workflow must appear in
+   ``VALID_TRANSITIONS`` and vice versa. The workflow is frozen below from
+   regista 0.7.2's ``canonical.workflow.yaml`` (version 3), vendored when the
+   regista dependency was dropped (Plan 026 D3), so an accidental edit to the
+   transition table still fails here.
 
 These guards MUST run in the default CI job. The "can't miss a surface"
 guarantee is only real if the consistency tests actually execute on every
@@ -23,8 +25,6 @@ import os
 
 import psycopg
 import pytest
-import regista
-import yaml
 from psycopg.rows import dict_row
 
 from agent_notes.core import lifecycle
@@ -97,21 +97,30 @@ def test_db_vocab_has_no_extra_statuses():
 # ---------------------------------------------------------------------------
 
 
+# regista 0.7.2 ``canonical.workflow.yaml`` (name ``canonical``, version 3),
+# every transition except the ``amend`` self-transitions, which are field-only
+# events rather than status changes.
+_CANONICAL_WORKFLOW_TRANSITIONS: dict[tuple[str, str], str] = {
+    ("open", "in_progress"): "start",
+    ("deferred", "in_progress"): "start",
+    ("in_progress", "blocked"): "block",
+    ("blocked", "in_progress"): "unblock",
+    ("open", "deferred"): "defer",
+    ("in_progress", "deferred"): "defer",
+    ("deferred", "open"): "resume",
+    ("in_progress", "in_review"): "submit_for_review",
+    ("in_review", "in_human_review"): "adversarial_pass",
+    ("in_review", "in_progress"): "request_changes",
+    ("in_human_review", "done"): "accept",
+    ("in_human_review", "in_progress"): "reject",
+    ("done", "open"): "reopen",
+    ("open", "done"): "close_from_open",
+}
+
+
 def _extract_workflow_transitions():
-    """Parse the canonical workflow YAML and return (from, to) -> name for
-    non-amend transitions."""
-    yaml_text = regista.canonical_workflow_yaml()
-    wf = yaml.safe_load(yaml_text)
-    transitions = {}
-    for t in wf.get("transitions", []):
-        name = t["name"]
-        frm = t["from"]
-        to = t["to"]
-        if name == "amend":
-            # Amend self-transitions are field-only events, not status changes.
-            continue
-        transitions[(frm, to)] = name
-    return transitions
+    """Return (from, to) -> name for the canonical workflow's transitions."""
+    return dict(_CANONICAL_WORKFLOW_TRANSITIONS)
 
 
 def test_valid_transitions_match_workflow_yaml():

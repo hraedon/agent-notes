@@ -141,6 +141,49 @@ def test_removed_regista_dsn_alone_does_not_satisfy_native(monkeypatch, tmp_path
     assert "REGISTA_DSN" not in exc_info.value.args[0]
 
 
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "env:AN_DSN",
+        "ENV:AN_DSN",
+        "file:/etc/an-dsn",
+        "literal:an-sentinel",
+        "vault:secret/an#dsn",
+        "azure:an-sentinel",
+    ],
+)
+@pytest.mark.parametrize("source", ["explicit", "env", "suite", "file"])
+def test_secret_ref_dsn_is_a_retired_setting(monkeypatch, tmp_path, ref, source):
+    """Plan 026 D3 dropped secret-backend refs with regista: every DSN source
+    refuses one by name, without echoing the configured value."""
+    monkeypatch.setenv("AN_DSN", "postgresql://would-have-resolved/x")
+    explicit = None
+    if source == "explicit":
+        explicit = ref
+    elif source == "env":
+        monkeypatch.setenv("AGENT_NOTES_DSN", ref)
+    elif source == "suite":
+        (tmp_path / "suite.env").write_text(f"AGENT_NOTES_DSN={ref}\n")
+    else:
+        _write_config(tmp_path, monkeypatch, ref)
+
+    with pytest.raises(config.RetiredSettingError) as exc_info:
+        config.resolve_dsn(explicit)
+
+    message = str(exc_info.value)
+    assert message.startswith("RETIRED_SETTING: ")
+    assert f"{ref.split(':', 1)[0].lower()}: secret-backend ref" in message
+    assert ref.split(":", 1)[1] not in message
+
+
+@pytest.mark.parametrize(
+    "dsn", ["postgresql://u:p@h/db", "postgres://h/db", "host=h dbname=db password=a:b"]
+)
+def test_literal_dsn_passes_through(monkeypatch, tmp_path, dsn):
+    monkeypatch.setenv("AGENT_NOTES_DSN", dsn)
+    assert config.resolve_dsn() == dsn
+
+
 def test_malformed_config_raises(monkeypatch, tmp_path):
     cfg = tmp_path / "config.json"
     cfg.write_text("{not valid json")

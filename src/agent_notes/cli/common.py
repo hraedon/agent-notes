@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from agent_notes.core.errors import ErrorCode
     from agent_notes.core.memory_model import ScopeRef
 
 EXIT_SUCCESS = 0
@@ -19,13 +20,11 @@ EXIT_CONFLICT = 4
 def exception_detail(exc: BaseException) -> dict | None:
     """Extract the structured ``detail`` dict from an exception chain (WI-050).
 
-    regista's review validators raise ``ReviewRejected`` carrying a ``detail``
-    dict with exactly the facts an operator needs to act (``reviewer_lineage``,
-    ``author_lineages``, ``agent_author_undeclared``, ...). By the time the CLI
-    sees it, the hook runner has wrapped it in a ``RegistaError`` whose own
-    ``detail`` is ``None`` — but the original exception survives as the cause.
-    Walk the chain and return the first non-empty ``detail`` dict, so the CLI
-    can surface it instead of discarding it.
+    A coded failure (``core.errors.AgentNotesError``) may carry a ``detail``
+    dict with exactly the facts an operator needs to act. A wrapper raised
+    ``from`` it can have no ``detail`` of its own while the original survives
+    as the cause, so walk the chain and return the first non-empty ``detail``
+    dict, and the CLI surfaces it instead of discarding it.
     """
     seen: set[int] = set()
     node: BaseException | None = exc
@@ -39,7 +38,7 @@ def exception_detail(exc: BaseException) -> dict | None:
 
 
 def emit_error(
-    code: str,
+    code: ErrorCode | str,
     message: str,
     *,
     use_json: bool,
@@ -52,7 +51,10 @@ def emit_error(
     Under ``--json`` the common error envelope is the single stdout
     document; otherwise the human message goes to *stderr*. The numeric
     exit codes keep agent-notes' decision-52 taxonomy (2/3/4) for
-    compatibility; the envelope's ``code`` carries the stable semantic.
+    compatibility; the envelope's ``code`` carries the stable semantic. Every
+    ``code`` is a ``core.errors.ErrorCode`` value (``tests/test_error_envelope.py``
+    enforces it for string literals); a member and its string literal render
+    identically.
 
     ``detail`` may be a dict (WI-050: e.g. a review validator's rejection
     facts). The envelope schema types ``error.detail`` as string-or-null

@@ -31,14 +31,12 @@ jobs:
           path: ~/.cache/huggingface
           key: hf-${{ runner.os }}-nomic-embed-text-v1.5
 
-      # Develop-against-lock (Plan 019 B2): dev-install reads SUITE.lock (the
-      # single source of truth for what to develop against) and installs regista
-      # at the pinned released version — regista-hraedon==<[spine].version> — not
-      # a hardcoded pin or a sibling @main. Same install shape as local `make dev`.
-      # regista's floor and the conformance kit (agent-suite-conformance==1.0.0,
-      # Plan 019 B1) come from the [test] extra dev-install installs.
-      - name: Install dependencies (against the SUITE.lock substrate — Plan 019 B2)
-        run: python scripts/dev-install.py
+      # A plain editable install (Plan 026 D3 dropped regista and SUITE.lock).
+      # The conformance kit (agent-suite-conformance, Plan 019 B1) comes from
+      # the [test] extra. ruff is pinned to a range so a new release can't turn
+      # CI red on unchanged code.
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install "ruff>=0.5,<0.16" -e ".[test]"
 
       - name: Lint
         run: ruff check src/ tests/
@@ -79,7 +77,7 @@ jobs:
 
   # Plan 003 WI-5.1 — prove agent-notes imports and unit tests pass on native
   # Windows. Postgres-dependent tests (testcontainers) skip cleanly when Docker
-  # is unavailable; unit tests (config, secrets, lifecycle, etc.) run
+  # is unavailable; unit tests (config, lifecycle, etc.) run
   # without a DB.
   windows-test:
     runs-on: windows-latest
@@ -92,23 +90,11 @@ jobs:
           python-version: "3.13"
           cache: pip
 
-      # Same develop-against-lock install shape as the Linux lane (Plan 019 B2);
-      # dev-install.py is pure-Python and runs identically on Windows.
-      - name: Install dependencies (against the SUITE.lock substrate — Plan 019 B2)
-        run: python scripts/dev-install.py
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install "ruff>=0.5,<0.16" -e ".[test]"
 
       - name: Lint
         run: ruff check src/ tests/
 
       - name: Test
         run: pytest --tb=short -q
-
-
-  # NOTE — deliberately no `uv lock --check` job here, unlike the rest of the
-  # suite. This repo's [tool.uv.sources] maps regista-hraedon to an editable
-  # ../regista sibling checkout for local development, so the committed
-  # uv.lock records `editable = "../regista"` — a path that does not exist in
-  # CI. `uv lock --check` therefore fails with "Distribution not found"
-  # regardless of whether the lock is actually current. The lock here is a
-  # developer convenience, not a reproducible CI input; CI resolves through
-  # scripts/dev-install.py against the SUITE.lock-pinned version instead.

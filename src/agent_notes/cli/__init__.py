@@ -117,30 +117,6 @@ def _remove_claude_stop_reconcile_hook(repo_root: str) -> tuple[str, bool, list[
     return settings_path, True, left
 
 
-def _cmd_retired_outbox(args: argparse.Namespace) -> int:
-    """No-op for the retired ``agent-notes outbox ...`` (Plan 026 D1).
-
-    Earlier ``init`` runs wired ``agent-notes outbox reconcile`` into
-    per-repo Claude ``Stop`` hooks. An unknown subcommand exits 2, and a
-    Claude Stop hook that exits 2 blocks the stop and feeds stderr back to the
-    model, so removing the noun outright would trap those sessions. This
-    hidden stub exits 0 instead. ``agent-notes init <repo>`` removes the hook;
-    delete this stub once no installed hook calls it.
-    """
-    print(
-        "agent-notes outbox: retired (Plan 026 D1); there is nothing to reconcile. "
-        "Run `agent-notes init <repo>` to remove this Stop hook.",
-        file=sys.stderr,
-    )
-    return EXIT_SUCCESS
-
-
-def _register_retired_outbox(sub: argparse._SubParsersAction) -> None:
-    parser = sub.add_parser("outbox", help=argparse.SUPPRESS, add_help=False)
-    parser.add_argument("rest", nargs=argparse.REMAINDER)
-    parser.set_defaults(func=_cmd_retired_outbox)
-
-
 def _checkout_vm_id() -> str | None:
     from agent_notes.core.config import VmIdError, resolve_vm_id
 
@@ -299,24 +275,6 @@ def cmd_doctor(use_json: bool, skip_embed: bool = False, check_embed: bool = Fal
     return doctor_run(skip_embed=skip_embed, check_embed=check_embed)
 
 
-def _configure_logging_stderr() -> None:
-    """Route all structlog output to stderr (suite CLI contract v1 §1).
-
-    regista (imported as a library) logs through structlog; unconfigured
-    structlog prints to stdout, which contaminates every ``--json``
-    consumer (WI-019's root cause). Configure explicitly at CLI entry so
-    the fix doesn't depend on which regista version is installed.
-    """
-    import sys
-
-    import structlog
-
-    structlog.configure(
-        wrapper_class=structlog.make_filtering_bound_logger(20),
-        logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
-    )
-
-
 def _resolved_version() -> str:
     """Return the installed distribution version for this package (WI-048).
 
@@ -405,7 +363,6 @@ def _cmd_contract() -> int:
 
 
 def main() -> int:
-    _configure_logging_stderr()
     parser = argparse.ArgumentParser(
         prog="agent-notes",
         description="agent-notes CLI — sync interface to breadcrumbs, memories, and search",
@@ -471,7 +428,6 @@ def main() -> int:
     register_orient_parser(sub)
     register_verify_parsers(sub)
     register_invariants_parsers(sub)
-    _register_retired_outbox(sub)
     register_msg_parsers(sub)
     register_session_parsers(sub)
     register_who_parser(sub)
@@ -525,21 +481,17 @@ def main() -> int:
 def _dispatch(func: Callable[[argparse.Namespace], int], args: argparse.Namespace) -> int:
     """Run a subcommand, keeping configuration failures legible (WI-049).
 
-    Actor, delegation and retired-setting failures are configuration gaps, not
-    not-found or validation results from the business operation, so they are
-    rendered as a named error envelope instead of a traceback. Everything else
-    re-raises unchanged.
+    Actor and retired-setting failures are configuration gaps, not not-found
+    or validation results from the business operation, so they are rendered as
+    a named error envelope instead of a traceback. Everything else re-raises
+    unchanged.
     """
-    from agent_notes.core.actor import ActorConfigurationError, DelegationConfigurationError
+    from agent_notes.core.actor import ActorConfigurationError
     from agent_notes.core.config import RetiredSettingError
 
     try:
         return func(args)
-    except (
-        ActorConfigurationError,
-        DelegationConfigurationError,
-        RetiredSettingError,
-    ) as exc:
+    except (ActorConfigurationError, RetiredSettingError) as exc:
         from agent_notes.cli.common import emit_error
 
         return emit_error(

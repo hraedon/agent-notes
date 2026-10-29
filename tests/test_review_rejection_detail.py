@@ -3,13 +3,14 @@
 The Plan 020 Linux qualification hit a cross-lineage gate rejection whose
 message listed three possible causes without saying which applied, while the
 ``detail`` dict that named the actual cause (``agent_author_undeclared=True``)
-was discarded: the CLI envelope printed ``"detail": null``. regista's
-``ReviewRejected`` carries the facts (``actor_id``, ``reviewer_lineage``,
-``author_lineages``, ...); the hook runner wraps it in a ``RegistaError`` whose
-own ``detail`` is ``None`` but whose ``__cause__`` is the original exception.
+was discarded: the CLI envelope printed ``"detail": null``. The rejection
+carried the facts (``actor_id``, ``reviewer_lineage``, ``author_lineages``,
+...), but a wrapper raised ``from`` it had no ``detail`` of its own; only its
+``__cause__`` did.
 
 These tests need no database: the review command handlers are driven with the
-model layer stubbed to raise exactly the exception shape regista produces.
+model layer stubbed to raise that exception shape. regista's ``RegistaError``
+was vendored as ``AgentNotesError`` (Plan 026 D3); the chain walk is the same.
 """
 
 from __future__ import annotations
@@ -18,12 +19,20 @@ import argparse
 import json
 
 import pytest
-from regista._errors import ErrorCode, RegistaError
-from regista._review_validators import ReviewRejected
 
 from agent_notes.cli import work_items
 from agent_notes.cli.common import exception_detail
+from agent_notes.core.errors import AgentNotesError, ErrorCode
 from agent_notes.core.work_item_model import WorkItemModel
+
+
+class _RejectedError(Exception):
+    """A validator-style rejection carrying its facts on ``detail``."""
+
+    def __init__(self, message: str, *, detail: dict | None = None) -> None:
+        super().__init__(message)
+        self.detail = detail
+
 
 _DETAIL = {
     "actor_id": "agent-qual",
@@ -33,26 +42,22 @@ _DETAIL = {
 }
 
 
-def _wrapped_rejection() -> RegistaError:
-    """Build the exception exactly as regista's hook runner raises it.
-
-    ``_hooks.py`` wraps any validator exception via ``raise RegistaError(...)
-    from e`` without forwarding ``e.detail`` — so the facts survive only on
-    ``__cause__``.
-    """
+def _wrapped_rejection() -> AgentNotesError:
+    """Wrap a rejection without forwarding its ``detail``: the facts survive
+    only on ``__cause__``."""
     try:
         try:
-            raise ReviewRejected(
+            raise _RejectedError(
                 "adversarial_review: the reviewer's model lineage is not "
                 "confirmed distinct from an author",
                 detail=dict(_DETAIL),
             )
-        except ReviewRejected as e:
-            raise RegistaError(
-                ErrorCode.VALIDATOR_FAILED,
+        except _RejectedError as e:
+            raise AgentNotesError(
+                ErrorCode.VALIDATION_FAILED,
                 f"Validator 'adversarial_review' failed: {e}",
             ) from e
-    except RegistaError as wrapped:
+    except AgentNotesError as wrapped:
         return wrapped
 
 
@@ -61,14 +66,14 @@ class TestExceptionDetail:
         assert exception_detail(_wrapped_rejection()) == _DETAIL
 
     def test_finds_detail_on_the_exception_itself(self):
-        exc = RegistaError(ErrorCode.VALIDATOR_FAILED, "boom", detail={"k": "v"})
+        exc = AgentNotesError(ErrorCode.VALIDATION_FAILED, "boom", detail={"k": "v"})
         assert exception_detail(exc) == {"k": "v"}
 
     def test_no_detail_anywhere_returns_none(self):
         assert exception_detail(ValueError("plain")) is None
 
     def test_empty_detail_dict_is_treated_as_absent(self):
-        exc = ReviewRejected("no facts", detail={})
+        exc = _RejectedError("no facts", detail={})
         assert exception_detail(exc) is None
 
 

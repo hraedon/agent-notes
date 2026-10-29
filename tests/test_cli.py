@@ -1364,28 +1364,6 @@ def test_export_index_refuses_when_repo_root_missing(default_project):
     assert "repo root" in data["error"]["message"].lower()
 
 
-def test_cli_configures_structlog_to_stderr(capsys):
-    """Stream discipline (suite CLI contract v1 §1): the CLI entry routes all
-    structlog output (regista's included) to stderr, so --json stdout stays
-    pure. WI-019's root cause was unconfigured structlog printing to stdout."""
-    import structlog
-
-    from agent_notes.cli import _configure_logging_stderr
-
-    structlog.reset_defaults()
-    try:
-        _configure_logging_stderr()
-        structlog.get_logger().warning("probe.event", k="v")
-        captured = capsys.readouterr()
-        assert captured.out == ""
-        assert "probe.event" in captured.err
-    finally:
-        # The configured factory captured pytest's replaced sys.stderr;
-        # leaving it bound would poison later tests once that stream is
-        # torn down. Reset to structlog's lazy defaults.
-        structlog.reset_defaults()
-
-
 def test_write_parsers_reject_identity_override_flags():
     """Identity is ambient v6 configuration, never a CLI override."""
     import argparse
@@ -1402,20 +1380,12 @@ def test_write_parsers_reject_identity_override_flags():
         parser.parse_args(["work-item", "file", "--title", "x", "--model-lineage", "glm"])
 
 
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ["outbox", "reconcile"],
-        ["outbox", "reconcile", "--json"],
-        ["outbox", "status", "--project", "x"],
-    ],
-)
-def test_retired_outbox_is_a_hidden_no_op(argv, monkeypatch, capsys):
-    """Per-repo Claude Stop hooks written by older ``init`` runs still call
-    ``agent-notes outbox reconcile``; it must exit 0, not argparse's 2, which
-    would block the Claude stop (Plan 026 D1)."""
+def test_outbox_is_no_longer_a_command(monkeypatch):
+    """The hidden ``outbox`` no-op went once every per-repo Stop hook calling
+    it was cleared (Plan 026 Phase 3): it is an unknown subcommand again."""
     import agent_notes.cli as cli_mod
 
-    monkeypatch.setattr(sys, "argv", ["agent-notes", *argv])
-    assert cli_mod.main() == 0
-    assert "retired" in capsys.readouterr().err
+    monkeypatch.setattr(sys, "argv", ["agent-notes", "outbox", "reconcile"])
+    with pytest.raises(SystemExit) as exc:
+        cli_mod.main()
+    assert exc.value.code == 2

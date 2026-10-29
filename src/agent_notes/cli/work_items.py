@@ -4,8 +4,6 @@ import argparse
 import json
 from typing import Any
 
-from regista._errors import RegistaError
-
 from agent_notes.cli.common import (
     EXIT_CONFLICT,
     EXIT_NOT_CONFIGURED,
@@ -21,6 +19,7 @@ from agent_notes.cli.common import (
 # Work items live only in repo projects: `--workspace` alone never selects the
 # workspace's `global` memory tier here (Plan 025 D3).
 from agent_notes.cli.common import resolve_repo_project as _resolve
+from agent_notes.core.errors import AgentNotesError
 from agent_notes.core.work_item._independence import IndependenceError
 
 
@@ -567,7 +566,7 @@ def cmd_wi_review_pass(args: argparse.Namespace) -> int:
             acknowledgement=_acknowledgement(args),
             attempt_id=getattr(args, "attempt", None),
         )
-    except (ValueError, RegistaError) as exc:
+    except (ValueError, AgentNotesError) as exc:
         return emit_error(
             "VALIDATION_FAILED",
             str(exc),
@@ -600,7 +599,7 @@ def cmd_wi_review_accept(args: argparse.Namespace) -> int:
             acknowledgement=_acknowledgement(args),
             attempt_id=getattr(args, "attempt", None),
         )
-    except (ValueError, RegistaError) as exc:
+    except (ValueError, AgentNotesError) as exc:
         return emit_error(
             "VALIDATION_FAILED",
             str(exc),
@@ -633,7 +632,7 @@ def cmd_wi_review_reject(args: argparse.Namespace) -> int:
             acknowledgement=_acknowledgement(args),
             attempt_id=getattr(args, "attempt", None),
         )
-    except (ValueError, RegistaError) as exc:
+    except (ValueError, AgentNotesError) as exc:
         return emit_error(
             "VALIDATION_FAILED",
             str(exc),
@@ -666,7 +665,7 @@ def cmd_wi_review_request_changes(args: argparse.Namespace) -> int:
             acknowledgement=_acknowledgement(args),
             attempt_id=getattr(args, "attempt", None),
         )
-    except (ValueError, RegistaError) as exc:
+    except (ValueError, AgentNotesError) as exc:
         return emit_error(
             "VALIDATION_FAILED",
             str(exc),

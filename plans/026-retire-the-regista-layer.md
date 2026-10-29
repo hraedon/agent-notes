@@ -555,13 +555,10 @@ lineage.
   backfill test file moved to `tests/test_native_seal.py`, with chainless
   rows built by direct SQL. Only the backfill's dry-run, report and
   import-unmirrored cases, and its own race test, were dropped.
-- **Kept on purpose.** A hidden `agent-notes outbox ...` no-op that exits 0.
-  41 per-repo `.claude/settings.json` files on mvmcc02 still run
-  `agent-notes outbox reconcile` at `Stop`; 26 without `|| true`. Without the
-  stub, argparse exits 2, which blocks a Claude stop. `agent-notes init <repo>`
-  removes the hook; delete the stub once none remain. The protocol in
-  `core/memory_engine.py` stays, because `native_engine`, `orient` and
-  `search` use its types.
+- **Kept on purpose.** A hidden `agent-notes outbox ...` no-op for the
+  per-repo Claude `Stop` hooks that still called it (removed in Phase 3, once
+  those hooks were cleared). The protocol in `core/memory_engine.py` stays,
+  because `native_engine`, `orient` and `search` use its types.
 
 ### 2026-10-29: Phases 2/2b deployed (`f5762a6`), with UTC log stamps (`f033221`)
 
@@ -588,7 +585,125 @@ lineage.
   - The Hermes `pre_llm_call` hook returns orientation with Hermes's own
     `PYTHONPATH` set.
 - **Still open from Phase 2's exit:**
-  - the week with `REGISTA_DSN` unset (no code reads it any more);
-  - deleting the `outbox` stub once `agent-notes init` has removed the 51
-    per-repo Stop hooks (41 on mvmcc02, 5 on Windows, 5 on mvmhermes01).
+  - the week with `REGISTA_DSN` unset (no code reads it any more).
 
+### 2026-10-29: Phase 3 (D3), not yet deployed
+
+- **Vendored.**
+  - **Principal grammar** → `core/actor.py`: `PRINCIPAL_KINDS` (closed set),
+    the subject regex, `principal_id_problem` (non-raising) and
+    `validate_principal_id`. It copies regista 0.7.2's `_principals` rules,
+    reasons, codes, messages and detail exactly. The messages still cite
+    `TRUST-DOMAIN.md` and the alias path; they were kept verbatim so the
+    envelope doesn't drift, and Phase 4's docs rewrite can revisit them.
+    - regista's own grammar cases are ported in
+      `tests/test_principal_grammar.py`.
+    - Before uninstalling regista, a differential run compared 3,403 values
+      (fuzzed kinds and subjects, length edges, non-ASCII, non-strings). Verdict,
+      code, message and detail matched on every one.
+  - **Error envelope** → new `core/errors.py`: `ErrorCode` (`StrEnum`, the 28
+    codes agent-notes emits, value = name) and `AgentNotesError` (regista's
+    `RegistaError` shape: `code`, `message`, `detail`, `[CODE] message`).
+    `core/envelope.py` is the op-log DSSE module, so the vocabulary went to a new
+    file. `emit_error` call sites keep their string literals; a member and its
+    literal serialize identically.
+    - `tests/fixtures/cli_error_envelopes.json` holds the `--json` stdout
+      captured at `bfff823` with regista installed, one sample per code. The
+      four identity and retired-setting codes were captured end to end through
+      `_dispatch` and the real actor path.
+    - `tests/test_error_envelope.py` compares post-change output byte for byte.
+      It also scans `src/` with `ast` and fails if a string code passed to
+      `emit_error`/`ScopeError`/`_CheckoutError`, or a `code =` on an
+      `*Error` class, is missing from `ErrorCode`.
+  - `test_lifecycle_consistency.py` read regista's `canonical_workflow_yaml()`.
+    Its 14 non-amend transitions (workflow `canonical`, version 3) are now
+    frozen in the test.
+- **Deleted, with host evidence** (read-only, 2026-10-29: mvmcc02 and
+  mvmhermes01 over SSH, plus Windows `shodan`; suite.env, `/etc/agent-suite`,
+  Claude, Codex, OpenCode and Hermes configs, agent-notes `config.json`, and the
+  Windows user and machine environment).
+  - **Action delegation.** `AGENT_NOTES_ACTION_DELEGATION_PATHS` appears on no
+    host, and since Phase 2 nothing consumed the loaded credentials. The loader,
+    `DelegationConfigurationError` and `Actor.action_delegation_credentials` are
+    gone; the setting is ignored.
+  - **Secret-backend refs.** Every DSN is a literal `postgresql://` URL: the
+    `dsn` in `config.json` on all three hosts, and `AGENT_NOTES_DSN` in
+    mvmhermes01's suite.env (not set elsewhere). `core/secrets.py` and its
+    tests are deleted. A DSN of the form `env:`, `file:`, `literal:`, `vault:`
+    or `azure:` now raises `RetiredSettingError` (`RETIRED_SETTING`), naming
+    the prefix but not the value. It's a `RuntimeError`, so callers that
+    already handled DSN errors still do. `materialize_key_manifest` had no
+    caller left.
+  - The structlog-to-stderr setup in `cli.main`: structlog came only with
+    regista.
+  - `SUITE.lock`, `scripts/dev-install.py`, `scripts/suite_lock.py`,
+    `scripts/check_suite_lock.py`, `docs/develop-against-lock.md`,
+    `tests/test_develop_against_lock.py`, the `[tool.uv.sources]` mapping, the
+    `packaging` test extra, and the `DEV_AGAINST`/`check-suite-lock` Makefile
+    targets. `make dev` is `uv pip install -e ".[test]"`, and both CI lanes
+    `pip install` the same way.
+  - `uv.lock` regenerated: it drops regista, structlog and jsonschema's
+    stack. uv 0.12 also rewrote the lock format (revision 3 → 5).
+  - `PyYAML` added as a declared dependency. `core/bc_files.py` imports it at
+    module level but got it only transitively.
+- **The `outbox` stub is removed.** All 51 per-repo Claude `Stop` hooks that
+  ran `agent-notes outbox reconcile` were cleared on 2026-10-29: the source fix
+  was pushed in 6 repos, and the rest were edited locally. A fresh scan of
+  mvmcc02, mvmhermes01 and Windows finds none, and no harness config, unit,
+  crontab or shipped hook, plugin, skill or integration calls `outbox`.
+  `agent-notes outbox ...` now exits 2 like any unknown subcommand.
+  `init`'s `_remove_claude_stop_reconcile_hook` and doctor's `legacy_outbox`
+  check stay as safety nets. Follow-ups:
+  - openbia, sluice and switchboard are archived on GitHub, so their history
+    keeps the hook; they were edited locally only.
+  - diagnostics-architect-curriculum (git.hraedon.com) was edited locally but
+    not pushed: mvmcc02 has no credentials for it.
+- **`cross_project` audit** (production, SELECT-only, read-only transaction):
+  - `cross_project_ops`, `cross_project_work_items`, `cross_project_links`,
+    `cross_project_freshness`: **0 rows each**. The view
+    `cross_project_reverse_edges_v` is empty too.
+  - `op_log` holds 5,344 ops, from 2026-06-08 to 2026-10-29: `create` 2,296,
+    `snapshot` 2,189, `close` 440, `set_field` 223, `set_status` 189,
+    `claim` 6, `heartbeat` 1. There are **no `request` or `wait` ops**,
+    in the last 90 days or ever.
+  - **Recommendation: remove**, in its own phase, after Phase 4. The P3
+    surface has never been used in production. It is `core/cross_project.py`
+    (517 lines), `core/work_item/_cross_project.py`, the
+    `work-item request|wait|link-cross|export-ops|ingest-ops` commands, the
+    cross-project leg of `ready`, and its references in `doctor`,
+    `trigger_loop` and `links`, plus `tests/test_cross_project.py` (781 lines).
+    The removal is not done here. It needs its own caller audit, a CLI-manifest
+    and skills update, and a forward migration that drops the four tables and
+    the view after a backup (D5's rule).
+- **Exit evidence.**
+  - Fresh venv (`.venv-fresh`, never had regista): `uv pip install -e ".[test]"`
+    succeeds; `regista` and `structlog` are not importable. 89 of 90 modules
+    import. The exception is `scripts/import_reflections`, which needs
+    `python-frontmatter`; that gap predates this phase and is the same with
+    regista installed.
+  - `--help` works for every console script. `agent-notes-bridge` and
+    `agent-notes-trigger-loop` exit 1 on missing configuration with or without
+    regista. `orient --json` with a `vault:` DSN prints the `RETIRED_SETTING`
+    envelope.
+  - `grep -rn regista src/` finds no import. What's left is environment
+    variable names, comments, docs strings, `regista.*` config-key cleanup in
+    `cli/harness.py`, and agent-notes' own `reject_regista_writes` /
+    `regista_writes_requested` helpers.
+  - Full suite in the fresh venv (`HOME=/tmp/emptyhome`): **1555 passed**,
+    2 skipped, and 1 failed: the known
+    `test_codex_doctor.py::test_plugin_probe_limits_query_to_configured_sources`
+    (7m43s). The baseline was 1501 passed. The difference is the new grammar,
+    envelope and DSN-ref tests, less the deleted secrets, lock and delegation
+    tests.
+  - `ruff check src tests` is clean, and `uv lock --check` passes.
+- **Deploy (not done).** mvmcc02's uv receipt records
+  `requirements = [agent-notes-hraedon (directory), regista-hraedon==0.7.2]`
+  and `no-sources = true`; `--no-sources` was only needed to bypass the
+  `../regista` editable mapping. From this commit on, install with
+  `uv tool install --reinstall <checkout>`, with no `--with` and no
+  `--no-sources`. A new `uv tool install` replaces the receipt's requirements.
+  `--reinstall` is needed because uv reuses its cached build when the path and
+  version are unchanged. Check with `uv tool list --show-with`: there should be
+  no `[with: regista-hraedon==0.7.2]`. Restart the dispatchers as usual. Mixed
+  versions are harmless here: no deployed host relies on anything Phase 3
+  removes.

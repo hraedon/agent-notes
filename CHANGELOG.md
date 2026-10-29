@@ -29,8 +29,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Regista write-through (Plan 026 D1).** The native op-log is the only write
   path. Removed the `outbox`, `projection`, `migrate-to-regista`,
   `memory rebuild-from-regista` and `memory check-drift` commands. A hidden
-  `agent-notes outbox ...` no-op remains for old per-repo Stop hooks;
-  `agent-notes init <repo>` removes those hooks.
+  `agent-notes outbox ...` no-op briefly kept old per-repo Stop hooks from
+  exiting 2; it was removed in Phase 3 (below).
   `AGENT_NOTES_REGISTA_WRITES` / `regista.writes_enabled` now makes every write
   fail with `RETIRED_SETTING`. `REGISTA_DSN`, `REGISTA_KEY_PATH` and
   `REGISTA_REQUIRE_SSL` are no longer read. `doctor --json` drops its `regista`
@@ -40,6 +40,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Hindsight memory engine (Plan 026 D6).** Native is the only memory engine.
   The `memory-provider` command is gone, and `AGENT_NOTES_MEMORY_ENGINE` set to
   anything but `native` is an error rather than a silent fallback.
+- **The `regista-hraedon` dependency (Plan 026 D3).** agent-notes no longer
+  installs or imports regista. The principal grammar is vendored into
+  `core/actor.py` and the error-envelope codes into `core/errors.py`
+  (`ErrorCode`, `AgentNotesError`); `--json` error envelopes are byte-identical
+  to 1.1.1's, pinned per code by `tests/test_error_envelope.py`. Removed with it:
+  - `SUITE.lock`, `scripts/dev-install.py`, `scripts/suite_lock.py`,
+    `scripts/check_suite_lock.py`, the `DEV_AGAINST` / `check-suite-lock`
+    Makefile targets and `docs/develop-against-lock.md`. `make dev` is a plain
+    `uv pip install -e ".[test]"`; CI installs the same way.
+  - **Action delegation.** `AGENT_NOTES_ACTION_DELEGATION_PATHS` is ignored; no
+    host set it, and nothing used the credentials once regista writes were gone.
+  - **Secret-backend DSN refs.** A DSN of the form `env:`, `file:`, `literal:`,
+    `vault:` or `azure:` now fails with `RETIRED_SETTING`; set a literal DSN.
+    No host used a ref.
+  - The structlog-to-stderr setup at CLI entry (only regista logged through it).
+  - Not removed: the `REGISTA_PRINCIPAL_ID` and `REGISTA_PRODUCER_*` names.
+- **The hidden `agent-notes outbox ...` no-op.** All 51 per-repo Claude Stop
+  hooks that called it were cleared on 2026-10-29, so `outbox` is an unknown
+  subcommand again (exit 2). `agent-notes init <repo>` still removes the old
+  hook if a copy resurfaces, and `doctor`'s `legacy_outbox` check stays.
+
+### Changed
+
+- `PyYAML` is now a declared dependency; `core/bc_files.py` imported it but it
+  had arrived only transitively (regista, `huggingface_hub`).
 
 ## [1.1.1] - 2026-10-17
 

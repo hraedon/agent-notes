@@ -26,7 +26,7 @@ _CLI = (sys.executable, "-m", "agent_notes.cli")
 
 # Top-level nouns that are suppressed or internal (not part of the public
 # contract surface). These are excluded from the "absent from manifest" check.
-_SUPPRESSED_NOUNS = frozenset({"codex-hook", "outbox"})
+_SUPPRESSED_NOUNS = frozenset({"codex-hook"})
 
 
 @pytest.fixture(scope="module")

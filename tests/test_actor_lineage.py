@@ -1,22 +1,17 @@
-"""Tests for the canonical v6 actor boundary."""
+"""Tests for the canonical actor boundary."""
 
 from __future__ import annotations
-
-import json
-import os
 
 import pytest
 
 from agent_notes.core.actor import (
     Actor,
     ActorConfigurationError,
-    DelegationConfigurationError,
     load_actor_config,
     migration_actor,
     resolve_actor,
     validate_actor,
 )
-from tests.conftest import shape_valid_delegation
 
 
 @pytest.fixture(autouse=True)
@@ -24,7 +19,6 @@ def _clean_actor_env(monkeypatch, tmp_path):
     for name in (
         "AGENT_NOTES_ACTOR_ID",
         "REGISTA_PRINCIPAL_ID",
-        "AGENT_NOTES_ACTION_DELEGATION_PATHS",
     ):
         monkeypatch.delenv(name, raising=False)
     suite_env = tmp_path / "suite.env"
@@ -88,44 +82,11 @@ def test_migration_actor_is_canonical_system_identity():
     assert actor.actor_kind == "system"
 
 
-def test_delegation_paths_are_loaded_in_order(monkeypatch, tmp_path):
-    first = tmp_path / "first.json"
-    second = tmp_path / "second.json"
-    first.write_text(json.dumps({"credential_id": "first"}), encoding="utf-8")
-    second.write_text(json.dumps({"credential_id": "second"}), encoding="utf-8")
+def test_retired_delegation_paths_setting_is_ignored(monkeypatch, tmp_path):
+    """Plan 026 D3 deleted action delegation (no host configured it): the old
+    setting, even naming a missing file, no longer affects actor resolution."""
     monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:worker")
-    monkeypatch.setenv(
-        "AGENT_NOTES_ACTION_DELEGATION_PATHS",
-        os.pathsep.join((str(first), str(second))),
-    )
+    monkeypatch.setenv("AGENT_NOTES_ACTION_DELEGATION_PATHS", str(tmp_path / "missing.json"))
 
-    config = load_actor_config()
-
-    assert [item["credential_id"] for item in config.action_delegation_credentials] == [
-        "first",
-        "second",
-    ]
-
-
-def test_empty_delegation_path_list_is_rejected(monkeypatch):
-    monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:worker")
-    monkeypatch.setenv("AGENT_NOTES_ACTION_DELEGATION_PATHS", f" {os.pathsep} ")
-
-    with pytest.raises(DelegationConfigurationError):
-        resolve_actor()
-
-
-def test_delegation_terminal_subject_must_match_the_actor(monkeypatch):
-    """A delegation chain whose terminal subject is a different principal
-    must be refused at the configuration edge, before any write queues it."""
-    monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", "agent:worker")
-    mismatched = Actor(
-        actor_id="agent:worker",
-        actor_kind="agent",
-        action_delegation_credentials=(
-            shape_valid_delegation(subject_principal_id="agent:someone-else"),
-        ),
-    )
-
-    with pytest.raises(DelegationConfigurationError, match="terminal action-delegation subject"):
-        validate_actor(mismatched)
+    assert load_actor_config().actor_id == "agent:worker"
+    assert resolve_actor().actor_id == "agent:worker"

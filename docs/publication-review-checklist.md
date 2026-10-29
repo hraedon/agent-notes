@@ -123,7 +123,7 @@ hook) and the repository secret of the same name in CI. The committed script
 - [x] The `agent_waked` import in the wake-bridge test stays
       `pytest.importorskip`-guarded so CI is green without agent-wake installed
       (the known gotcha — a hard import there hard-failed CI before)
-- [x] CI installs regista from its public git URL, pinned in `SUITE.lock`
+- [x] No sibling-repo dependency: regista was dropped (Plan 026 D3)
 - [x] No dependency on private/internal packages
 
 ## 4. Naming & authorship

@@ -14,16 +14,13 @@ dependencies = [
     "uvicorn>=0.20",
     "cryptography>=42.0",
     "platformdirs>=4.0",
-    "regista-hraedon>=0.7.0,<0.8",
+    "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
 test = [
     "pytest>=8.0",
     "testcontainers[postgres]>=4.0",
-    # SUITE.lock ↔ pyproject version-coherence test (tests/test_develop_against_lock.py)
-    # needs real specifier semantics, not ad-hoc string parsing.
-    "packaging>=24.0",
     # CLI contract v1 conformance kit (Plan 018 WI-2), a normal pinned version
     # dependency (Plan 019 B1). Previously a git+SHA direct reference installed
     # by a separate CI step — which PyPI forbids in uploaded metadata; now a
@@ -52,15 +49,6 @@ agent-notes-dispatch     = "agent_notes.dispatcher:main"
 agent-notes-trigger-loop = "agent_notes.trigger_loop:main"
 agent-notes-web          = "agent_notes.web.app:main"
 
-
-[tool.uv.sources]
-# regista-hraedon is published on PyPI (distribution renamed from `regista`;
-# import name remains `regista`). This editable mapping overrides the published
-# wheel with the local sibling checkout so `uv lock` / `uv run` and the Makefile
-# targets (make lint, make test) resolve against the working tree without a
-# published build per commit. Assumes the constellation layout (repos are
-# siblings under a common parent, e.g. /projects/{regista,agent-notes}).
-regista-hraedon = { path = "../regista", editable = true }
 
 [build-system]
 requires = ["hatchling"]
@@ -92,7 +80,7 @@ select = ["E", "F", "I", "N", "W"]
 testpaths = ["tests"]
 addopts = "-m 'not slow' --strict-markers"
 markers = [
-    "postgres: requires a real Postgres instance (regista pg15 test DB; set REGISTA_TEST_DSN)",
+    "postgres: requires a real Postgres instance (testcontainers)",
     "slow: subprocess/embedding-heavy tests, skipped by default (run with -m slow)",
 ]
 

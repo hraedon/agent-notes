@@ -14,7 +14,6 @@ def _clean_identity_env(monkeypatch, tmp_path):
     for name in (
         "AGENT_NOTES_ACTOR_ID",
         "REGISTA_PRINCIPAL_ID",
-        "AGENT_NOTES_ACTION_DELEGATION_PATHS",
     ):
         monkeypatch.delenv(name, raising=False)
     suite_env = tmp_path / "suite.env"

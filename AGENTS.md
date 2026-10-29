@@ -28,18 +28,17 @@ Conventions and quick reference for agents (and humans) working on agent-notes.
 ## Build / test / lint
 
 ```bash
-make dev            # install deps against the SUITE.lock-locked substrate (Plan 019 B2)
+make dev            # uv pip install -e ".[test]" (plain editable install)
 
 make test           # runs pytest against ephemeral Postgres (testcontainers)
 make lint           # ruff
 make fmt            # ruff format
 ```
 
-**Develop against the locked substrate.** `SUITE.lock` is the single source of
-truth for *what to develop against*: `make dev` (and CI) install regista at the
-released version it pins, not `main`/an editable checkout, so integration skew
-surfaces before interop time. For deliberate cross-member work, set
-`DEV_AGAINST=main|<ref>|sibling`. See `docs/develop-against-lock.md`.
+agent-notes has no sibling-repo dependency: Plan 026 D3 vendored the few
+regista pieces it used (principal grammar, error codes) and dropped
+`regista-hraedon`, `SUITE.lock` and the `DEV_AGAINST` machinery. A fresh venv
+needs only `uv pip install -e ".[test]"`.
 
 Tests for triggers, recursive CTEs, and `change_log` semantics must run against real Postgres — no DB mocks for those. Use `testcontainers[postgres]` (already in `[test]` extras) for ephemeral instances in CI.
 
@@ -64,7 +63,8 @@ One Postgres database (`agent_notes`), one Python package (`agent_notes`), one `
 Every authored write resolves one canonical principal before it reaches
 regista. The precedence is `AGENT_NOTES_ACTOR_ID` over `REGISTA_PRINCIPAL_ID`,
 with both values using the normal process-env / per-user `suite.env` / system
-`suite.env` layering. Principal IDs must use regista's canonical grammar, for
+`suite.env` layering. Principal IDs must use the canonical grammar
+(`core/actor.py`, vendored from regista 0.7.2), for
 example `agent:worker`, `human:operator`, or `service:hooks`; missing or
 invalid identity fails closed. There are no per-command actor or model-lineage
 overrides.
@@ -87,8 +87,6 @@ applies a validated delegated review (Plan 023/025) as the reviewer, once.
 
 This is cooperative enforcement: identity is self-reported. It prevents
 accidental self-approval and records overrides; it is not authentication.
-Optional signed action-delegation evidence is loaded
-from the configured `AGENT_NOTES_ACTION_DELEGATION_PATHS` files.
 
 The write path resolves the ambient actor through `core/actor.py::write_actor`
 (which refuses the retired regista writes setting, then calls `resolve_actor`).
@@ -103,8 +101,13 @@ and do not participate in the work-item review gate.
 makes every write fail with `RETIRED_SETTING`, and `doctor` reports it as the
 `retired_settings` check; see `docs/spikes/025-regista-cutover.md`.
 `install-harness` removes the regista entries it wrote earlier. The regista
-*library* is still a dependency (principal grammar, action delegation, error
-codes, secret refs) until Plan 026 Phase 3.
+library is no longer a dependency (Plan 026 D3): the principal grammar lives in
+`core/actor.py`, the envelope's `ErrorCode` vocabulary in `core/errors.py`
+(`tests/test_error_envelope.py` pins the JSON). Action delegation
+(`AGENT_NOTES_ACTION_DELEGATION_PATHS`) is deleted and the setting is ignored;
+a secret-backend ref as the DSN (`env:`, `file:`, `literal:`, `vault:`,
+`azure:`) fails with `RETIRED_SETTING`. The `REGISTA_PRINCIPAL_ID` and
+`REGISTA_PRODUCER_*` names stay.
 
 **Checking the wiring: `agent-notes invariants probe`** (WI-071). This is the
 read-only probe the suite genesis gate consumes

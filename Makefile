@@ -1,14 +1,9 @@
-.PHONY: dev test lint fmt check-suite-lock check-suite-lock-strict
+.PHONY: dev test lint fmt
 
-# Develop-against-lock (Plan 019 B2): install regista at the released version
-# pinned in SUITE.lock (the single source of truth for what to develop against),
-# so dev and CI compose against the artifact the suite ships. Override the
-# substrate deliberately with DEV_AGAINST=main|<ref>|sibling (see
-# docs/develop-against-lock.md). Same install shape CI uses.
-# Uses bare `python` (not `uv run` like the targets below): dev-install
-# bootstraps the environment itself, so it must not assume a resolved uv venv.
+# A plain editable install with the test extras, plus ruff for make lint/fmt. agent-notes has no sibling
+# repo dependency since regista was dropped (Plan 026 D3).
 dev:
-	python scripts/dev-install.py
+	uv pip install -e ".[test]" "ruff>=0.5,<0.16"
 
 test:
 	uv run pytest
@@ -18,12 +13,3 @@ lint:
 
 fmt:
 	uv run ruff format src tests
-
-# Compare the local sibling regista checkout against the SUITE.lock pin
-# (Plan 017 WI-4.1). Informational by default; use `make check-suite-lock-strict`
-# to fail the build on drift (e.g. as a pre-release gate).
-check-suite-lock:
-	uv run python scripts/check_suite_lock.py
-
-check-suite-lock-strict:
-	uv run python scripts/check_suite_lock.py --strict

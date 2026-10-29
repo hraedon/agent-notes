@@ -2,8 +2,10 @@
 
 The status vocabulary is defined in three cross-checked layers:
 
-1. **regista's ``canonical.workflow.yaml``** — the workflow authority (valid
-   transitions, states). Shipped from the ``regista`` package.
+1. **The canonical workflow** — valid transitions and states, frozen from
+   regista 0.7.2's ``canonical.workflow.yaml`` (version 3) in
+   ``test_lifecycle_consistency.py`` when the regista dependency was dropped
+   (Plan 026 D3).
 2. **The DB ``wi_status`` vocabulary** — runtime flags (``is_terminal`` /
    ``is_open``) per status, seeded by ``820_canonical_lifecycle.sql``.
 3. **This module** — static properties importable without a DB round-trip:
@@ -11,7 +13,7 @@ The status vocabulary is defined in three cross-checked layers:
 
 The three layers are reconciled by tests (``test_lifecycle.py`` and
 ``test_lifecycle_consistency.py``), not unified. Adding a state is three
-coordinated edits (YAML + SQL seed + this module); a missed surface fails
+coordinated edits (frozen workflow + SQL seed + this module); a missed surface fails
 a consistency test rather than shipping silently.
 """
 
@@ -83,8 +85,8 @@ STATUS_RANK: dict[str, int] = {
 # ---------------------------------------------------------------------------
 
 # Maps (old, new) canonical states to the workflow transition name.
-# This is the agent-side mirror used for pre-flight validation; the regista
-# YAML remains the workflow authority. ``closed`` (legacy terminal) is
+# The frozen canonical workflow in ``test_lifecycle_consistency.py`` pins it.
+# ``closed`` (legacy terminal) is
 # accepted as an alias for ``done`` (see ``transition_for``).
 #
 # ``amend`` self-transitions are intentionally excluded — they are field-only

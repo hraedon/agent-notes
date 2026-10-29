@@ -73,18 +73,27 @@ def config_path(home: Path | None = None) -> Path:
     return real / "config.json"
 
 
+# Secret-backend refs (Plan 017 WI-4.1: ``env:``/``file:``/``literal:``/
+# ``vault:``/``azure:``) were resolved by ``regista.secrets``. No host used one,
+# so Plan 026 D3 dropped them with the regista dependency. A DSN carrying one of
+# these prefixes is refused by name instead of being handed to psycopg.
+_RETIRED_SECRET_REF_PREFIXES = frozenset({"env", "file", "literal", "vault", "azure"})
+
+
 def _resolve_secret_value(value: str) -> str:
-    """Route a configured value through the suite secret resolver (Plan 017 WI-4.1).
+    """Return a literal DSN unchanged; refuse a retired secret-backend ref.
 
-    A literal DSN (no provider prefix) is returned unchanged — zero regression
-    for plaintext deployments, and regista is not even imported for that case.
-    A backend ref (``env:``/``vault:``/``azure:``/``file:``) resolves to the
-    real DSN via ``regista.secrets.resolve_str``. Import is local so the common
-    literal path keeps this module import-light.
+    The message names only the prefix, never the configured value.
     """
-    from agent_notes.core import secrets as suite_secrets
-
-    return suite_secrets.resolve_dsn(value)
+    prefix = value.split(":", 1)[0].lower() if ":" in value else None
+    if prefix in _RETIRED_SECRET_REF_PREFIXES:
+        raise RetiredSettingError(
+            f"the configured Postgres DSN is a {prefix}: secret-backend ref, and "
+            "secret-backend refs were removed with the regista dependency "
+            "(Plan 026 D3). Set a literal postgresql:// DSN in "
+            f"{_DSN_ENV}, suite.env or {config_path()}."
+        )
+    return value
 
 
 def resolve_dsn(explicit: str | None = None) -> str:
@@ -100,11 +109,9 @@ def resolve_dsn(explicit: str | None = None) -> str:
     The tool-specific config file stays as the final fallback beneath the
     suite-wide facts.
 
-    A backend ref (``env:VAR`` / ``vault:...`` / ``file:/path``) is resolved
-    through ``regista.secrets`` (Plan 017 WI-4.1) so the DSN password need not
-    live in plaintext config; a literal DSN passes through unchanged. This
-    applies uniformly to the explicit arg, the env var, the suite.env value,
-    and the file value — any of them may carry a backend ref.
+    Every source must hold a literal DSN. A secret-backend ref (``env:VAR``,
+    ``vault:...``, ``file:/path``) in any of them raises
+    :class:`RetiredSettingError` (Plan 026 D3).
     """
     if explicit:
         return _resolve_secret_value(explicit)
