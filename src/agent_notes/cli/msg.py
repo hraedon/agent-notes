@@ -91,6 +91,7 @@ def resolve_caller(args: argparse.Namespace, *, register: bool = True) -> Caller
             caller.session_row = messaging.get_session(session.session_key)
         if caller.session_row and caller.session_row.get("project"):
             caller.project = caller.session_row["project"]
+            caller.workspace_id = caller.session_row["workspace_id"]
     return caller
 
 

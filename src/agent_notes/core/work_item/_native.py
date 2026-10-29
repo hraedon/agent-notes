@@ -53,6 +53,7 @@ def file_work_item(
     actor_id = face_factory.write_actor().actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
+        _common.require_repo_project(conn, project_id)
         _common.validate_vocab(conn, workspace_id, "wi_kind", kind)
         _common.validate_vocab(conn, workspace_id, "wi_status", status)
         _common.validate_vocab(conn, workspace_id, "wi_severity", severity)
@@ -429,6 +430,7 @@ def attest_gate_waiver(
 
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
+        _seal.lock_row(conn, project_id, identifier)
         old = _common.load_work_item_row(conn, project_id, identifier)
         entity_id = old["entity_id"]
         status = old["status"]
@@ -804,11 +806,7 @@ def heartbeat_work_item(
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
-            (project_id, identifier),
-        )
-        old = cur.fetchone()
+        old = _seal.lock_row(conn, project_id, identifier)
         if old is None:
             raise ValueError(f"Work item not found: {identifier!r} in project {project_id}")
 
@@ -882,11 +880,7 @@ def delete_work_item(
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
         cur = conn.cursor(row_factory=dict_row)
-        cur.execute(
-            "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
-            (project_id, identifier),
-        )
-        old = cur.fetchone()
+        old = _seal.lock_row(conn, project_id, identifier)
         if old is None:
             return False
 

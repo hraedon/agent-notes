@@ -201,6 +201,42 @@ def test_claim_skips_a_row_locked_by_another_connection(ws, vm):
     assert m.claim_deliverable(s) == []
 
 
+def test_claiming_inbox_returns_claimed_rows_when_an_older_notice_matches(ws):
+    px, slug = _project(ws)
+    s = _session(ws, f"vm-{_uid()}", project_id=px)
+    notice = _send(ws, to_project=slug, kind="notice", body="older notice")["id"]
+    msg = _send(ws, to_project=slug, body="newer message")["id"]
+
+    rows = m.inbox(s, claim=True, limit=1)
+    assert msg in _ids(rows)
+    assert notice in _ids(rows)  # notices never count against the claim limit
+    assert msg not in _ids(m.inbox(s))
+
+
+def test_claiming_inbox_never_returns_rows_another_claimer_holds(ws):
+    px, slug = _project(ws)
+    s1 = _session(ws, f"vm-{_uid()}", project_id=px)
+    s2 = _session(ws, f"vm-{_uid()}", project_id=px)
+    msg = _send(ws, to_project=slug)["id"]
+    seen: dict[str, list[dict]] = {}
+
+    with psycopg.connect(_dsn()) as winner:
+        # s1 claims on its own connection and has not committed yet.
+        winner.execute(
+            "UPDATE agent_messages SET claimed_by = %s, claimed_at = now()"
+            " WHERE id = %s AND claimed_by IS NULL",
+            (s1, msg),
+        )
+        loser = threading.Thread(target=lambda: seen.update(s2=m.inbox(s2, claim=True)))
+        loser.start()
+        loser.join(timeout=10)
+        assert not loser.is_alive()
+        winner.commit()
+
+    assert msg not in _ids(seen["s2"])
+    assert msg in _ids(m.inbox(s1, include_claimed=True))
+
+
 # ---------------------------------------------------------------------------
 # Replies
 # ---------------------------------------------------------------------------
@@ -392,6 +428,30 @@ def test_register_keeps_location_when_asked(ws, vm, tmp_path):
     assert (row["cwd"], row["project_id"]) == (str(tmp_path), px)
     row = m.register_session(vm, "claude", "loc", workspace_id=ws, cwd=str(tmp_path / "x"))
     assert row["cwd"] == str(tmp_path / "x")
+
+
+def test_heartbeat_from_elsewhere_keeps_the_sessions_workspace(ws, vm):
+    other_ws = coredb.get_or_create_workspace(f"ws-{_uid()}", "Other").id
+    slug = f"proj-{_uid()}"
+    home = coredb.get_or_create_project(other_ws, slug=slug, name=slug, repo_root=f"/x/{slug}")
+    # The default workspace has an unrelated project with the same slug.
+    coredb.get_or_create_project(ws, slug=slug, name=slug, repo_root=f"/y/{slug}")
+    key = m.register_session(
+        vm, "claude", f"h-{_uid()}", workspace_id=other_ws, project_id=home.id, cwd="/x"
+    )["session_key"]
+    _vm, harness, sid = m.parse_session_key(key)
+
+    # A CLI call from an unregistered directory falls back to the default workspace.
+    for replace_location in (False, True):
+        row = m.register_session(
+            vm, harness, sid, workspace_id=ws, cwd="/tmp", replace_location=replace_location
+        )
+        assert (row["workspace_id"], row["project_id"]) == (other_ws, home.id)
+
+    mine = _send(other_ws, to_project=slug)["id"]
+    foreign = _send(ws, to_project=slug)["id"]
+    seen = _ids(m.inbox(key))
+    assert mine in seen and foreign not in seen
 
 
 def test_auto_continue_bump_and_reset(ws, vm):

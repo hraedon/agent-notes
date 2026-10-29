@@ -193,6 +193,24 @@ def test_msg_inside_registered_repo_carries_project(ws, vm, tmp_path):
     assert (row["project"], row["cwd"]) == (slug, str(root))
 
 
+def test_msg_from_unregistered_dir_keeps_the_sessions_workspace(ws, vm, tmp_path):
+    other_ws = coredb.get_or_create_workspace(f"ws-{_uid()}", "Other")
+    slug = f"repo-{_uid()}"
+    home = coredb.get_or_create_project(other_ws.id, slug=slug, name=slug, repo_root=f"/x/{slug}")
+    sid = f"c-{_uid()}"
+    m.register_session(vm, "claude", sid, workspace_id=other_ws.id, project_id=home.id, cwd="/x")
+    mine = m.send_message(workspace_id=other_ws.id, from_vm="v", to_project=slug, body="b")["id"]
+
+    env = {"CLAUDE_CODE_SESSION_ID": sid}
+    inbox = _json(_cli("msg", "inbox", "--json", vm=vm, cwd=tmp_path, env=env))
+    assert mine in {r["id"] for r in inbox["messages"]}
+    sent = _json(
+        _cli("msg", "send", "--to-vm", vm, "--body", "x", "--json", vm=vm, cwd=tmp_path, env=env)
+    )
+    assert sent["message"]["workspace_id"] == other_ws.id
+    assert m.get_session(f"{vm}/claude/{sid}")["workspace_id"] == other_ws.id
+
+
 def test_who_lists_registered_sessions(ws, vm, tmp_path):
     m.register_session(vm, "codex", "w1", workspace_id=ws, paseo_agent_id="pa", cwd="/x")
     m.register_session(f"vm-{_uid()}", "claude", "w2", workspace_id=ws)

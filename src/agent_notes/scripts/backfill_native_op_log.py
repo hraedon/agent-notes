@@ -72,16 +72,33 @@ def seal_pass(*, project: str | None, apply: bool, actor_id: str) -> dict[str, A
         for proj in projects:
             cur = conn.cursor(row_factory=dict_row)
             cur.execute(
-                "SELECT * FROM work_items WHERE project_id = %s ORDER BY identifier",
+                "SELECT identifier FROM work_items WHERE project_id = %s ORDER BY identifier",
                 (proj["id"],),
             )
-            rows = [dict(r) for r in cur.fetchall()]
+            identifiers = [r["identifier"] for r in cur.fetchall()]
             counts = per_project[proj["slug"]]
-            for row in rows:
+            for identifier in identifiers:
+                # Re-read each row in its own transaction, locked when applying,
+                # so a write committed since the listing is never sealed over.
+                if apply:
+                    row = _seal.lock_row(conn, proj["id"], identifier)
+                else:
+                    cur.execute(
+                        "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
+                        (proj["id"], identifier),
+                    )
+                    row = cur.fetchone()
+                    row = dict(row) if row is not None else None
+                if row is None:
+                    if apply:
+                        conn.rollback()
+                    continue
                 counts["rows"] += 1
                 _folded, diffs = _seal.drift(conn, row)
                 if not diffs:
                     counts["in_sync"] += 1
+                    if apply:
+                        conn.rollback()
                     continue
                 kind = "no_op_chain" if diffs == ["op_chain"] else "stale_op_chain"
                 counts[kind] += 1

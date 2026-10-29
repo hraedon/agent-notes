@@ -148,15 +148,25 @@ def seal(conn: psycopg.Connection, row: dict, actor_id: str) -> list[str]:
     return diffs
 
 
-def seal_for_write(
-    conn: psycopg.Connection, project_id: int, identifier: str, actor_id: str
-) -> None:
-    """Seal the row (if present) before a native mutation folds it."""
+def lock_row(conn: psycopg.Connection, project_id: int, identifier: str) -> dict | None:
+    """Lock and return the cache row for the rest of the caller's transaction.
+
+    Native writers take this lock before reading the row they fold, so a seal
+    never compares the op-log with a row another writer has since replaced.
+    """
     cur = conn.cursor(row_factory=dict_row)
     cur.execute(
-        "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s",
+        "SELECT * FROM work_items WHERE project_id = %s AND identifier = %s FOR UPDATE",
         (project_id, identifier),
     )
     row = cur.fetchone()
+    return dict(row) if row is not None else None
+
+
+def seal_for_write(
+    conn: psycopg.Connection, project_id: int, identifier: str, actor_id: str
+) -> None:
+    """Lock the row (if present) and seal it before a native mutation folds it."""
+    row = lock_row(conn, project_id, identifier)
     if row is not None:
-        seal(conn, dict(row), actor_id)
+        seal(conn, row, actor_id)

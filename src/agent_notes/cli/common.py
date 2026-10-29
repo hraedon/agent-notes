@@ -93,14 +93,16 @@ def emit_error(
 
 
 def _resolve(
-    ws_slug: str | None, proj_slug: str | None, path: str | None
+    ws_slug: str | None, proj_slug: str | None, path: str | None, *, repo_only: bool = False
 ) -> tuple[int, int, str, str]:
     """Resolve the current workspace/project and set the regista routing context.
 
     Plan 011: every CLI command resolves its project here, so this is the single
     place to bind the regista write face to the matching per-project schema.
+    ``repo_only`` refuses ``--workspace`` alone, which otherwise selects the
+    workspace's ``global`` memory tier; work items live only in repo projects.
     """
-    result = _resolve_impl(ws_slug, proj_slug, path)
+    result = _resolve_impl(ws_slug, proj_slug, path, repo_only=repo_only)
     from agent_notes.core import face_factory
 
     try:
@@ -110,8 +112,15 @@ def _resolve(
     return result
 
 
-def _resolve_impl(
+def resolve_repo_project(
     ws_slug: str | None, proj_slug: str | None, path: str | None
+) -> tuple[int, int, str, str]:
+    """:func:`_resolve` for work-item commands: never a memory-tier row (Plan 025 D3)."""
+    return _resolve(ws_slug, proj_slug, path, repo_only=True)
+
+
+def _resolve_impl(
+    ws_slug: str | None, proj_slug: str | None, path: str | None, *, repo_only: bool = False
 ) -> tuple[int, int, str, str]:
     from agent_notes.core.db import (
         SCOPE_GLOBAL,
@@ -162,6 +171,8 @@ def _resolve_impl(
             suggestion = " Use --path for auto-resolution or run 'agent-notes workspace list'."
             print(f"Workspace '{ws_slug}' not found.{hint}{suggestion}", file=sys.stderr)
             raise SystemExit(EXIT_NOT_FOUND)
+        if repo_only:
+            raise SystemExit(EXIT_NOT_CONFIGURED)
         # Workspace-level operations land in the workspace's global memory tier.
         proj = find_scope_project(ws.id, SCOPE_GLOBAL)
         if proj is None:
@@ -250,10 +261,11 @@ def scope_workspace(args: argparse.Namespace, *, strict_path: bool = False) -> S
     """Pick the workspace for a scope command without requiring a registered repo.
 
     ``strict_path`` makes an explicit ``--path`` that is not inside a registered
-    repo an error (``SystemExit``), for composed queries where a silently absent
-    repo tier would read as "no repo memories".
+    repo (of ``--workspace``, when given) an error, for composed queries where a
+    silently absent repo tier would read as "no repo memories".
     """
     from agent_notes.core.db import get_project, list_workspaces
+    from agent_notes.core.project_discovery import discover_project
 
     ws_slug = getattr(args, "workspace", None)
     if getattr(args, "project", None):
@@ -270,9 +282,23 @@ def scope_workspace(args: argparse.Namespace, *, strict_path: bool = False) -> S
                 f"Workspace '{ws_slug}' not found. Available: {available or '(none)'}",
                 EXIT_NOT_FOUND,
             )
+        path = getattr(args, "path", None)
+        if path:
+            found = discover_project(path)
+            proj = (
+                get_project(ws.id, found.project) if found and found.workspace == ws.slug else None
+            )
+            if proj is not None:
+                return ScopeContext(ws.id, ws.slug, proj.id, proj.slug)
+            if strict_path:
+                if found is None:
+                    raise SystemExit(EXIT_NOT_CONFIGURED)
+                raise ScopeError(
+                    "PROJECT_NOT_RESOLVED",
+                    f"--path {path!r} is in workspace '{found.workspace}', not '{ws.slug}'.",
+                    EXIT_NOT_CONFIGURED,
+                )
         return ScopeContext(ws.id, ws.slug)
-
-    from agent_notes.core.project_discovery import discover_project
 
     discovered = discover_project(getattr(args, "path", None))
     if discovered is not None:
@@ -416,6 +442,18 @@ def report_resolution_failure(
             detail = str(exc)
         except Exception:  # pragma: no cover - defensive: DB/transport issue
             detail = None
+    if (
+        detail is None
+        and code == EXIT_NOT_CONFIGURED
+        and getattr(args, "workspace", None)
+        and not getattr(args, "project", None)
+        and not path
+    ):
+        detail = (
+            f"--workspace {args.workspace} alone selects no project here: work items "
+            "live only in repo projects. Pass --project with it, or --path to a "
+            "registered repo."
+        )
     if detail is None:
         # No --path was given, so cwd discovery is what actually failed. Name
         # the directory that was tried — "pass --path" is unhelpful advice when

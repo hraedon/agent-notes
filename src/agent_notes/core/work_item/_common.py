@@ -26,6 +26,18 @@ def resolve_workspace_for_project(conn: psycopg.Connection, project_id: int) -> 
     return row["workspace_id"]
 
 
+def require_repo_project(conn: psycopg.Connection, project_id: int) -> None:
+    """Work items live only in repo projects, never a ``vm``/``global`` memory tier."""
+    cur = conn.cursor()
+    cur.execute("SELECT slug, kind FROM projects WHERE id = %s", (project_id,))
+    row = cur.fetchone()
+    if row is not None and row["kind"] != "repo":
+        raise ValueError(
+            f"Project {row['slug']!r} is a {row['kind']} memory tier, not a repo project; "
+            "work items live only in repo projects."
+        )
+
+
 def validate_vocab(
     conn: psycopg.Connection,
     workspace_id: int,

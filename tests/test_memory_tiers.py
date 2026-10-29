@@ -342,6 +342,60 @@ def test_single_scope_recall_stays_in_its_tier(seeded, capsys):
     assert {r["scope"] for r in out["results"]} == {"vm"}
 
 
+def test_composed_search_with_workspace_honours_an_explicit_path(seeded, capsys):
+    with patch("agent_notes.core.embed.embed", side_effect=_fake_embed):
+        code, out = _run(cmd_mem_search, capsys, scope="composed", query="q", path=REPO_ROOT)
+    assert code == 0, out
+    assert [s["scope"] for s in out["scopes"]] == ["repo", "vm", "global"]
+    assert {m["name"]: m for m in out["memories"]}["setup"]["scope"] == "repo"
+
+
+def test_composed_search_with_workspace_refuses_a_path_outside_it(seeded, capsys, tmp_path):
+    code, out = _run(cmd_mem_search, capsys, scope="composed", query="q", path=str(tmp_path))
+    assert code == 3
+    assert out["error"]["code"] == "PROJECT_NOT_RESOLVED"
+
+
+def test_composed_recall_shadows_by_name_beyond_the_tier_cutoff(env, capsys):
+    """A repo override that ranks below its tier's recall cutoff still wins its name."""
+    ws_slug, repo_slug = "tiers-cutoff-ws", "tiers-cutoff-repo"
+    ws = coredb.get_or_create_workspace(ws_slug, "Cutoff WS")
+    coredb.add_vocabulary(ws.id, "memory_type", "note")
+    root = os.path.join(_ROOT, "cutoff-repo")
+    coredb.get_or_create_project(ws.id, repo_slug, repo_slug, repo_root=root)
+
+    def add(scope, name, body):
+        args = _args(
+            workspace=ws_slug,
+            scope=scope,
+            project=repo_slug if scope == "repo" else None,
+            name=name,
+            body=body,
+        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert cmd_mem_add(args) == 0
+
+    with patch("agent_notes.core.embed.embed", side_effect=_fake_embed):
+        add("global", "setup", "global-setup: prefer uv")
+        add("repo", "setup", "far from the query: use make")
+        for i in range(3):  # fill the repo tier's 'low' budget (3) ahead of 'setup'
+            add("repo", f"near-{i}", f"q near {i}")
+        code, out = _run(
+            cmd_mem_recall,
+            capsys,
+            workspace=ws_slug,
+            scope="composed",
+            project=repo_slug,
+            query="q",
+            budget="low",
+        )
+    assert code == 0, out
+    by_ref = {r["source_ref"]: r for r in out["results"]}
+    assert by_ref["setup"]["scope"] == "repo"
+    assert by_ref["setup"]["text"].startswith("far from the query")
+    assert [s["scope"] for s in by_ref["setup"]["shadows"]] == ["global"]
+
+
 # ---------------------------------------------------------------------------
 # VM identity
 # ---------------------------------------------------------------------------
@@ -518,6 +572,78 @@ def test_resolution_by_slug_never_returns_tier_rows(seeded, capsys):
         assert exc.value.code == 2
     assert "memory tiers are not projects" in capsys.readouterr().err
     assert coredb.get_project(seeded["ws"].id, "global") is None
+
+
+@pytest.fixture
+def wi_vocab(seeded):
+    ws = seeded["ws"]
+    for namespace, name in (("wi_kind", "todo"), ("wi_status", "open"), ("wi_severity", "medium")):
+        coredb.add_vocabulary(ws.id, namespace, name)
+    return seeded
+
+
+def test_work_item_cli_refuses_workspace_only_resolution(wi_vocab):
+    from tests.cli_harness import run_cli
+
+    for argv in (
+        ("work-item", "file", "--workspace", WS, "--title", "stray", "--json"),
+        ("breadcrumb", "file", "--workspace", WS, "--title", "stray", "--json"),
+        ("work-item", "ready", "--workspace", WS, "--json"),
+    ):
+        res = run_cli(*argv, check=False)
+        assert res.returncode == 3, (argv, res.stdout, res.stderr)  # EXIT_NOT_CONFIGURED
+        assert json.loads(res.stdout)["error"]["code"] == "PROJECT_NOT_RESOLVED"
+        assert "--project" in res.stdout
+    # Memory commands keep resolving --workspace alone to the global tier.
+    assert _resolve(WS, None, None)[3] == "global"
+
+
+def test_work_items_cannot_be_filed_in_tier_rows(wi_vocab):
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    seeded = wi_vocab
+
+    ws = seeded["ws"]
+    for tier in (
+        coredb.get_or_create_scope_project(ws.id, "global", None),
+        coredb.get_or_create_scope_project(ws.id, "vm", VM),
+    ):
+        with pytest.raises(ValueError, match="not a repo project"):
+            WorkItemModel.file_work_item(project_id=tier.id, title="stray", embedding=[0.0] * 768)
+
+
+def test_work_item_queries_exclude_tier_rows(wi_vocab):
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    seeded = wi_vocab
+
+    ws = seeded["ws"]
+    tier = coredb.get_or_create_scope_project(ws.id, "global", None)
+    wi = WorkItemModel.file_work_item(
+        project_id=seeded["repo"].id,
+        identifier="STRAY-001",
+        title="legacy stray",
+        embedding=[0.0] * 768,
+    )
+    # A row left in a tier project by an older CLI (workspace-only resolution).
+    with psycopg.connect(seeded["dsn"]) as conn:
+        conn.execute(
+            "UPDATE work_items SET project_id = %s WHERE entity_id = %s",
+            (tier.id, wi["entity_id"]),
+        )
+    try:
+        listed = WorkItemModel.query_work_items(workspace_id=ws.id, limit=200)
+        assert wi["entity_id"] not in {r["entity_id"] for r in listed}
+        assert WorkItemModel.query_work_items(project_id=tier.id) == []
+        ready = WorkItemModel.ready_work_items(workspace_id=ws.id, limit=200)
+        assert wi["entity_id"] not in {r["entity_id"] for r in ready}
+        assert WorkItemModel.ready_work_items(project_id=tier.id) == []
+    finally:
+        with psycopg.connect(seeded["dsn"]) as conn:
+            conn.execute(
+                "UPDATE work_items SET project_id = %s WHERE entity_id = %s",
+                (seeded["repo"].id, wi["entity_id"]),
+            )
 
 
 def test_resolve_project_by_path_skips_tier_rows(seeded):

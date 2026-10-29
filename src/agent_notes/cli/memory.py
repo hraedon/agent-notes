@@ -297,6 +297,7 @@ def cmd_mem_recall(args: argparse.Namespace) -> int:
     # (scope, scope_key, engine project slug), most specific first.
     tiers: list[tuple[str, str, str]] = []
     warnings: list[str] = []
+    refs: list = []
     if scope == "composed":
         resolved = _composed_target(args)
         if isinstance(resolved, int):
@@ -339,6 +340,35 @@ def cmd_mem_recall(args: argparse.Namespace) -> int:
             continue
         for res in response.results:
             merged.append({**res.to_dict(), "scope": tier, "scope_key": key, "_rank": rank})
+
+    # A more specific tier's memory can fall below its own recall cutoff while
+    # a less specific one with the same name is returned: look the names up
+    # exactly and let it take that name's place (and score).
+    if refs:
+        from agent_notes.core.memory_model import active_by_name
+
+        best: dict[str, dict] = {}
+        for r in merged:
+            ref = r.get("source_ref")
+            if ref and (ref not in best or r["score"] > best[ref]["score"]):
+                best[ref] = r
+        returned = {(r.get("source_ref"), r["scope"], r["scope_key"]) for r in merged}
+        rank_of = {(t, k): i for i, (t, k, _) in enumerate(tiers)}
+        for row in active_by_name(ctx.ws_id, refs, list(best)):
+            name, rank = row["name"], rank_of[(row["scope"], row["scope_key"])]
+            top = best[name]
+            if rank < top["_rank"] and (name, row["scope"], row["scope_key"]) not in returned:
+                merged.append(
+                    {
+                        **top,
+                        "text": row["body"],
+                        "memory_type": row["memory_type"],
+                        "scope": row["scope"],
+                        "scope_key": row["scope_key"],
+                        "_rank": rank,
+                    }
+                )
+                returned.add((name, row["scope"], row["scope_key"]))
 
     # Rank by score with no tier boost, then let the most specific tier win a
     # name collision (source_ref is the memory name for exact-source results).

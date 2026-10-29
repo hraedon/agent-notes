@@ -675,8 +675,8 @@ def ready_work_items(
     workspace_id: int | None = None,
     limit: int = 50,
 ) -> list[dict]:
-    """Query the ``work_items_ready_v`` view."""
-    conditions: list[str] = []
+    """Query the ``work_items_ready_v`` view (repo projects only, Plan 025 D3)."""
+    conditions: list[str] = ["project_id IN (SELECT id FROM projects WHERE kind = 'repo')"]
     params: list[Any] = []
     if project_id is not None:
         conditions.append("project_id = %s")
@@ -684,7 +684,7 @@ def ready_work_items(
     if workspace_id is not None:
         conditions.append("workspace_id = %s")
         params.append(workspace_id)
-    where = " AND ".join(conditions) if conditions else "TRUE"
+    where = " AND ".join(conditions)
     params.append(min(limit, 200))
 
     with _conn() as conn:

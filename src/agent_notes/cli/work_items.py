@@ -13,11 +13,14 @@ from agent_notes.cli.common import (
     EXIT_SUCCESS,
     _add_common,
     _print_sub_help,
-    _resolve,
     emit_error,
     exception_detail,
     report_resolution_failure,
 )
+
+# Work items live only in repo projects: `--workspace` alone never selects the
+# workspace's `global` memory tier here (Plan 025 D3).
+from agent_notes.cli.common import resolve_repo_project as _resolve
 
 
 def _wi_format(wi: dict) -> str:
