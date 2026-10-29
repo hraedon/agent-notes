@@ -53,6 +53,7 @@ def file_work_item(
     actor_id = face_factory.write_actor().actor_id
     with _conn() as conn:
         workspace_id = _common.resolve_workspace_for_project(conn, project_id)
+        _common.require_repo_project(conn, project_id)
         _common.validate_vocab(conn, workspace_id, "wi_kind", kind)
         _common.validate_vocab(conn, workspace_id, "wi_status", status)
         _common.validate_vocab(conn, workspace_id, "wi_severity", severity)

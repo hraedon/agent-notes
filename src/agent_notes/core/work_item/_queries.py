@@ -42,7 +42,8 @@ def query_work_items(
     identifier: str | None = None,
     limit: int = 50,
 ) -> list[dict]:
-    conditions: list[str] = []
+    # Memory-tier rows (Plan 025 D3) never hold work items; hide any stray.
+    conditions: list[str] = ["p.kind = 'repo'"]
     params: list[Any] = []
 
     if project_id is not None:
@@ -71,7 +72,7 @@ def query_work_items(
         conditions.append("wi.identifier = %s")
         params.append(identifier)
 
-    where = " AND ".join(conditions) if conditions else "TRUE"
+    where = " AND ".join(conditions)
     params.append(min(limit, 200))
 
     with _conn() as conn:

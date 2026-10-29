@@ -520,6 +520,78 @@ def test_resolution_by_slug_never_returns_tier_rows(seeded, capsys):
     assert coredb.get_project(seeded["ws"].id, "global") is None
 
 
+@pytest.fixture
+def wi_vocab(seeded):
+    ws = seeded["ws"]
+    for namespace, name in (("wi_kind", "todo"), ("wi_status", "open"), ("wi_severity", "medium")):
+        coredb.add_vocabulary(ws.id, namespace, name)
+    return seeded
+
+
+def test_work_item_cli_refuses_workspace_only_resolution(wi_vocab):
+    from tests.cli_harness import run_cli
+
+    for argv in (
+        ("work-item", "file", "--workspace", WS, "--title", "stray", "--json"),
+        ("breadcrumb", "file", "--workspace", WS, "--title", "stray", "--json"),
+        ("work-item", "ready", "--workspace", WS, "--json"),
+    ):
+        res = run_cli(*argv, check=False)
+        assert res.returncode == 3, (argv, res.stdout, res.stderr)  # EXIT_NOT_CONFIGURED
+        assert json.loads(res.stdout)["error"]["code"] == "PROJECT_NOT_RESOLVED"
+        assert "--project" in res.stdout
+    # Memory commands keep resolving --workspace alone to the global tier.
+    assert _resolve(WS, None, None)[3] == "global"
+
+
+def test_work_items_cannot_be_filed_in_tier_rows(wi_vocab):
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    seeded = wi_vocab
+
+    ws = seeded["ws"]
+    for tier in (
+        coredb.get_or_create_scope_project(ws.id, "global", None),
+        coredb.get_or_create_scope_project(ws.id, "vm", VM),
+    ):
+        with pytest.raises(ValueError, match="not a repo project"):
+            WorkItemModel.file_work_item(project_id=tier.id, title="stray", embedding=[0.0] * 768)
+
+
+def test_work_item_queries_exclude_tier_rows(wi_vocab):
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    seeded = wi_vocab
+
+    ws = seeded["ws"]
+    tier = coredb.get_or_create_scope_project(ws.id, "global", None)
+    wi = WorkItemModel.file_work_item(
+        project_id=seeded["repo"].id,
+        identifier="STRAY-001",
+        title="legacy stray",
+        embedding=[0.0] * 768,
+    )
+    # A row left in a tier project by an older CLI (workspace-only resolution).
+    with psycopg.connect(seeded["dsn"]) as conn:
+        conn.execute(
+            "UPDATE work_items SET project_id = %s WHERE entity_id = %s",
+            (tier.id, wi["entity_id"]),
+        )
+    try:
+        listed = WorkItemModel.query_work_items(workspace_id=ws.id, limit=200)
+        assert wi["entity_id"] not in {r["entity_id"] for r in listed}
+        assert WorkItemModel.query_work_items(project_id=tier.id) == []
+        ready = WorkItemModel.ready_work_items(workspace_id=ws.id, limit=200)
+        assert wi["entity_id"] not in {r["entity_id"] for r in ready}
+        assert WorkItemModel.ready_work_items(project_id=tier.id) == []
+    finally:
+        with psycopg.connect(seeded["dsn"]) as conn:
+            conn.execute(
+                "UPDATE work_items SET project_id = %s WHERE entity_id = %s",
+                (seeded["repo"].id, wi["entity_id"]),
+            )
+
+
 def test_resolve_project_by_path_skips_tier_rows(seeded):
     ws = seeded["ws"]
     vm_proj = coredb.get_or_create_scope_project(ws.id, "vm", VM)

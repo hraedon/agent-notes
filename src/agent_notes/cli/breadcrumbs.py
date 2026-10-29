@@ -24,10 +24,13 @@ from agent_notes.cli.common import (
     EXIT_SUCCESS,
     _add_common,
     _print_sub_help,
-    _resolve,
     emit_error,
     report_resolution_failure,
 )
+
+# Work items live only in repo projects: `--workspace` alone never selects the
+# workspace's `global` memory tier here (Plan 025 D3).
+from agent_notes.cli.common import resolve_repo_project as _resolve
 from agent_notes.core import config as reg_config
 from agent_notes.core import outbox
 from agent_notes.core.lifecycle import map_legacy_to_canonical as _map_status
