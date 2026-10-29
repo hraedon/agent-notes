@@ -285,7 +285,8 @@ def register_session(
     is never recomputed here. ``None`` arguments keep the stored value. With
     ``replace_location=False`` (CLI calls), an already-stored ``cwd`` and
     project are kept, so a tool call from a subdirectory doesn't move the
-    hook-registered location.
+    hook-registered location. The stored workspace is always the stored
+    project's, so inbox matching never pairs one workspace with another's slug.
     """
     key = session_key(vm, harness, session_id)
     if trust is not None and trust not in TRUST_LEVELS:
@@ -307,7 +308,10 @@ def register_session(
                     CASE WHEN %(paseo)s::text IS NULL THEN 'none' ELSE 'direct' END,
                     COALESCE(%(trust)s, 'normal'))
             ON CONFLICT (session_key) DO UPDATE SET
-                workspace_id = EXCLUDED.workspace_id,
+                workspace_id = COALESCE(
+                    (SELECT p.workspace_id FROM projects p WHERE p.id = {proj_expr}),
+                    EXCLUDED.workspace_id
+                ),
                 paseo_agent_id = COALESCE(EXCLUDED.paseo_agent_id, agent_sessions.paseo_agent_id),
                 project_id = {proj_expr},
                 cwd = {cwd_expr},

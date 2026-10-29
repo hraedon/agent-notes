@@ -430,6 +430,30 @@ def test_register_keeps_location_when_asked(ws, vm, tmp_path):
     assert row["cwd"] == str(tmp_path / "x")
 
 
+def test_heartbeat_from_elsewhere_keeps_the_sessions_workspace(ws, vm):
+    other_ws = coredb.get_or_create_workspace(f"ws-{_uid()}", "Other").id
+    slug = f"proj-{_uid()}"
+    home = coredb.get_or_create_project(other_ws, slug=slug, name=slug, repo_root=f"/x/{slug}")
+    # The default workspace has an unrelated project with the same slug.
+    coredb.get_or_create_project(ws, slug=slug, name=slug, repo_root=f"/y/{slug}")
+    key = m.register_session(
+        vm, "claude", f"h-{_uid()}", workspace_id=other_ws, project_id=home.id, cwd="/x"
+    )["session_key"]
+    _vm, harness, sid = m.parse_session_key(key)
+
+    # A CLI call from an unregistered directory falls back to the default workspace.
+    for replace_location in (False, True):
+        row = m.register_session(
+            vm, harness, sid, workspace_id=ws, cwd="/tmp", replace_location=replace_location
+        )
+        assert (row["workspace_id"], row["project_id"]) == (other_ws, home.id)
+
+    mine = _send(other_ws, to_project=slug)["id"]
+    foreign = _send(ws, to_project=slug)["id"]
+    seen = _ids(m.inbox(key))
+    assert mine in seen and foreign not in seen
+
+
 def test_auto_continue_bump_and_reset(ws, vm):
     key = _session(ws, vm)
     assert m.bump_auto_continue(key) == 1
