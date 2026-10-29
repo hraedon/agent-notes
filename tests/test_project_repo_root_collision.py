@@ -10,6 +10,12 @@ a /tmp clone that was then cleaned up, so the real repo stopped resolving
 (`PROJECT_NOT_REGISTERED`) and 25 work items sat behind a path that no longer
 existed. The data was intact the whole time — only the mapping was wrong —
 which is exactly why the failure was so confusing.
+
+These tests pin the db layer, which is unchanged by Plan 025 WI-2.6: the
+first registration still owns ``repo_root``. What changed is `agent-notes init`
+on a taken slug: it used to exit EXIT_CONFLICT; it now records the new path as
+this VM's checkout and leaves ``repo_root`` alone (see test_project_checkouts.py).
+The refusal existed to stop the root being stolen, and a checkout cannot steal it.
 """
 
 from __future__ import annotations

@@ -321,11 +321,28 @@ def find_scope_project(workspace_id: int, scope: str, vm_id: str | None = None) 
 
 
 def resolve_project(path: str) -> dict:
-    """Return project matching a filesystem path by longest-prefix match on repo_root.
+    """Return the project containing a filesystem path.
 
-    Returns dict: {"workspace": <slug>, "project": <slug>, "repo_root": <str>}
+    Tries the current VM's checkouts first (``core.checkouts``: longest prefix,
+    Windows-aware), then falls back to longest-prefix match on ``repo_root``.
+    A ``repo_root`` match whose directory exists on this machine is recorded as
+    a checkout for this VM, so a machine registered before the checkouts table
+    existed heals itself on first use.
+
+    Returns dict: {"workspace": <slug>, "project": <slug>, "repo_root": <str>, ...}
     Raises ValueError with a structured PROJECT_NOT_REGISTERED error if no match.
     """
+    from agent_notes.core import checkouts
+
+    vm_id = _current_vm_id()
+    if vm_id is not None:
+        try:
+            found = checkouts.find_project_by_checkout(path, vm_id)
+        except psycopg.errors.UndefinedTable:
+            found = None  # 852_project_checkouts.sql not applied yet
+        if found is not None:
+            return found
+
     abs_path = os.path.abspath(path)
     with _conn() as conn:
         cur = conn.cursor()
@@ -342,6 +359,8 @@ def resolve_project(path: str) -> dict:
         for row in cur.fetchall():
             rr = row["repo_root"]
             if rr and (abs_path == rr or abs_path.startswith(rr + os.sep)):
+                if vm_id is not None and os.path.isdir(rr):
+                    _heal_checkout(row["id"], vm_id, rr)
                 return {
                     "workspace": row["workspace"],
                     "project": row["project"],
@@ -353,11 +372,32 @@ def resolve_project(path: str) -> dict:
                     # librarian root). Callers surface this so an unregistered
                     # project can't masquerade as an exact match / global view.
                     "resolved_via": "exact" if abs_path == rr else "ancestor",
+                    "source": "repo_root",
                 }
     raise ValueError(
         f"PROJECT_NOT_REGISTERED: no project found for path {abs_path!r}. "
         f"Run `agent-notes init {abs_path}` to register."
     )
+
+
+def _current_vm_id() -> str | None:
+    """This machine's VM ID, or ``None`` when none can be derived (checkouts are then skipped)."""
+    from agent_notes.core.config import VmIdError, resolve_vm_id
+
+    try:
+        return resolve_vm_id()
+    except VmIdError:
+        return None
+
+
+def _heal_checkout(project_id: int, vm_id: str, path: str) -> None:
+    """Record a confirmed repo_root match as this VM's checkout. Best effort: resolution wins."""
+    from agent_notes.core import checkouts
+
+    try:
+        checkouts.register_checkout(project_id, vm_id, path)
+    except Exception:  # noqa: S110 - a failed write must not fail a read-path resolve
+        pass
 
 
 def _row_to_project(row: dict) -> Project:
