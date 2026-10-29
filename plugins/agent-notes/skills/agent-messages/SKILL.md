@@ -47,9 +47,12 @@ agent-notes session policy [--wake-policy none|direct|any-direct-from-project] -
   continue without it. It exits 2 on timeout; call it again or move on. On
   Codex, keep `--timeout` at 30 or less and call it again if needed.
 - Otherwise keep working, or end your turn. A reply sent with `--wake`
-  reaches you when your turn ends or, under Paseo, while you are idle.
-  Without `--wake` it arrives with the next prompt.
-- `session policy --wake-policy none` stops other agents from waking you.
+  reaches you when your turn ends or, under Paseo, while you are idle, if
+  your session's wake policy allows it. Paseo-hosted sessions default to
+  `direct`, others to `none`. Otherwise, and without `--wake`, it arrives
+  with the next prompt.
+- `session policy --wake-policy direct` lets other agents wake you;
+  `--wake-policy none` stops them.
 
 ## Ask another model for a code review
 
