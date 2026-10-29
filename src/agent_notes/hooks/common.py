@@ -1,6 +1,6 @@
 """Shared hook logic: registration, delivery and the loop guard (Plan 025 §6).
 
-Every harness adapter (``claude``, ``codex``, ``agy``) reads its harness's
+Every harness adapter (``claude``, ``codex``, ``agy``, ``hermes``) reads its harness's
 hook JSON, maps it to a :class:`HookInput`, and uses the helpers here. All
 of them fail open: any error is logged to a small rotating file and the hook
 prints a harmless no-op response and exits 0, so a Postgres outage never
@@ -44,7 +44,7 @@ LOG_PATH_ENV = "AGENT_NOTES_HOOK_LOG"
 DEBUG_ENV = "AGENT_NOTES_HOOK_DEBUG"
 _LOG_MAX_BYTES = 256 * 1024
 
-HARNESSES = ("claude", "codex", "agy")
+HARNESSES = ("claude", "codex", "agy", "hermes")
 _EVENT_NAMES = {
     "SessionStart": "session-start",
     "UserPromptSubmit": "user-prompt-submit",

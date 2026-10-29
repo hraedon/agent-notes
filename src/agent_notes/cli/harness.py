@@ -43,8 +43,12 @@ Lifecycle hooks (Plan 025 Phase 4, ``agent-notes-hook``): **claude** gets
 user-level SessionStart / UserPromptSubmit / Stop groups in ``settings.json``;
 **codex** gets SessionStart / UserPromptSubmit / Stop groups in
 ``$CODEX_HOME/hooks.json``; **agy** gets one named hook (``agent-notes``) in
-``~/.gemini/config/hooks.json`` and skills under ``~/.gemini/config/skills``.
-``all`` adds codex and agy only where their home directory exists.
+``~/.gemini/config/hooks.json`` and skills under ``~/.gemini/config/skills``;
+**hermes** gets one ``pre_llm_call`` entry under ``hooks:`` in
+``~/.hermes/config.yaml`` (YAML, edited by :mod:`agent_notes.cli.hermes_config`).
+Hermes asks the operator to approve each shell hook itself, so install-harness
+never writes its allowlist. ``all`` adds codex, agy and hermes only where their
+home directory exists.
 
 Idempotency + uninstall: a sidecar manifest (``.agent-notes-harness.json`` next
 to each harness config) records exactly what install-harness wrote (env keys,
@@ -93,11 +97,12 @@ _OPENCODE_AGENT_FILES: tuple[str, ...] = (
 EXIT_DRY_RUN = 2
 
 _STABLE_HARNESS_TARGETS = ("claude", "opencode")
-# Codex and agy join `all` only on machines where the harness is present
+# Codex, agy and Hermes join `all` only on machines where the harness is present
 # (its home directory exists); see _targets_for. Their hooks are inert until
-# trusted (Codex /hooks) and are hash-owned like everything else.
-_CANDIDATE_HARNESS_TARGETS = ("codex", "agy")
-_PRIVATE_HARNESS_TARGETS = ("hermes",)
+# trusted (Codex /hooks, Hermes' shell-hook consent) and are hash-owned like
+# everything else.
+_CANDIDATE_HARNESS_TARGETS = ("codex", "agy", "hermes")
+_PRIVATE_HARNESS_TARGETS: tuple[str, ...] = ()
 _HARNESS_TARGETS = _STABLE_HARNESS_TARGETS + _CANDIDATE_HARNESS_TARGETS + _PRIVATE_HARNESS_TARGETS
 
 # Tool-specific vars propagated into the harness. Plan 025 D7 retired regista
@@ -379,6 +384,7 @@ def _harness_paths(harness: str, home: Path | None = None) -> dict[str, Path]:
             "manifest": base / MANIFEST_FILENAME,
             "agent_config": resolved / ".config" / "agent-notes" / "config.json",
             "agents_dest": base / "agents",
+            "hooks": base / "config.yaml",
         }
     if harness == "codex":
         # Codex user-scoped shared skills live at $HOME/.agents/skills per the
@@ -831,6 +837,114 @@ def _unwire_agy_hook(
     action = _act("remove_key", [HOOK_NAME], f"removed owned agy {HOOK_NAME} hook")
     action["path"] = str(hooks_path)
     return [action], None, []
+
+
+# ---------------------------------------------------------------------------
+# Hermes shell hook (Plan 025 Phase 7)
+# ---------------------------------------------------------------------------
+
+
+def _hermes_hook_approved(hermes_dir: Path) -> bool:
+    """True when Hermes' consent allowlist already has our hook (read-only)."""
+    from agent_notes.hooks.hermes import EVENT, HOOK_COMMAND
+
+    try:
+        data = json.loads((hermes_dir / "shell-hooks-allowlist.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    approvals = data.get("approvals") if isinstance(data, dict) else None
+    return isinstance(approvals, list) and any(
+        isinstance(a, dict) and a.get("event") == EVENT and a.get("command") == HOOK_COMMAND
+        for a in approvals
+    )
+
+
+def _wire_hermes_hook(
+    config_path: Path, dry_run: bool, prev_hash: str | None, owned_before: bool
+) -> tuple[list[dict], str | None, list[str], bool]:
+    """Add our ``hooks.pre_llm_call`` entry to ``~/.hermes/config.yaml``.
+
+    Ownership is the entry's hash (matched by its ``command``), as for agy.
+    Returns ``(actions, owned_hash, conflicts, file_created)``.
+    """
+    from agent_notes.cli import hermes_config as hc
+    from agent_notes.hooks.hermes import EVENT, HOOK_COMMAND, hermes_hook_entry
+
+    existed_before = config_path.is_file()
+    text, eol = hc.read_text(config_path)
+    doc = hc.parse(text, config_path)
+    canonical = hermes_hook_entry()
+    canonical_hash = _json_hash(canonical)
+    current = hc.find_entry(doc, EVENT, HOOK_COMMAND)
+    conflicts: list[str] = []
+    owned: str | None = None
+    changed = False
+    if current is None:
+        owned, status, changed = canonical_hash, "created", True
+    elif not owned_before:
+        status = "conflict"
+        conflicts.append(f"hermes hook {HOOK_COMMAND!r}: pre-existing and not owned by agent-notes")
+    elif _json_hash(current) == canonical_hash:
+        owned, status = canonical_hash, "unchanged"
+    elif prev_hash is not None and _json_hash(current) != prev_hash:
+        owned, status = prev_hash, "conflict"
+        conflicts.append(f"hermes hook {HOOK_COMMAND!r}: locally modified, preserved")
+    else:
+        owned, status, changed = canonical_hash, "updated", True
+    detail = f"install hermes {EVENT} hook ({status})"
+    if changed:
+        new_text, kept = hc.with_entry(text, doc, EVENT, canonical, config_path)
+        if not kept:
+            backup = config_path.with_name(config_path.name + hc.BACKUP_SUFFIX)
+            detail += f"; comments in config.yaml not preserved, original saved as {backup.name}"
+            conflicts.append(
+                f"hermes config.yaml is rewritten without its comments; original kept at {backup}"
+                if not dry_run
+                else "hermes config.yaml would be rewritten without its comments "
+                f"(original saved as {backup.name})"
+            )
+        if not dry_run:
+            hc.write_config(config_path, new_text, eol, backup=not kept)
+    action = _act("merge_yaml", [f"hooks.{EVENT}"], detail, status=status)
+    action["path"] = str(config_path)
+    return [action], owned, conflicts, not existed_before
+
+
+def _unwire_hermes_hook(
+    config_path: Path, recorded_hash: str | None, *, remove_created_file: bool
+) -> tuple[list[dict], str | None, list[str]]:
+    """Remove our entry if unchanged. Returns ``(actions, preserved_hash, warnings)``."""
+    from agent_notes.cli import hermes_config as hc
+    from agent_notes.hooks.hermes import EVENT, HOOK_COMMAND
+
+    text, eol = hc.read_text(config_path)
+    doc = hc.parse(text, config_path)
+    current = hc.find_entry(doc, EVENT, HOOK_COMMAND)
+    if current is None:
+        return [], None, []
+    if recorded_hash is not None and _json_hash(current) != recorded_hash:
+        action = _act(
+            "skip_key",
+            [f"hooks.{EVENT}"],
+            "hermes hook modified, preserved",
+            status="conflict",
+        )
+        action["path"] = str(config_path)
+        return [action], recorded_hash, [f"hermes hook {HOOK_COMMAND!r}: modified, preserved"]
+    new_text, kept = hc.without_entry(text, doc, EVENT, HOOK_COMMAND, config_path)
+    warnings: list[str] = []
+    if not new_text.strip() and remove_created_file:
+        config_path.unlink(missing_ok=True)
+    else:
+        hc.write_config(config_path, new_text, eol, backup=not kept)
+        if not kept:
+            warnings.append(
+                "hermes config.yaml was rewritten without its comments; original kept at "
+                f"{config_path.with_name(config_path.name + hc.BACKUP_SUFFIX)}"
+            )
+    action = _act("remove_key", [f"hooks.{EVENT}"], "removed owned hermes hook")
+    action["path"] = str(config_path)
+    return [action], None, warnings
 
 
 # ---------------------------------------------------------------------------
@@ -1599,6 +1713,25 @@ def _install_harness_one(
                     if k not in env_managed:
                         env_managed.append(k)
         warns += hw
+        # Plan 025 Phase 7: one pre_llm_call shell hook in config.yaml.
+        from agent_notes.hooks.hermes import EVENT as HERMES_EVENT
+
+        hook_actions, hook_hash, hook_conflicts, created_now = _wire_hermes_hook(
+            paths["hooks"],
+            dry_run,
+            prev_hook_hashes.get(HERMES_EVENT),
+            HERMES_EVENT in prev_hook_hashes,
+        )
+        config_actions += hook_actions
+        warns += hook_conflicts
+        installed_hook_hashes = {HERMES_EVENT: hook_hash} if hook_hash else {}
+        hooks_file_created = hooks_file_created or (created_now and hook_hash is not None)
+        if hook_hash and not _hermes_hook_approved(paths["hooks"].parent):
+            warns.append(
+                "hermes: the new shell hook is not approved yet. Run `hermes chat` once and "
+                "accept the prompt, or set HERMES_ACCEPT_HOOKS=1 for gateway/cron. "
+                "install-harness never writes Hermes' allowlist"
+            )
     elif harness == "codex":
         # Codex: no env/plugin/TOML wiring (Decision 4).  Merge only the two
         # canonical lifecycle matcher groups into the shared hooks.json. Cairn
@@ -1692,7 +1825,7 @@ def _install_harness_one(
             "skills": skill_hashes,
             "plugin": plugin_managed,
         }
-        if harness in ("codex", "agy"):
+        if harness in ("codex", "agy", "hermes"):
             manifest_payload["hooks"] = installed_hook_hashes
             manifest_payload["hooks_file_created"] = hooks_file_created
         if harness == "claude":
@@ -1782,6 +1915,20 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
             warns += hook_warnings
             if kept_hash is not None:
                 preserved_hooks[HOOK_NAME] = kept_hash
+    elif harness == "hermes":
+        from agent_notes.hooks.hermes import EVENT as HERMES_EVENT
+
+        recorded = _normalize_hook_hashes(manifest.get("hooks", {}))
+        if HERMES_EVENT in recorded:
+            hook_actions, kept_hash, hook_warnings = _unwire_hermes_hook(
+                paths["hooks"],
+                recorded[HERMES_EVENT],
+                remove_created_file=bool(manifest.get("hooks_file_created", False)),
+            )
+            actions += hook_actions
+            warns += hook_warnings
+            if kept_hash is not None:
+                preserved_hooks[HERMES_EVENT] = kept_hash
 
     # --- remove env keys ---
     env_keys: list[str] = manifest.get("env_keys", [])
@@ -1969,7 +2116,7 @@ def _uninstall_one(harness: str, home: Path | None = None) -> tuple[dict, list[s
         }
         if harness == "opencode" and preserved_agents:
             reduced["agents"] = preserved_agents
-        if harness in ("codex", "agy") and preserved_hooks:
+        if harness in ("codex", "agy", "hermes") and preserved_hooks:
             reduced["hooks"] = preserved_hooks
             reduced["hooks_file_created"] = bool(manifest.get("hooks_file_created", False))
         if harness == "claude" and preserved_hooks:
@@ -2003,12 +2150,14 @@ def _harness_detected(harness: str, home: Path | None = None) -> bool:
         return _codex_home(home).is_dir()
     if harness == "agy":
         return _agy_config_dir(home).parent.is_dir()
+    if harness == "hermes":
+        return ((home or Path.home()) / ".hermes").is_dir()
     return True
 
 
 def _targets_for(harness: str, home: Path | None = None) -> list[str]:
     if harness == "all":
-        # Stable targets always; Codex and agy where installed (Plan 025 Phase 4).
+        # Stable targets always; Codex, agy and Hermes where installed (Plan 025).
         return list(_STABLE_HARNESS_TARGETS) + [
             t for t in _CANDIDATE_HARNESS_TARGETS if _harness_detected(t, home)
         ]
