@@ -32,6 +32,64 @@ _GAP_SECTION_RE = re.compile(
 
 _GAP_LINE_RE = re.compile(r"^\s*-\s+\[\[([^\]]+)\]\]\s*:\s*(.+)$", re.MULTILINE)
 
+# ---------------------------------------------------------------------------
+# Plan 027 Phase 1 tunables (calibration in plans/027 §10 and
+# docs/memory-eval/phase1-2026-10-29.md)
+# ---------------------------------------------------------------------------
+
+# WI-1.1: `memory add` refuses, without an explicit choice, a fact whose body
+# embedding is at least this similar (cosine) to an existing fact in the
+# target tier or its parent tiers. Calibrated on production: a restated lead
+# sentence of an existing fact scores >= 0.85 in 23/25 samples, while 0 of the
+# 11 facts written since 2026-08 have a neighbour above 0.75.
+DUPLICATE_GATE_SIMILARITY = 0.85
+# WI-1.5: the hygiene report's "near-duplicate pair" (cosine distance < 0.08,
+# the Plan 027 §1 definition). Stricter than the write gate, because a report
+# nobody can act on gets ignored.
+HYGIENE_DUPLICATE_SIMILARITY = 0.92
+# WI-1.3: reflections (episodes) rank this far below a fact of equal
+# similarity in default `memory search` / `memory recall`. Chosen with the
+# Plan 027 recall fixture (0.04-0.12 never regresses it; 0.07 is best on all
+# metrics).
+REFLECTION_RANK_PENALTY = 0.07
+REFLECTION_POLICIES = ("demote", "mixed", "exclude")
+# WI-1.4: size guidance (warn, never refuse).
+FACT_SIZE_GUIDANCE_CHARS = 2000
+SIZE_GUIDED_TYPES = ("project", "user", "feedback")
+# WI-1.2: link kinds `memory link` accepts. Links stay free-text in the
+# schema (decision 5: no CHECK constraint); this only bounds the CLI verb.
+MEMORY_LINK_KINDS = ("relates_to", "contradicts")
+
+
+def size_warning(memory_type: str | None, body: str | None) -> str | None:
+    """WI-1.4: a one-line warning for an oversized fact body, else None."""
+    if body is None or memory_type not in SIZE_GUIDED_TYPES:
+        return None
+    if len(body) <= FACT_SIZE_GUIDANCE_CHARS:
+        return None
+    return (
+        f"body is {len(body)} characters, over the {FACT_SIZE_GUIDANCE_CHARS}-character "
+        f"guidance for a '{memory_type}' memory: consider a 'reference' memory or "
+        "splitting it into smaller facts"
+    )
+
+
+def _reflection_terms(policy: str) -> tuple[str, float]:
+    """(extra WHERE clause, rank penalty) for a reflection policy."""
+    if policy not in REFLECTION_POLICIES:
+        raise ValueError(f"unknown reflection policy {policy!r}")
+    if policy == "exclude":
+        return "memory_type <> 'reflection'", 0.0
+    return "", REFLECTION_RANK_PENALTY if policy == "demote" else 0.0
+
+
+def rank_key(row: dict, policy: str = "mixed") -> float:
+    """The score a result list is ordered by (raw similarity minus any penalty)."""
+    score = float(row.get("score") or 0.0)
+    if policy == "demote" and row.get("memory_type") == "reflection":
+        score -= REFLECTION_RANK_PENALTY
+    return score
+
 
 def _validate_memory_type(workspace_id: int, memory_type: str) -> None:
     from agent_notes.core.db import list_vocabulary
@@ -62,7 +120,16 @@ def add_memory(
     body: str,
     attributes: dict | None = None,
     embedding: Any | None = None,
+    supersedes_name: str | None = None,
+    related: list[tuple[int, str]] | None = None,
 ) -> dict:
+    """Add a memory, superseding an active one of the same name in the project.
+
+    ``supersedes_name`` (WI-1.1) also deactivates a *differently named* active
+    memory in the same project and records it in ``supersedes``.
+    ``related`` is a list of ``(project_id, name)`` memories to link with
+    ``relates_to``, in the same transaction.
+    """
     reject_regista_writes()
     _validate_memory_type(workspace_id, memory_type)
 
@@ -76,10 +143,41 @@ def add_memory(
         )
         existing = cur.fetchone()
 
+        if existing and supersedes_name and supersedes_name != name:
+            # One predecessor per row: a revision of `name` cannot also
+            # replace another memory (the `supersedes` column would lose one).
+            raise ValueError(
+                f"'{name}' already exists in this scope, so this add revises it; "
+                f"--supersedes {supersedes_name} cannot be combined with a revision"
+            )
+
         old_id = None
         if existing:
             old_id = existing["id"]
             cur.execute("UPDATE memories SET active = false WHERE id = %s", (old_id,))
+
+        if supersedes_name and supersedes_name != name:
+            cur.execute(
+                "UPDATE memories SET active = false "
+                "WHERE project_id = %s AND name = %s AND active = true RETURNING id",
+                (project_id, supersedes_name),
+            )
+            target = cur.fetchone()
+            if target is None:
+                conn.rollback()
+                raise ValueError(
+                    f"--supersedes: no active memory '{supersedes_name}' in this scope"
+                )
+            old_id = target["id"]
+            write_change(
+                conn,
+                kind=_KIND,
+                workspace_id=workspace_id,
+                project_id=project_id,
+                identifier=supersedes_name,
+                event="superseded",
+                payload={"id": old_id, "superseded_by": name},
+            )
 
         cur.execute(
             """
@@ -117,10 +215,56 @@ def add_memory(
         # Auto-create [[name]] relates_to links inside the same transaction
         # so link + memory commit atomically (decision 20).
         _auto_create_wikilinks(conn, workspace_id, project_id, name, body)
+        for rel_project, rel_name in related or []:
+            _insert_memory_link(
+                conn, workspace_id, project_id, name, rel_project, rel_name, "relates_to"
+            )
 
         conn.commit()
 
     return dict(row)
+
+
+def _insert_memory_link(
+    conn: psycopg.Connection,
+    workspace_id: int,
+    from_project: int,
+    from_name: str,
+    to_project: int,
+    to_name: str,
+    relationship: str,
+) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO links
+            (from_kind, from_workspace, from_project, from_identifier,
+             to_kind,   to_workspace,   to_project,   to_identifier, relationship)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT DO NOTHING
+        """,
+        (
+            _KIND,
+            workspace_id,
+            from_project,
+            from_name,
+            _KIND,
+            workspace_id,
+            to_project,
+            to_name,
+            relationship,
+        ),
+    )
+    if cur.rowcount > 0:
+        write_change(
+            conn,
+            kind=_KIND,
+            workspace_id=workspace_id,
+            project_id=from_project,
+            identifier=from_name,
+            event="link_added",
+            payload={"to_kind": _KIND, "to_identifier": to_name, "relationship": relationship},
+        )
 
 
 def _auto_create_wikilinks(
@@ -432,8 +576,14 @@ def search_memory_with_body(
     project_id: int | None = None,
     memory_type: str | None = None,
     limit: int = 10,
+    reflections: str = "mixed",
 ) -> list[dict]:
-    """Same as `search_memory` but returns full body text."""
+    """Same as `search_memory` but returns full body text.
+
+    ``reflections`` (WI-1.3): ``mixed`` ranks by similarity alone, ``demote``
+    ranks reflections ``REFLECTION_RANK_PENALTY`` below facts, ``exclude``
+    drops them. ``score`` is always the raw similarity.
+    """
     conditions = ["active = true", "workspace_id = %s", "embedding IS NOT NULL"]
     params: list[Any] = [workspace_id]
 
@@ -443,6 +593,9 @@ def search_memory_with_body(
     if memory_type:
         conditions.append("memory_type = %s")
         params.append(memory_type)
+    extra, penalty = _reflection_terms(reflections)
+    if extra:
+        conditions.append(extra)
 
     where = " AND ".join(conditions)
 
@@ -450,15 +603,16 @@ def search_memory_with_body(
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             f"""
-            SELECT id, name, memory_type, body,
+            SELECT id, project_id, name, memory_type, body,
                    1 - (embedding <=> %s::vector) AS score,
                    created_at, updated_at
             FROM memories
             WHERE {where}
-            ORDER BY embedding <=> %s::vector
+            ORDER BY (embedding <=> %s::vector)
+                     + CASE WHEN memory_type = 'reflection' THEN %s ELSE 0 END
             LIMIT %s
             """,
-            [query_vec] + params + [query_vec, min(limit, 50)],
+            [query_vec] + params + [query_vec, penalty, min(limit, 50)],
         )
         return [dict(r) for r in cur.fetchall()]
 
@@ -484,6 +638,7 @@ def _shadows_for(
     workspace_id: int,
     scopes: list[ScopeRef],
     winners: list[dict],
+    skip_reflections: bool = False,
 ) -> dict[tuple[str, int], list[dict]]:
     """Same-name rows hidden behind each winner, keyed by (name, winner id)."""
     by_project = {s.project_id: s for s in scopes}
@@ -496,6 +651,7 @@ def _shadows_for(
         FROM memories
         WHERE active = true AND workspace_id = %s
           AND project_id = ANY(%s) AND name = ANY(%s)
+          AND NOT (%s AND memory_type = 'reflection')
         ORDER BY array_position(%s::int[], project_id)
         """,
         (
@@ -503,6 +659,7 @@ def _shadows_for(
             workspace_id,
             [s.project_id for s in scopes],
             names,
+            skip_reflections,
             [s.project_id for s in scopes],
         ),
     )
@@ -555,10 +712,14 @@ def active_by_name(workspace_id: int, scopes: list[ScopeRef], names: list[str]) 
 
 
 def _tag_scoped(
-    cur: Any, workspace_id: int, scopes: list[ScopeRef], rows: list[dict]
+    cur: Any,
+    workspace_id: int,
+    scopes: list[ScopeRef],
+    rows: list[dict],
+    skip_reflections: bool = False,
 ) -> list[dict]:
     by_project = {s.project_id: s for s in scopes}
-    shadows = _shadows_for(cur, workspace_id, scopes, rows)
+    shadows = _shadows_for(cur, workspace_id, scopes, rows, skip_reflections)
     tagged = []
     for r in rows:
         ref = by_project[r["project_id"]]
@@ -576,12 +737,14 @@ def search_memory_composed(
     scopes: list[ScopeRef],
     memory_type: str | None = None,
     limit: int = 10,
+    reflections: str = "mixed",
 ) -> list[dict]:
     """One similarity query over several scopes, ranked with no tier boost.
 
     ``scopes`` is ordered most specific first. When a name exists in more than
     one scope only the most specific row is returned; the others ride along
-    in ``shadows``.
+    in ``shadows``. ``reflections`` is the WI-1.3 policy (see
+    :func:`search_memory_with_body`).
     """
     if not scopes:
         return []
@@ -596,6 +759,9 @@ def search_memory_composed(
     if memory_type:
         conditions.append("memory_type = %s")
         params.append(memory_type)
+    extra, penalty = _reflection_terms(reflections)
+    if extra:
+        conditions.append(extra)
     with _conn() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -611,13 +777,13 @@ def search_memory_composed(
                 WHERE {" AND ".join(conditions)}
             ) ranked
             WHERE rn = 1
-            ORDER BY score DESC
+            ORDER BY score - CASE WHEN memory_type = 'reflection' THEN %s ELSE 0 END DESC
             LIMIT %s
             """,
-            [query_vec, project_ids, *params, min(limit, 50)],
+            [query_vec, project_ids, *params, penalty, min(limit, 50)],
         )
         rows = [{k: v for k, v in r.items() if k != "rn"} for r in cur.fetchall()]
-        return _tag_scoped(cur, workspace_id, scopes, rows)
+        return _tag_scoped(cur, workspace_id, scopes, rows, reflections == "exclude")
 
 
 def list_memories_composed(
@@ -657,6 +823,195 @@ def list_memories_composed(
         )
         rows = [{k: v for k, v in r.items() if k != "rn"} for r in cur.fetchall()]
         return _tag_scoped(cur, workspace_id, scopes, rows)
+
+
+# ---------------------------------------------------------------------------
+# Plan 027 Phase 1: write-time dedup (WI-1.1) and contradictions (WI-1.2)
+# ---------------------------------------------------------------------------
+
+
+def dedup_candidates(
+    workspace_id: int,
+    embedding: Any,
+    scopes: list[ScopeRef],
+    name: str,
+    target_project_id: int | None,
+    limit: int = 5,
+) -> list[dict]:
+    """Facts a new memory may duplicate, most similar first (WI-1.1).
+
+    Composed over ``scopes`` (the target tier and its parent tiers), two
+    signals: the ``limit`` nearest facts by body embedding (``match`` includes
+    ``"semantic"``), plus any active memory with the *same name* in another
+    tier, which the new one would shadow (``match`` includes ``"name"``).
+    Reflections are never candidates: they are dated episodes, not facts.
+    The same-name row in the target tier is excluded — adding over it is an
+    explicit revision (it is superseded).
+    """
+    if not scopes:
+        return []
+    by_project = {s.project_id: s for s in scopes}
+    project_ids = [s.project_id for s in scopes]
+    with _conn() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        semantic: list[dict] = []
+        if embedding is not None:
+            cur.execute(
+                """
+                SELECT id, project_id, name, memory_type, LEFT(body, %s) AS body_preview,
+                       length(body) AS chars, updated_at,
+                       1 - (embedding <=> %s::vector) AS score
+                FROM memories
+                WHERE active = true AND workspace_id = %s AND project_id = ANY(%s)
+                  AND embedding IS NOT NULL AND memory_type <> 'reflection'
+                  AND NOT (project_id = %s AND name = %s)
+                ORDER BY embedding <=> %s::vector
+                LIMIT %s
+                """,
+                (
+                    _PREVIEW_CHARS,
+                    embedding,
+                    workspace_id,
+                    project_ids,
+                    target_project_id or -1,
+                    name,
+                    embedding,
+                    limit,
+                ),
+            )
+            semantic = [dict(r) for r in cur.fetchall()]
+        cur.execute(
+            """
+            SELECT id, project_id, name, memory_type, LEFT(body, %s) AS body_preview,
+                   length(body) AS chars, updated_at,
+                   CASE WHEN embedding IS NULL OR %s::vector IS NULL THEN NULL
+                        ELSE 1 - (embedding <=> %s::vector) END AS score
+            FROM memories
+            WHERE active = true AND workspace_id = %s AND project_id = ANY(%s)
+              AND name = %s AND project_id <> %s
+            """,
+            (
+                _PREVIEW_CHARS,
+                embedding,
+                embedding,
+                workspace_id,
+                project_ids,
+                name,
+                target_project_id or -1,
+            ),
+        )
+        same_name = [dict(r) for r in cur.fetchall()]
+
+    out: dict[int, dict] = {}
+    for r in semantic:
+        out[r["id"]] = {**r, "match": ["semantic"]}
+    for r in same_name:
+        if r["id"] in out:
+            out[r["id"]]["match"].append("name")
+        else:
+            out[r["id"]] = {**r, "match": ["name"]}
+    rows = sorted(out.values(), key=lambda r: -(r["score"] if r["score"] is not None else 2.0))
+    result = []
+    for r in rows:
+        ref = by_project[r.pop("project_id")]
+        # Full precision: callers compare with the gate threshold, then round
+        # for display (a raw 0.84996 must not become a blocking 0.85).
+        r["score"] = None if r["score"] is None else float(r["score"])
+        result.append({**r, "scope": ref.scope, "scope_key": ref.scope_key})
+    return result
+
+
+def find_active(workspace_id: int, project_id: int, name: str) -> dict | None:
+    """The active memory ``name`` in one project row, or None (id, name, type only)."""
+    with _conn() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            "SELECT id, project_id, name, memory_type FROM memories "
+            "WHERE workspace_id = %s AND project_id = %s AND name = %s AND active = true",
+            (workspace_id, project_id, name),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def scope_of_project(slug: str, kind: str) -> tuple[str, str]:
+    """(scope, scope_key) for a project row: repo slug, VM ID, or 'global'."""
+    if kind == "vm":
+        return "vm", slug.split(":", 1)[1] if ":" in slug else slug
+    if kind == "global":
+        return "global", "global"
+    return "repo", slug
+
+
+def open_contradictions(
+    workspace_id: int, keys: list[tuple[int, str]]
+) -> dict[tuple[int, str], list[dict]]:
+    """Open ``contradicts`` links touching each ``(project_id, name)`` (WI-1.2).
+
+    A contradiction is *open* while both memories are active. It closes when
+    either side is superseded under another name or deleted, or when the link
+    is removed with ``memory unlink``. The link is symmetric for reporting:
+    each side lists the other.
+    """
+    if not keys:
+        return {}
+    pids = [k[0] for k in keys]
+    names = [k[1] for k in keys]
+    with _conn() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(
+            """
+            WITH k(pid, name) AS (SELECT * FROM unnest(%s::int[], %s::text[]))
+            SELECT l.from_project, l.from_identifier, l.to_project, l.to_identifier,
+                   l.created_at, fp.slug AS from_slug, fp.kind AS from_kind,
+                   tp.slug AS to_slug, tp.kind AS to_kind
+            FROM links l
+            JOIN projects fp ON fp.id = l.from_project
+            JOIN projects tp ON tp.id = l.to_project
+            WHERE l.relationship = 'contradicts'
+              AND l.from_kind = 'memory' AND l.to_kind = 'memory'
+              AND l.from_workspace = %s
+              AND (EXISTS (SELECT 1 FROM k WHERE k.pid = l.from_project
+                                            AND k.name = l.from_identifier)
+                   OR EXISTS (SELECT 1 FROM k WHERE k.pid = l.to_project
+                                               AND k.name = l.to_identifier))
+              AND EXISTS (SELECT 1 FROM memories m WHERE m.active
+                          AND m.project_id = l.from_project AND m.name = l.from_identifier)
+              AND EXISTS (SELECT 1 FROM memories m WHERE m.active
+                          AND m.project_id = l.to_project AND m.name = l.to_identifier)
+            ORDER BY l.created_at
+            """,
+            (pids, names, workspace_id),
+        )
+        rows = cur.fetchall()
+    wanted = set(keys)
+    out: dict[tuple[int, str], list[dict]] = {}
+    for r in rows:
+        ends = (
+            ((r["from_project"], r["from_identifier"]), r["to_slug"], r["to_kind"], "to"),
+            ((r["to_project"], r["to_identifier"]), r["from_slug"], r["from_kind"], "from"),
+        )
+        for i, (key, other_slug, other_kind, other_end) in enumerate(ends):
+            if key not in wanted:
+                continue
+            other_name = r[f"{other_end}_identifier"]
+            scope, scope_key = scope_of_project(other_slug, other_kind)
+            out.setdefault(key, []).append(
+                {
+                    "name": other_name,
+                    "scope": scope,
+                    "scope_key": scope_key,
+                    "since": r["created_at"],
+                    "direction": "contradicts" if i == 0 else "contradicted_by",
+                }
+            )
+    return out
+
+
+def contradiction_warning(name: str, contradictions: list[dict]) -> str:
+    """The one-line warning shown next to a memory with open contradictions."""
+    others = ", ".join(f"{c['name']} [{c['scope']}:{c['scope_key']}]" for c in contradictions)
+    return f"memory '{name}' has an open contradiction with {others}; verify before relying on it"
 
 
 def delete_memory(workspace_id: int, project_id: int, name: str) -> dict | None:

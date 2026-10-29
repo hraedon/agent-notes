@@ -51,6 +51,8 @@ class ErrorCode(StrEnum):
     VALIDATION_FAILED = "VALIDATION_FAILED"
     OPERATION_FAILED = "OPERATION_FAILED"
     CHECKOUT_CONFLICT = "CHECKOUT_CONFLICT"
+    # `memory add` near-duplicate gate (Plan 027 WI-1.1); detail lists candidates.
+    POSSIBLE_DUPLICATE = "POSSIBLE_DUPLICATE"
     # Sessions and messaging.
     NO_SESSION = "NO_SESSION"
     SESSION_NOT_FOUND = "SESSION_NOT_FOUND"

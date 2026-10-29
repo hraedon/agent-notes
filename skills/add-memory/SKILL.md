@@ -92,7 +92,8 @@ of the old + add of the new; avoid unless the original name is wrong.
 
 ## Dedup against existing memories
 
-Before adding, search:
+You are the judge of whether a new fact duplicates an old one; the CLI only
+shows you the evidence. Before adding, search:
 
 ```
 agent-notes memory search "<query>" --path <repo-path> --json
@@ -102,10 +103,48 @@ agent-notes memory list --path <repo-path> --type <type> --json
 `search` covers repo, vm, and global together. `list` shows one scope at a
 time (default `repo`); add `--scope vm`, `--scope global`, or `--scope composed`.
 
-If a close match exists, the right move is usually to update its body
-in place (re-`add` with the same name supersedes the prior version)
-rather than create a near-duplicate. Memories are versioned via
-`supersedes`; the CLI handles the chain.
+`memory add` also checks for you. It compares the new body with the facts in
+the target scope and its parent scopes (repo > vm > global) and returns the
+nearest five as `dedup.candidates` (`id`, name, scope, type, `score`,
+`match`, `blocking`). If any candidate scores at or above `dedup.threshold` (0.85), or
+has the same name in a parent scope (which the new memory would shadow), the
+add is refused with exit code 4 and error code `POSSIBLE_DUPLICATE`. The
+candidates are then in `error.detail`, a JSON string, and `blocking` lists
+each unanswered one with its scope. Read them, then re-run with a choice for
+every blocking candidate (`--distinct` answers all of them at once):
+
+| Flag | Meaning | When |
+|---|---|---|
+| `--supersedes NAME` | Replace NAME in the scope you write to; it is deactivated and recorded in `supersedes` | The new body is the corrected or fuller version of NAME |
+| `--related NAME` (repeatable) | Keep both and link them with `relates_to` | Same topic, different facts (for example a feedback memory about a spec) |
+| `--distinct` | Keep both, unlinked | The similarity is superficial |
+
+Each flag answers one memory. `--related NAME` links the most specific scope
+that holds NAME; when the same name is a candidate in two scopes, answer the
+other with a scope prefix, for example `--related global:NAME`.
+`--supersedes` takes the same forms but only within the scope you write to.
+Both flags try the value as a literal name first: if a memory is actually
+called `global:NAME`, that memory wins, and the prefix applies only when no
+such name exists.
+
+To revise a memory, re-`add` it under the **same** name in the same scope: that
+supersedes the prior version, is never blocked (`dedup.revision` is `true`),
+and cannot be combined with `--supersedes`. Reflections are dated episodes and
+skip this check.
+
+## Contradictions
+
+When two memories disagree and you can't yet say which is right, record it:
+
+```
+agent-notes memory link <newer-name> <older-name> --kind contradicts --path <repo-path> --json
+```
+
+Add `--to-scope vm|global` when the other memory lives in another scope.
+`memory get`, `memory search` and `memory recall` then put a `contradictions`
+list on both memories and a one-line warning in `warnings`. The contradiction
+closes when either memory is superseded under another name or deleted, or
+when you run `agent-notes memory unlink <a> <b> --kind contradicts`.
 
 ## Body shape
 
@@ -114,6 +153,11 @@ you learned it, what changes if it stops being true, links to related
 memories or breadcrumbs. Two to six short paragraphs is typical.
 Embedding-based search works better with a few well-chosen keywords
 than with prose padding.
+
+Keep `project`, `user` and `feedback` bodies under 2,000 characters. Above
+that, `memory add` and `memory update` still write the memory but add a
+`warnings` entry: move long material into a `reference` memory, or split it
+into several facts.
 
 ## How to run it
 
@@ -124,7 +168,20 @@ agent-notes memory add --scope global --name <kebab-case-name> --type user --bod
 ```
 
 Parse the JSON; confirm the `id` and any `supersedes` field (the
-latter tells you you replaced an older version).
+latter tells you you replaced an older version). Check `warnings`, and glance
+at `dedup.candidates` even when the add succeeded: a candidate just under the
+threshold may still deserve `memory link ... --kind relates_to`.
+
+If the add exits 4 with `POSSIBLE_DUPLICATE`, decide as above and re-run with
+the flag, for example:
+
+```
+agent-notes memory add --path <repo-path> --name <name> --type project --body "<body>" --related <existing-name> --json
+```
+
+`agent-notes memory hygiene --path <repo-path>` (read-only) reports the
+store's existing near-duplicates, oversized facts, shadowed names, open
+contradictions, stale facts and possible secrets.
 
 For project-specific conventions worth referencing across sessions,
 see Plan 002 in this repo's `plans/` directory — it documents the

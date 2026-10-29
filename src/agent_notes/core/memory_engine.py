@@ -217,6 +217,8 @@ class RecallQuery:
     ``budget`` controls per-method retrieval limits ("low"/"mid"/"high").
     ``max_tokens`` bounds the total response size.
     ``memory_types`` filters by memory type (e.g., "reflection", "memory").
+    ``reflections`` is the Plan 027 WI-1.3 ranking policy for reflection
+    memories: "mixed" (similarity only), "demote" or "exclude".
     """
 
     query: str
@@ -224,6 +226,7 @@ class RecallQuery:
     budget: str = "mid"
     max_tokens: int = 4096
     memory_types: list[str] | None = None
+    reflections: str = "mixed"
 
 
 @dataclass(frozen=True)

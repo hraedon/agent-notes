@@ -207,6 +207,7 @@ class NativeMemoryEngine:
                 project_id=project_id,
                 memory_type=memory_type,
                 limit=limit,
+                reflections=query.reflections,
             )
         except Exception:
             return RecallResponse(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -58,10 +59,15 @@ def _axis(*weights: float) -> _Vec:
 _EMBEDDINGS = {
     "repo-setup": _axis(1.0, 0.1),
     "vm-setup": _axis(1.0, 0.3),
-    "global-setup": _axis(1.0, 0.5),
+    # Far enough from 'convention' that the Plan 027 dedup gate (0.85) stays quiet.
+    "global-setup": _axis(1.0, -1.2),
     "global-unique": _axis(1.0, 0.0),  # closer to the query than the repo row
     "vm-only": _axis(0.2, 1.0),
-    "other-vm": _axis(1.0, 0.2),
+    "other-vm": _axis(0.3, 0.0, 0.0, 1.0),
+    # Three facts near the query but distinct from each other (cutoff test).
+    "near0": _axis(1.0, 0.0, 0.0, 1.0),
+    "near1": _axis(1.0, 0.0, 0.0, 0.0, 1.0),
+    "near2": _axis(1.0, 0.0, 0.0, 0.0, 0.0, 1.0),
     "q": _axis(1.0),
 }
 
@@ -70,7 +76,10 @@ def _fake_embed(text: str, task: str = "document") -> _Vec:
     for prefix, vec in _EMBEDDINGS.items():
         if text.startswith(prefix):
             return vec
-    return _axis(0.0, 0.0, 1.0)
+    # Any other body gets its own axis, so unrelated memories never look like
+    # near-duplicates to the Plan 027 dedup gate.
+    axis = 20 + int(hashlib.sha256(text.encode()).hexdigest(), 16) % 740
+    return _axis(*([0.0] * axis), 1.0)
 
 
 @pytest.fixture(scope="module")
@@ -206,7 +215,7 @@ def test_vm_flag_selects_another_vm(seeded, capsys):
 
 
 def test_update_and_delete_respect_scope(seeded, capsys):
-    _add(capsys, "vm", "scratch", "vm-only: temp")
+    _add(capsys, "vm", "scratch", "scratch: temp")
     code, out = _run(cmd_mem_update, capsys, scope="vm", name="scratch", body="vm-only: edited")
     assert code == 0 and out["memory"]["scope"] == "vm"
     # The repo scope has no such memory.
@@ -364,22 +373,25 @@ def test_composed_recall_shadows_by_name_beyond_the_tier_cutoff(env, capsys):
     root = os.path.join(_ROOT, "cutoff-repo")
     coredb.get_or_create_project(ws.id, repo_slug, repo_slug, repo_root=root)
 
-    def add(scope, name, body):
+    def add(scope, name, body, **kw):
         args = _args(
             workspace=ws_slug,
             scope=scope,
             project=repo_slug if scope == "repo" else None,
             name=name,
             body=body,
+            **kw,
         )
         with contextlib.redirect_stdout(io.StringIO()):
             assert cmd_mem_add(args) == 0
 
     with patch("agent_notes.core.embed.embed", side_effect=_fake_embed):
         add("global", "setup", "global-setup: prefer uv")
-        add("repo", "setup", "far from the query: use make")
+        # A deliberate repo override of a global name: the dedup gate asks for
+        # an explicit choice (Plan 027 WI-1.1), and --distinct is that choice.
+        add("repo", "setup", "far from the query: use make", distinct=True)
         for i in range(3):  # fill the repo tier's 'low' budget (3) ahead of 'setup'
-            add("repo", f"near-{i}", f"q near {i}")
+            add("repo", f"near-{i}", f"near{i} the query")
         code, out = _run(
             cmd_mem_recall,
             capsys,

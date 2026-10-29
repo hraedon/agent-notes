@@ -306,6 +306,27 @@
       "aliases": []
     },
     {
+      "name": "memory link",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "memory unlink",
+      "mutability": "mutating",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
+      "name": "memory hygiene",
+      "mutability": "read-only",
+      "json": true,
+      "framing": "document",
+      "aliases": []
+    },
+    {
       "name": "link add",
       "mutability": "mutating",
       "json": true,

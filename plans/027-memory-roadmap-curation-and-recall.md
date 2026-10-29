@@ -127,7 +127,9 @@ were checked against the primary source.
 - **WI-1.3 Reflections are episodes.** Default `memory recall` and `search`
   rank `memory_type = 'reflection'` below facts, or exclude them with
   `--no-episodes`. Choose whichever WI-0.3 shows is better, and record the
-  choice here.
+  choice here. **Chosen (2026-10-29): demote by 0.07** (`--reflections
+  demote|mixed|exclude`, default `demote`). Excluding them regressed hit@5
+  from 0.967 to 0.867; see §10.
 - **WI-1.4 Size guidance.** `memory add` and `memory update` warn when a
   `project`, `user` or `feedback` body is over 2,000 characters, suggesting a
   `reference` or a split. Warn only; never refuse.
@@ -413,3 +415,135 @@ payload sizes; why `gitea-orient` printed nothing.
   - Fixing the §9 findings: the dormant token in a Claude `MEMORY.md`, the
     broken Hermes hook, the duplicate/uncapped orient on mvmcc02, and the
     Windows `orient --reconcile` encoding crash. None are fixed here.
+
+**2026-10-29, Phase 1 (Claude, branch `work/027-p1-hygiene`, uncommitted):**
+
+- **WI-1.1 `memory add` dedup gate.**
+  - Before writing, it compares the body embedding with the facts (never
+    reflections) in the target tier and its parent tiers (repo > vm > global).
+    It returns the nearest five, plus any same-name row in a parent tier, as
+    `dedup.candidates`.
+  - A candidate blocks when its similarity is ≥ **0.85**, or when the new
+    memory would shadow it by name. A blocked add exits 4 with
+    `POSSIBLE_DUPLICATE` (a new `ErrorCode`), and the candidates are in
+    `error.detail`.
+  - The writer answers per candidate with `--supersedes NAME` (same tier;
+    deactivates it), `--related NAME` (`relates_to` link, same transaction) or
+    `--distinct`.
+  - Re-adding the same name in the same tier is still a plain revision.
+    Reflections skip the gate. A refused add writes nothing, not even a new
+    vm/global tier row.
+  - **Calibration on production:**
+    - Embedding just the lead sentence of a fact scores ≥ 0.85 against the full
+      fact in 23 of 25 samples (median 0.91).
+    - 7 of 55 short facts (≤ 2,000 characters) have a neighbour ≥ 0.84.
+    - None of the 11 facts written since 2026-08 has a neighbour above 0.75.
+    - The plan's 15 pairs under distance 0.08 are four identical
+      `smoke-test-*` rows plus long substrate/sf2 documents. That's why the
+      write gate is looser (0.85) than the hygiene report (0.92).
+- **WI-1.2 `contradicts`.**
+  - `memory link A B --kind contradicts [--to-scope ...]` writes the link;
+    `memory unlink` removes it. No schema change: `links.relationship` is free
+    text; the CLI bounds it to `relates_to`/`contradicts`.
+  - A contradiction is open while both ends are active.
+  - `memory get`, `search` and `recall` add `contradictions` to the affected
+    rows and a one-line `warnings` entry.
+- **WI-1.3:** reflections are demoted by 0.07. Applied in SQL for both `search`
+  and `recall`, so they still rank identically. `orient`, the top-level
+  `search` and the knowledge provider keep pure similarity (`mixed`). See
+  `docs/memory-eval/phase1-2026-10-29.md`.
+- **WI-1.4:** `memory add` and `memory update` add a `warnings` entry over
+  2,000 characters for `project`/`user`/`feedback`. They never refuse.
+- **WI-1.5 `memory hygiene [--all] [--stale-days N] [--json]`.**
+  - Read-only transaction, no embedding model. It reports:
+    - near-duplicates (≥ 0.92; same-name pairs and already-linked pairs
+      excluded);
+    - oversized facts;
+    - shadowed names;
+    - open contradictions;
+    - stale facts (180 days and a path or version regex);
+    - reflections with no later or linking fact;
+    - possible secrets (`core/secret_patterns.py`; labels only, active and
+      superseded rows).
+  - Production, `--all`: 0.8 s wall time when idle, 1.8 s under load. 15
+    near-duplicate pairs, 68 oversized, 0 shadowed, 0 contradictions, 0 stale,
+    225 reflections without a follow-up (19 projects), and 2 possible secrets
+    (`url_credentials` in `substrate-agents-guide` and
+    `reference-mcp-servers`; owner to check).
+- **Eval (exit check),** before → after: nP@5 0.923 → 0.940, MRR 0.861 →
+  0.915, hit@5 0.967 → 1.0, stale-slot rate 0.045 → 0.039, reflection share
+  0.61 → 0.487, reflection outranks fact 0.115 → 0. `search` and `recall` are
+  still identical.
+- **Score floor: not adopted.** Every floor that removes the global padding
+  also drops q13's correct answer (score 0.38) or another relevant name.
+- **Review (GPT-6.1-sol, "rework"; all seven fixed, each with a regression
+  test in `tests/test_memory_hygiene.py`):**
+  1. Hygiene could echo a secret held in a memory *name*. Every section now
+     carries the row ID, and names, workspace slugs or scope keys that contain
+     a secret become `[redacted: memory id N]`.
+  2. Recall's exact-name recovery reinstated a repo reflection under
+     `--reflections exclude`. It now applies the policy, and so do search's
+     `shadows`.
+  3. A same-name add in the same tier is a plain revision again: candidates
+     are shown, never blocking. The blanket `distinct=True` in
+     `test_memory_tiers.py` is gone. The tier fixtures got non-colliding fake
+     embeddings, and the one deliberate repo override passes `--distinct`.
+  4. Choices bind to the resolved row (`id`), not the bare name;
+     `--related TIER:NAME` picks a tier.
+  5. A revision combined with `--supersedes OTHER` is refused before any
+     write, in both the CLI and the model.
+  6. Secret patterns:
+     - `Bearer` is case-insensitive;
+     - new `secret_assignment` (`*_TOKEN=`, `*_PASSWORD:`, ...) and
+       `secret_json` (`"token": "..."`) patterns;
+     - legacy 40-hex NetBox tokens are matched near the word NetBox;
+     - placeholders such as `<token>`, `changeme` and `${VAR}` are skipped.
+
+     (Superseded by round 2's stricter value rule, below.)
+  7. The gate compares similarity at full precision and rounds only for
+     display.
+- **Review round 2 (GPT-6.1-sol): 2–7 confirmed fixed; four more, each with a
+  regression test.**
+  1. Every string in the hygiene output now goes through the same redaction,
+     JSON and text: `memory_type`, slugs, and the CLI's top-level `scope`.
+  2. The secret patterns are linear:
+     - bounded quantifiers;
+     - context patterns start only at a token boundary;
+     - no overlapping quantified groups.
+
+     Each pattern is timed on 21 adversarial 200 KB inputs (< 0.2 s each; the
+     worst measured is about 0.05 s).
+  3. False positives:
+     - The key must be a whole credential word (`token`, `db_password`,
+       `api_key`; not `tokenizer` or `max_tokens`).
+     - The value must look like a credential: ≥ 12 characters, letters *and*
+       digits, no spaces or brackets, and not a placeholder.
+     - The negative corpus has 34 doc, config and code lines.
+
+     Trade-off: an all-letter secret such as `some-long-passphrase` is no
+     longer flagged by the context patterns. Production possible secrets are
+     back to 2 (the PostgreSQL URLs); the cert-watch `CERT_WATCH_AUTH_SECRET`
+     value has no digits and now passes.
+  4. For both `--related` and `--supersedes`, a memory literally named
+     `global:foo` wins over the tier prefix; otherwise `TIER:NAME` selects a
+     tier. `--supersedes` still never leaves the target tier.
+- **Open:**
+  - `memory update` still does not re-embed a changed body (pre-existing).
+  - The two `url_credentials` hits (and the cert-watch
+    `CERT_WATCH_AUTH_SECRET` line, now unflagged) need an owner look.
+    Checked 2026-10-29 without printing the values:
+    - ids 36 and 50 are the throwaway test-DB fixture
+      `substrate_test@localhost`, whose password equals its username;
+    - id 241's value contains a test-fixture word, and the surrounding text
+      is about tests.
+
+    So none is believed live, though the cert-watch owner should confirm.
+- **Round 3 (GPT-6.1-sol).**
+  - All four round-2 fixes were confirmed, and the letters-only trade-off was
+    accepted.
+  - It found one more quadratic regex: the stale-path detector's relative-path
+    alternative re-tried an extension-less path from every `/`.
+  - It's now a token match plus an extension check in code
+    (`_mentions_path`). `"a/" * 8000` dropped from 1.46 s to 1.5 ms, and
+    200 KB takes 17 ms.
+  - Added linearity and behaviour tests (`test_r3_mentions_path_*`).
