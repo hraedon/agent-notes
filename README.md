@@ -4,7 +4,7 @@ Desktop Codex: [install the local plugin and configure the runtime](docs/desktop
 
 > **Active again (2026-10-28): the post-AOS coordination home.** The
 > 2026-10-04 freeze is lifted. AOS, the control plane that took over delegated
-> agent work, is being retired, so cross-agent coordination comes back here:
+> agent work, was parked on 2026-10-29, so cross-agent coordination comes back here:
 > memory tiers (project, VM, global), a Postgres mailbox for agent-to-agent
 > messages, and wake through Paseo ([Plan 025](plans/025-coordination-after-aos.md)).
 > It lives here because every machine already shares this Postgres database and
