@@ -239,7 +239,7 @@ def _search_all(query_vec: list[float], limit: int = 20) -> list[dict]:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             """
-            SELECT kind, identifier, title,
+            SELECT v.kind, identifier, title,
                    embedding <=> %s::vector AS distance,
                    p.slug AS project_slug, w.slug AS workspace_slug
             FROM all_notes_search_v v

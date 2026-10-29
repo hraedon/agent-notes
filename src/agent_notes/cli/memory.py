@@ -52,14 +52,6 @@ def _scope_label(row: dict) -> str:
 
 def cmd_mem_add(args: argparse.Namespace) -> int:
     use_json = getattr(args, "json", False)
-    target = _target(args, create=True)
-    if isinstance(target, int):
-        return target
-    ws_id, proj_id, proj_slug = target.ws_id, target.proj_id, target.proj_slug
-
-    from agent_notes.core.embed import embed
-    from agent_notes.core.memory_model import add_memory
-
     if not args.body or not args.body.strip():
         return emit_error(
             "VALIDATION_FAILED",
@@ -67,6 +59,14 @@ def cmd_mem_add(args: argparse.Namespace) -> int:
             use_json=use_json,
             exit_code=EXIT_CONFLICT,
         )
+
+    target = _target(args, create=True)
+    if isinstance(target, int):
+        return target
+    ws_id, proj_id, proj_slug = target.ws_id, target.proj_id, target.proj_slug
+
+    from agent_notes.core.embed import embed
+    from agent_notes.core.memory_model import add_memory
 
     vec = embed(args.body, task="document").tolist()
     attributes = json.loads(args.attributes) if args.attributes else {}
