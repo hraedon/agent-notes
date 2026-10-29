@@ -38,6 +38,7 @@ from agent_notes.cli.msg import register_msg_parsers, register_session_parsers
 from agent_notes.cli.orient import register_orient_parser
 from agent_notes.cli.outbox import register_outbox_parsers
 from agent_notes.cli.projection import register_projection_parsers
+from agent_notes.cli.review import register_review_parsers
 from agent_notes.cli.search import register_search_parsers
 from agent_notes.cli.skills import register_skills_parser
 from agent_notes.cli.verify import register_verify_parsers
@@ -518,6 +519,7 @@ def main() -> int:
     register_msg_parsers(sub)
     register_session_parsers(sub)
     register_who_parser(sub)
+    register_review_parsers(sub)
     register_checkout_parsers(sub)
 
     contract_p = sub.add_parser(
