@@ -48,6 +48,7 @@ agent-notes-import-reflections = "agent_notes.scripts.import_reflections:main"
 agent-notes-doctor      = "agent_notes.scripts.doctor:main"
 agent-notes-bridge       = "agent_notes.bridge:main"
 agent-notes-hook         = "agent_notes.hooks:main"
+agent-notes-dispatch     = "agent_notes.dispatcher:main"
 agent-notes-trigger-loop = "agent_notes.trigger_loop:main"
 agent-notes-web          = "agent_notes.web.app:main"
 
