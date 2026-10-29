@@ -46,12 +46,18 @@ PASEO_ENV = "PASEO_AGENT_ID"
 CWD_MATCH_WINDOW = timedelta(minutes=10)
 SESSION_REAP_AFTER = timedelta(hours=24)
 DEFAULT_AWAIT_TIMEOUT = 120.0
+# The loop guard's counter decays: it counts as 0 once the last bump is older
+# than this many seconds (Plan 025 §6).
+AUTO_CONTINUE_WINDOW_ENV = "AGENT_NOTES_AUTO_CONTINUE_WINDOW"
+DEFAULT_AUTO_CONTINUE_WINDOW = 1800
 # Safety re-check while awaiting, in case a notification is lost.
 _AWAIT_POLL = 2.0
 
 # The D6 framing. Hooks test prompts for this prefix to tell a wake from a
 # human prompt (§6), so it must stay stable.
 PEER_MESSAGE_MARKER = "[agent-notes message from "
+# `payload.sender` of a dispatcher reply; a header shows it as `<vm>/dispatcher`.
+DISPATCHER_SENDER = "dispatcher"
 
 _MESSAGE_COLUMNS = (
     "id, workspace_id, from_session, from_vm, from_project, to_session, to_project, "
@@ -62,6 +68,8 @@ _SESSION_SELECT = """
     SELECT s.session_key, s.workspace_id, s.vm_id, s.harness, s.session_id,
            s.paseo_agent_id, s.project_id, p.slug AS project, s.cwd,
            s.wake_policy, s.wake_policy_explicit, s.trust, s.auto_continues,
+           s.auto_continue_at,
+           EXTRACT(EPOCH FROM now() - s.auto_continue_at)::float8 AS auto_continue_age,
            s.started_at, s.last_seen_at
     FROM agent_sessions s
     LEFT JOIN projects p ON p.id = s.project_id
@@ -461,13 +469,51 @@ def set_paseo_agent_id(key: str, paseo_agent_id: str | None) -> dict:
         return _get_session(conn, key)
 
 
-def bump_auto_continue(key: str, *, conn: psycopg.Connection | None = None) -> int:
-    """Count one L2 extension or L3 wake (§6 loop guard). Returns the new count."""
+def auto_continue_window(env: Mapping[str, str] | None = None) -> int:
+    """Seconds after which the loop guard's counter has decayed to 0 (§6)."""
+    env = os.environ if env is None else env
+    try:
+        window = int(env.get(AUTO_CONTINUE_WINDOW_ENV, DEFAULT_AUTO_CONTINUE_WINDOW))
+    except (TypeError, ValueError):
+        return DEFAULT_AUTO_CONTINUE_WINDOW
+    return window if window > 0 else DEFAULT_AUTO_CONTINUE_WINDOW
+
+
+def effective_auto_continues(session: Mapping[str, Any], window: float | None = None) -> int:
+    """The loop-guard count the cap is checked against: 0 once it has decayed.
+
+    ``auto_continue_age`` is the DB-computed age of ``auto_continue_at`` in
+    seconds. A NULL one (rows from before 854) with a nonzero count is lapsed.
+    A row dict without the key is a bare fixture, and keeps its raw count.
+    """
+    count = int(session.get("auto_continues") or 0)
+    if count == 0 or "auto_continue_age" not in session:
+        return count
+    age = session["auto_continue_age"]
+    limit = auto_continue_window() if window is None else window
+    return count if age is not None and age <= limit else 0
+
+
+def bump_auto_continue(
+    key: str, *, window: float | None = None, conn: psycopg.Connection | None = None
+) -> int:
+    """Count one L2 extension or L3 wake (§6 loop guard). Returns the new count.
+
+    A counter whose last bump is older than ``window`` seconds starts again at 1.
+    """
+    limit = auto_continue_window() if window is None else window
     with _use(conn) as conn:
         row = conn.execute(
-            "UPDATE agent_sessions SET auto_continues = auto_continues + 1 "
-            "WHERE session_key = %s RETURNING auto_continues",
-            (key,),
+            """
+            UPDATE agent_sessions
+            SET auto_continues = CASE
+                    WHEN auto_continue_at > now() - make_interval(secs => %s)
+                    THEN auto_continues + 1 ELSE 1 END,
+                auto_continue_at = now()
+            WHERE session_key = %s
+            RETURNING auto_continues
+            """,
+            (limit, key),
         ).fetchone()
         _commit(conn)
     if row is None:
@@ -478,7 +524,11 @@ def bump_auto_continue(key: str, *, conn: psycopg.Connection | None = None) -> i
 def reset_auto_continue(key: str, *, conn: psycopg.Connection | None = None) -> None:
     """Reset the loop guard; the per-prompt hook calls this on a human prompt."""
     with _use(conn) as conn:
-        conn.execute("UPDATE agent_sessions SET auto_continues = 0 WHERE session_key = %s", (key,))
+        conn.execute(
+            "UPDATE agent_sessions SET auto_continues = 0, auto_continue_at = NULL "
+            "WHERE session_key = %s",
+            (key,),
+        )
         _commit(conn)
 
 
@@ -682,6 +732,7 @@ def answer_request(
             conn.commit()
             return dict(existing), False
         fields, routed = _reply_fields(dict(original), subject=subject, payload=payload, wake=wake)
+        fields["payload"]["sender"] = DISPATCHER_SENDER
         msg = send_message(
             from_vm=from_vm, from_project=from_project, body=body, conn=conn, **fields
         )
@@ -1144,6 +1195,8 @@ def prune(now: datetime | None = None) -> dict[str, int]:
 def sender_label(msg: Mapping[str, Any]) -> str:
     if msg.get("from_session"):
         return str(msg["from_session"])
+    if payload_of(msg).get("sender") == DISPATCHER_SENDER:
+        return f"{msg.get('from_vm')}/{DISPATCHER_SENDER}"
     return f"{msg.get('from_vm')}/-/no-session"
 
 

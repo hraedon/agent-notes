@@ -66,6 +66,7 @@ def _configure_logging(level: str, log_file: str | None) -> None:
 
 
 def build_dispatcher(args: argparse.Namespace):
+    from agent_notes.core import messaging
     from agent_notes.core.config import resolve_vm_id
 
     from .paseo import PaseoClient, find_paseo, paseo_home
@@ -89,6 +90,11 @@ def build_dispatcher(args: argparse.Namespace):
                 paseo_home=paseo_home(),
                 max_auto_continues=_int_setting(
                     MAX_AUTO_CONTINUES_ENV, DEFAULT_MAX_AUTO_CONTINUES, minimum=0
+                ),
+                auto_continue_window=_int_setting(
+                    messaging.AUTO_CONTINUE_WINDOW_ENV,
+                    messaging.DEFAULT_AUTO_CONTINUE_WINDOW,
+                    minimum=1,
                 ),
             )
     handlers = None if args.no_jobs else {"review": run_review_job}

@@ -332,8 +332,19 @@ def test_a_notice_is_shown_once_per_session(tmp_path: Path) -> None:
         _msg(kind="question", subject="Review?", reply_to=3),
         _msg(kind="notice", from_session=None, from_project=None),
         _msg(kind="handoff", from_session=None, from_project=None, body="line1\n\nline2 — ünï"),
+        _msg(kind="reply", from_session=None, payload={"sender": "dispatcher"}),
+        _msg(kind="reply", from_session=None, payload={"sender": "someone-else"}),
+        _msg(kind="reply", payload={"sender": "dispatcher"}),
     ],
-    ids=["plain", "question-subject-reply", "notice-no-session", "handoff-multiline"],
+    ids=[
+        "plain",
+        "question-subject-reply",
+        "notice-no-session",
+        "handoff-multiline",
+        "dispatcher-reply",
+        "other-sender-payload",
+        "session-with-dispatcher-payload",
+    ],
 )
 def test_js_framing_is_byte_identical_to_format_peer_message(tmp_path: Path, row: dict) -> None:
     """D6: the plugin must not re-word the framing the CLI uses."""

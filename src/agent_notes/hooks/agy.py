@@ -120,7 +120,7 @@ def stop(payload: Mapping[str, Any], env: Mapping[str, str]) -> dict[str, Any]:
             # (with anything else pending) as peer content.
             if messaging.next_wakeable(row, claim=False, conn=conn) is None:
                 return {}
-            messaging.bump_auto_continue(key, conn=conn)
+            messaging.bump_auto_continue(key, window=messaging.auto_continue_window(env), conn=conn)
     common.log("agy %s: extending turn (executionNum=%s)", key, payload.get("executionNum"))
     return {"decision": "continue", "reason": WAKE_REASON}
 

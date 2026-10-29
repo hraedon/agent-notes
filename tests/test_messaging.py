@@ -464,6 +464,76 @@ def test_auto_continue_bump_and_reset(ws, vm):
         m.bump_auto_continue(f"{vm}/claude/gone")
 
 
+def _age_auto_continue(key: str, seconds: int | None) -> None:
+    """Move a session's last bump ``seconds`` into the past (None: NULL it)."""
+    _sql(
+        _dsn(),
+        "UPDATE agent_sessions SET auto_continue_at = "
+        "CASE WHEN %s::int IS NULL THEN NULL ELSE now() - make_interval(secs => %s::int) END "
+        "WHERE session_key = %s",
+        (seconds, seconds, key),
+    )
+
+
+def test_auto_continue_counter_decays_after_the_window(ws, vm):
+    key = _session(ws, vm)
+    assert m.bump_auto_continue(key) == 1
+    assert m.bump_auto_continue(key) == 2
+    fresh = m.get_session(key)
+    assert fresh["auto_continue_at"] is not None
+    assert m.effective_auto_continues(fresh) == 2
+
+    # Just inside the window it still counts; past it, the counter reads 0.
+    _age_auto_continue(key, m.DEFAULT_AUTO_CONTINUE_WINDOW - 60)
+    assert m.effective_auto_continues(m.get_session(key)) == 2
+    _age_auto_continue(key, m.DEFAULT_AUTO_CONTINUE_WINDOW + 60)
+    lapsed = m.get_session(key)
+    assert lapsed["auto_continues"] == 2 and m.effective_auto_continues(lapsed) == 0
+    # The window is a parameter, and the next bump starts again at 1.
+    assert m.effective_auto_continues(lapsed, window=m.DEFAULT_AUTO_CONTINUE_WINDOW + 120) == 2
+    assert m.bump_auto_continue(key) == 1
+    assert m.bump_auto_continue(key) == 2
+    m.reset_auto_continue(key)
+    reset = m.get_session(key)
+    assert reset["auto_continues"] == 0 and reset["auto_continue_at"] is None
+
+
+def test_a_nonzero_counter_without_a_timestamp_counts_as_lapsed(ws, vm):
+    key = _session(ws, vm)
+    _sql(_dsn(), "UPDATE agent_sessions SET auto_continues = 3 WHERE session_key = %s", (key,))
+    row = m.get_session(key)
+    assert row["auto_continue_at"] is None and row["auto_continues"] == 3
+    assert m.effective_auto_continues(row) == 0
+    assert m.bump_auto_continue(key) == 1
+
+
+def test_bump_after_a_lapsed_window_is_race_free(ws, vm):
+    key = _session(ws, vm)
+    for _ in range(3):
+        m.bump_auto_continue(key)
+    _age_auto_continue(key, m.DEFAULT_AUTO_CONTINUE_WINDOW + 60)
+    barrier = threading.Barrier(4)
+    counts: list[int] = []
+
+    def bump() -> None:
+        barrier.wait()
+        counts.append(m.bump_auto_continue(key))
+
+    threads = [threading.Thread(target=bump) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert sorted(counts) == [1, 2, 3, 4]
+
+
+def test_auto_continue_window_setting():
+    assert m.auto_continue_window({}) == 1800
+    assert m.auto_continue_window({m.AUTO_CONTINUE_WINDOW_ENV: "60"}) == 60
+    for junk in ("junk", "0", "-5", ""):
+        assert m.auto_continue_window({m.AUTO_CONTINUE_WINDOW_ENV: junk}) == 1800
+
+
 def test_untrusted_session_cannot_send_requests(ws, vm):
     key = _session(ws, vm, trust="untrusted-input")
     with pytest.raises(m.MessagingError, match="untrusted"):
@@ -634,6 +704,19 @@ def test_format_peer_message():
     assert "w/-/no-session" in anon and "msg reply" not in anon
 
 
+def test_dispatcher_replies_are_labelled_with_the_vm_dispatcher():
+    base = {"id": 9, "kind": "reply", "from_vm": "mvmcc02", "body": "verdict", "from_session": None}
+    header = m.format_peer_message({**base, "payload": {"sender": "dispatcher"}}).splitlines()[0]
+    assert header.startswith(m.PEER_MESSAGE_MARKER + "mvmcc02/dispatcher — peer content")
+    assert "no-session" not in header
+    for payload in (None, {}, {"sender": "x"}, ["dispatcher"], "dispatcher"):
+        text = m.format_peer_message({**base, "payload": payload})
+        assert text.startswith(m.PEER_MESSAGE_MARKER + "mvmcc02/-/no-session")
+    # A real session keeps its own label even if its payload claims otherwise.
+    spoof = {**base, "from_session": "v/claude/a", "payload": {"sender": "dispatcher"}}
+    assert m.format_peer_message(spoof).startswith(m.PEER_MESSAGE_MARKER + "v/claude/a —")
+
+
 def test_session_key_helpers():
     assert m.session_key("v", "claude", "a/b") == "v/claude/a/b"
     assert m.parse_session_key("v/claude/a/b") == ("v", "claude", "a/b")
@@ -710,3 +793,14 @@ def test_answer_request_posts_one_reply_under_a_race(ws, vm):
     assert {row["id"] for row, _created in results} == {replies[0]["id"]}
     assert replies[0]["to_session"] == requester and replies[0]["wake"] is True
     assert m.answer_request(10**12, from_vm=vm, body="x") == (None, False)
+
+
+def test_answer_request_marks_the_reply_as_from_the_dispatcher(ws, vm):
+    requester = _session(ws, "req-vm")
+    req = _send(ws, to_vm=vm, kind="request", from_session=requester, payload={"job": "x"})
+    reply, created = m.answer_request(
+        req["id"], from_vm=vm, body="done", payload={"status": "ok", "sender": "someone"}
+    )
+    assert created and reply["payload"] == {"status": "ok", "sender": "dispatcher"}
+    stored = m.replies_to(req["id"])[0]
+    assert m.sender_label(stored) == f"{vm}/dispatcher"

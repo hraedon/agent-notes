@@ -14,7 +14,8 @@ does two things:
     allows it: the sender isn't an `untrusted-input` session, and the
     session's `wake_policy` is `direct`, or `any-direct-from-project` with a
     sender on the same project.
-  - `auto_continues` is below the cap.
+  - `auto_continues` is below the cap. A counter whose last bump is older than
+    `AGENT_NOTES_AUTO_CONTINUE_WINDOW` counts as 0 (see below).
   - `paseo inspect` reports the agent `idle`.
 
   It sends at most one message per session per sweep or notification. The
@@ -71,6 +72,17 @@ dispatcher.
      policy unless a policy was set explicitly.
 - If a send fails for any reason (including the prompt file), the claim is
   released, so L1 still delivers the message.
+- The loop-guard counter decays. `agent_sessions.auto_continue_at` is the time
+  of the last bump; once it is older than `AGENT_NOTES_AUTO_CONTINUE_WINDOW`
+  (default 1800 s) the cap check reads the counter as 0, and the next wake
+  starts it again at 1. A NULL `auto_continue_at` with a nonzero counter (rows
+  from before migration 854) counts as lapsed. Without this a harness that has
+  no per-prompt hook (the installed Codex plugin) could never be woken again
+  after three wakes. A ping-pong loop runs in seconds or minutes, so the cap
+  still stops it.
+- A reply posted by the dispatcher carries `payload.sender = "dispatcher"`, and
+  its header reads `[agent-notes message from <vm>/dispatcher — ...]` instead
+  of `<vm>/-/no-session`.
 - A request gets at most one reply. The reply is posted in the transaction
   that locks the request row and checks for an existing reply, so a retry, a
   recovery and a second dispatcher can't answer twice.
@@ -147,6 +159,7 @@ the usual `~/.config/agent-notes/config.json` or `AGENT_NOTES_DSN`.
 | `AGENT_NOTES_PASEO_BIN` | `paseo` on `PATH` (`paseo.cmd` on Windows) | The Paseo CLI. Without it, L3 is off and a warning is logged |
 | `PASEO_HOME` | `~/.paseo` | Where Paseo's agent records are read from |
 | `AGENT_NOTES_MAX_AUTO_CONTINUES` | `3` | The loop-guard cap shared with the Stop hook (§6) |
+| `AGENT_NOTES_AUTO_CONTINUE_WINDOW` | `1800` | Seconds after which the loop-guard counter has decayed to 0 (see below) |
 | `AGENT_NOTES_DISPATCH_MAX_JOBS` | `2` | Concurrent jobs |
 | `AGENT_NOTES_DISPATCH_SWEEP_SECONDS` | `30` | Sweep interval |
 | `AGENT_NOTES_DISPATCH_LOG` | (stderr) | Log file instead of stderr, rotated at 5 MB × 3 |

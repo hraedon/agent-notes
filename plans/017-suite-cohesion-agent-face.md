@@ -459,7 +459,7 @@ process env  >  per-user suite.env  >  system suite.env  >  tool default
 ```
 
 The per-user file is at `~/.config/agent-suite/suite.env` (Linux) or
-`%APPDATA%/agent-suite/suite.env` (Windows), overridable via
+`%LOCALAPPDATA%/agent-suite/agent-suite/suite.env` (Windows), overridable via
 `AGENT_SUITE_CONFIG` (same as regista's `_config.py`). The system file is at
 `/etc/agent-suite/suite.env` (Linux) or `%ProgramData%/agent-suite/suite.env`
 (Windows), overridable via `AGENT_SUITE_SYSTEM_CONFIG` (agent-notes test

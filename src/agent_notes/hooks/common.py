@@ -302,8 +302,10 @@ def note_human_prompt(conn: Any, row: Mapping[str, Any] | None) -> None:
 def wake_allowed(row: Mapping[str, Any] | None, env: Mapping[str, str]) -> bool:
     if row is None or not stop_wake_enabled(env):
         return False
+    from agent_notes.core import messaging
+
     cap = max_auto_continues(env)
-    if int(row.get("auto_continues") or 0) >= cap:
+    if messaging.effective_auto_continues(row, messaging.auto_continue_window(env)) >= cap:
         log("%s: auto-continue cap %d reached; wake waits for L1", row["session_key"], cap)
         return False
     return True
@@ -425,7 +427,9 @@ def claim_wake(conn: Any, row: Mapping[str, Any] | None, env: Mapping[str, str])
         if not shown:
             log("%s: wake message #%s does not fit; left for L1", row["session_key"], msg["id"])
             raise psycopg.Rollback()
-        messaging.bump_auto_continue(row["session_key"], conn=conn)
+        messaging.bump_auto_continue(
+            row["session_key"], window=messaging.auto_continue_window(env), conn=conn
+        )
         return f"{text}\n\n{_WAKE_HINT}"
     return None
 

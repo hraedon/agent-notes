@@ -197,6 +197,27 @@ def test_auto_continue_cap_refuses(ws, vm, paseo, home):
     assert paseo.calls() == []
 
 
+def test_auto_continue_cap_lapses_after_the_window(ws, vm, paseo, home):
+    key = _session(ws, vm, paseo_agent_id="agent-1")
+    for _ in range(3):
+        m.bump_auto_continue(key)
+    paseo.set_agent("agent-1", "idle")
+    msg = _wake_msg(ws, key)
+    waker = _waker(vm, paseo, home, cap=3)
+    assert waker.wake(key, [msg["id"]]).outcome == dw.REFUSED
+
+    with psycopg.connect(_dsn(), autocommit=True) as conn:
+        conn.execute(
+            "UPDATE agent_sessions SET auto_continue_at = now() - interval '2 hours' "
+            "WHERE session_key = %s",
+            (key,),
+        )
+    result = waker.wake(key, [msg["id"]])
+    assert result.outcome == dw.SENT
+    # The send restarted the counter rather than going 3 -> 4.
+    assert m.get_session(key)["auto_continues"] == 1
+
+
 def test_session_mapped_from_paseo_state_is_stored_and_woken(ws, vm, paseo, home):
     sid = str(uuid.uuid4())
     key = _session(ws, vm, session_id=sid)  # imported thread: no PASEO_AGENT_ID
