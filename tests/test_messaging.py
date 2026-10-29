@@ -201,6 +201,42 @@ def test_claim_skips_a_row_locked_by_another_connection(ws, vm):
     assert m.claim_deliverable(s) == []
 
 
+def test_claiming_inbox_returns_claimed_rows_when_an_older_notice_matches(ws):
+    px, slug = _project(ws)
+    s = _session(ws, f"vm-{_uid()}", project_id=px)
+    notice = _send(ws, to_project=slug, kind="notice", body="older notice")["id"]
+    msg = _send(ws, to_project=slug, body="newer message")["id"]
+
+    rows = m.inbox(s, claim=True, limit=1)
+    assert msg in _ids(rows)
+    assert notice in _ids(rows)  # notices never count against the claim limit
+    assert msg not in _ids(m.inbox(s))
+
+
+def test_claiming_inbox_never_returns_rows_another_claimer_holds(ws):
+    px, slug = _project(ws)
+    s1 = _session(ws, f"vm-{_uid()}", project_id=px)
+    s2 = _session(ws, f"vm-{_uid()}", project_id=px)
+    msg = _send(ws, to_project=slug)["id"]
+    seen: dict[str, list[dict]] = {}
+
+    with psycopg.connect(_dsn()) as winner:
+        # s1 claims on its own connection and has not committed yet.
+        winner.execute(
+            "UPDATE agent_messages SET claimed_by = %s, claimed_at = now()"
+            " WHERE id = %s AND claimed_by IS NULL",
+            (s1, msg),
+        )
+        loser = threading.Thread(target=lambda: seen.update(s2=m.inbox(s2, claim=True)))
+        loser.start()
+        loser.join(timeout=10)
+        assert not loser.is_alive()
+        winner.commit()
+
+    assert msg not in _ids(seen["s2"])
+    assert msg in _ids(m.inbox(s1, include_claimed=True))
+
+
 # ---------------------------------------------------------------------------
 # Replies
 # ---------------------------------------------------------------------------

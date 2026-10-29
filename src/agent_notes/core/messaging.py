@@ -702,6 +702,10 @@ def inbox(
     ``workspace_id``, only direct rows match. Notices are listed, never
     claimed. ``include_claimed`` adds direct rows already claimed, and inbox
     rows this caller claimed.
+
+    With ``claim``, the unclaimed rows returned are exactly those this call
+    claimed (up to ``limit``); notices and ``include_claimed`` rows are listed
+    alongside and never displace them.
     """
     with _conn() as conn:
         who = _addressee(conn, session, vm=vm, project=project, workspace_id=workspace_id)
@@ -710,14 +714,15 @@ def inbox(
         if claim:
             claimed = _claim(conn, where, params, who.claimer, limit)
             conn.commit()
+        unclaimed = "m.kind = 'notice'" if claim else "(m.claimed_by IS NULL OR m.kind = 'notice')"
         if include_claimed:
             seen_filter = (
-                "(m.claimed_by IS NULL OR m.kind = 'notice' OR m.to_session IS NOT NULL"
-                " OR m.claimed_by = %s)"
+                f"({unclaimed} OR (m.claimed_by IS NOT NULL"
+                " AND (m.to_session IS NOT NULL OR m.claimed_by = %s)))"
             )
             extra = [who.claimer]
         else:
-            seen_filter = "(m.claimed_by IS NULL OR m.kind = 'notice')"
+            seen_filter = unclaimed
             extra = []
         claimed_ids = [r["id"] for r in claimed]
         rows = conn.execute(
@@ -726,8 +731,10 @@ def inbox(
             "ORDER BY m.id LIMIT %s",
             [*params, *extra, claimed_ids, limit],
         ).fetchall()
-    merged = claimed + [dict(r) for r in rows]
-    return sorted(merged, key=lambda r: r["id"])[:limit]
+    listed = [dict(r) for r in rows]
+    if claim:
+        return sorted(claimed + listed, key=lambda r: r["id"])
+    return listed
 
 
 def claim_deliverable(
