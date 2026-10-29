@@ -231,10 +231,14 @@ So:
   `shadows: [{"scope": "vm", "scope_key": "mvmcc02", "body_preview": "<first ~120 chars>"}]`.
   Generic names like `setup` or `troubleshooting` often collide between
   unrelated topics, so this keeps the agent from losing them silently.
-  Every result carries `scope` and `scope_key`.
+  Every result carries `scope` and `scope_key`. Recall queries each tier
+  through the engine, so the winner of a name is settled by an exact-name
+  lookup across tiers, not by which tier's top-k happened to include it.
 - **WI-2.4 Synthetic-row audit.** Every query that lists projects filters on
   `kind = 'repo'`. Covers the web UI, `workspace` CLI, work-item project
-  resolution, cross-project `ready`, export, and doctor.
+  resolution, cross-project `ready`, export, and doctor. `--workspace` alone
+  selects the `global` tier for memory commands only; work-item and breadcrumb
+  commands refuse it, and native filing refuses a tier row.
 - **WI-2.5 orient.** Additive JSON only. `memories` stays the project list,
   because the Codex hook (`codex_lifecycle.py:144`) and the OpenCode plugin
   (`integrations/opencode/index.js:120`) read it as one. Add `memories_vm`,
@@ -316,7 +320,8 @@ Semantics, kept deliberately small:
   `UPDATE … WHERE id = ANY(SELECT … FOR UPDATE SKIP LOCKED)`. Plan 024's
   `delivered`/`acked` split is dropped. Nothing used `acked`, and redelivery
   after a crash isn't worth the complexity for chat-sized messages. Notices
-  are never claimed.
+  are never claimed. A claiming read returns exactly the rows its `UPDATE …
+  RETURNING` claimed, plus notices, which never count against its limit.
 - **Expiry** is a query-time filter (`expires_at > now()`), plus a prune
   folded into the existing `doctor`/maintenance path. There's no `expired`
   status that nothing would ever set.
