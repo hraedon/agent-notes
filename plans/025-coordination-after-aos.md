@@ -109,12 +109,13 @@ inside an agent resolve it in this order:
 
 1. `AGENT_NOTES_SESSION` set explicitly.
 2. The harness's own ID in the tool environment. Each harness already sets
-   one: `CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID` (from Codex source; the
-   docs don't mention it), `OPENCODE_SESSION_ID`, `HERMES_SESSION_ID`. The
+   one: `CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`, `OPENCODE_SESSION_ID`,
+   `ANTIGRAVITY_CONVERSATION_ID` (agy), `HERMES_SESSION_ID`. Phase 0
+   confirmed each one matches the provider's own session ID. The
    hooks see the same ID on stdin as `session_id`. Phase 0 checks that the
    two values match for each harness.
-3. **Look it up from the hook's registration.** This covers agy, which has no
-   verified environment variable, and any harness that loses its variable.
+3. **Look it up from the hook's registration.** This covers any harness or
+   context where the variable is missing.
    Every hook call registers `(vm_id, harness, session_id, cwd)` from its
    stdin; agy sends `conversationId` and its workspace paths. With no
    variable set, `resolve_session()` looks for one session on this VM whose
@@ -234,6 +235,17 @@ So:
   `memories_global`, and `inbox`. Default caps: 3 global, 3 VM, 5 project
   (the current `DEFAULT_LIMIT`). Outside a registered repo, orient succeeds
   with VM, global, and inbox sections.
+- **WI-2.6 Per-VM checkouts.** Phase 0 found that Windows can't resolve any
+  project: `projects.repo_root` holds one path, and it's the Linux one. Add
+  `project_checkouts(project_id, vm_id, path)`.
+  - `init` records a checkout for the current VM, and running `init` on an
+    existing slug adds a checkout instead of stealing `repo_root`.
+  - `resolve_project(path)` matches the current VM's checkouts first, using
+    the longest prefix (case- and separator-insensitive on Windows), and
+    falls back to `repo_root` only after that.
+  - `agent-notes checkout scan <dir> [--apply]` maps subdirectories whose git
+    toplevel basename matches an existing slug. It's a dry run by default.
+  - The review dispatcher uses the same table to find its checkout.
 - **Tests** (real Postgres): the same name in all three scopes, shadowing,
   orient inside and outside a repo, and that `vm:*`/`global` rows don't
   appear in project listings.
@@ -353,7 +365,11 @@ Notes:
   each adapter wraps it.
 - Hooks are best effort. Each one opens a connection with a 1 s timeout,
   queries, and exits 0 on any error. A Postgres outage must never block a
-  prompt.
+  prompt. Phase 0 measured Python import plus a query at about 0.7 s on
+  mvmcc02 and about 0.9 s on Windows for a full `orient`. So the per-prompt
+  hook gets its own minimal entry point: it imports only psycopg and
+  `core/messaging`, does one indexed query, and targets < 400 ms on Windows.
+  Hooks always write UTF-8, because the Windows console defaults to cp1252.
 
 L2 loop guard: `auto_continues` in `agent_sessions` goes up by one on each L2
 extension or L3 wake, and resets to 0 when the per-prompt hook sees a real
@@ -423,10 +439,8 @@ codex session W/codex/T                                               dispatcher
    - `--on` defaults to the configured review VM (`AGENT_NOTES_REVIEW_VM`, set
      to `mvmcc02` by install-harness).
 2. **Run.** The mvmcc02 dispatcher claims the row and fetches. It maps the
-   repository identity to its local checkout through a per-VM checkout map in
-   local config, which `agent-notes init` fills in on each machine.
-   `projects.repo_root` can't be used here: it's one value shared by every
-   machine. Then it calls 023's `evaluate_and_record` with `ClaudePrintRunner`. The default
+   repository identity to its local checkout through `project_checkouts`
+   (WI-2.6). Then it calls 023's `evaluate_and_record` with `ClaudePrintRunner`. The default
    timeout is 600 s, and the attempt journal records every state.
 3. **Reply.** The dispatcher inserts a direct `reply` (`reply_to` = the
    request, `wake=true`). Its body is the verdict, the blocking findings
@@ -450,7 +464,7 @@ is identical for every reviewer/requester pair.
 
 | Phase | Content | Exit |
 |---|---|---|
-| **0 Spikes** (≈1 day) | (a) `paseo send` to an **idle** agent starts a turn, for each provider, on mvmcc02 and Windows. (b) `paseo inspect --json` exposes the provider session ID and cwd, so the dispatcher can map `session_key` ↔ `paseo_agent_id`. (c) `PASEO_AGENT_ID` is visible to Bash tool calls under each provider. (d) Harness hooks still fire inside Paseo-hosted sessions. (e) Every † item in §6 and D5: whether agy desktop fires hooks, agy hooks on Windows, and that hook `session_id` equals the env-var ID (Codex: thread versus session). (f) Per-prompt hook latency on Windows and mvmcc02 (Python startup + Postgres round trip); set a budget and a 1 s `connect_timeout`, and make hooks fail open. (g) Hermes surface. (h) `paseo import` of a Codex desktop/TUI thread makes it wakeable, and whether the original client shows the resulting turn. (i) Codex's shell-tool timeout, which bounds `msg await`. (j) 023's Claude runner conformance tests still pass on mvmcc02 with regista off | Matrix filled in; go/no-go on Paseo as L3 |
+| **0 Spikes** (≈1 day) | (a) `paseo send` to an **idle** agent starts a turn, for each provider, on mvmcc02 and Windows. (b) `paseo inspect --json` exposes the provider session ID and cwd, so the dispatcher can map `session_key` ↔ `paseo_agent_id`. (c) `PASEO_AGENT_ID` is visible to Bash tool calls under each provider. (d) Harness hooks still fire inside Paseo-hosted sessions. (e) Every † item in §6 and D5: whether agy desktop fires hooks, agy hooks on Windows, and that hook `session_id` equals the env-var ID (Codex: thread versus session). (f) Per-prompt hook latency on Windows and mvmcc02 (Python startup + Postgres round trip); set a budget and a 1 s `connect_timeout`, and make hooks fail open. (g) Hermes surface. (h) `paseo import` of a Codex desktop/TUI thread makes it wakeable, and whether the original client shows the resulting turn. (i) Codex's shell-tool timeout, which bounds `msg await`. (j) 023's Claude runner conformance tests still pass on mvmcc02 with regista off | Matrix filled in; go/no-go on Paseo as L3. **Done 2026-10-28** (`docs/spikes/025-phase0.md`): `send` wakes idle claude/codex/agy/opencode agents; `inspect` lacks the provider session ID, so sessions self-report `PASEO_AGENT_ID`, and the dispatcher maps imported threads from `~/.paseo/agents/*/*.json`; hooks fire under Paseo; Windows needs WI-2.6; Codex's shell tool yields after 10 s and polls for up to 300 s |
 | **1** | Retire regista write-through (D7) | `file → claim → close` reaches `done` with no `REGISTA_*` |
 | **2** | Memory tiers (§4) | Tests in §4 pass; orient shows three tiers on both machines |
 | **3** | Mailbox, `who`, `await` (§5) | Cross-machine question/reply through `await` |
