@@ -54,11 +54,6 @@ def summary_reads(monkeypatch):
 
     monkeypatch.setattr(orient, "_resolve", lambda *_: (1, 2, "test-workspace", "test-project"))
     monkeypatch.setattr(
-        orient.reg_config,
-        "regista_config",
-        lambda: SimpleNamespace(enabled=False, project="test-project"),
-    )
-    monkeypatch.setattr(
         WorkItemModel, "query_work_items", lambda **kwargs: work_items[: kwargs["limit"]]
     )
     monkeypatch.setattr(memory_model, "list_memories", list_memories)
