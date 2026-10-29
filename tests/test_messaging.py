@@ -641,3 +641,72 @@ def test_session_key_helpers():
         m.session_key("v/x", "claude", "s")
     with pytest.raises(m.MessagingError):
         m.parse_session_key("v/claude")
+
+
+# ---------------------------------------------------------------------------
+# Review fixes, round 2: row shape (853), the shared wake rule, answer once
+# ---------------------------------------------------------------------------
+
+
+def test_subject_and_payload_shape_are_enforced(ws, vm):
+    key = _session(ws, vm)
+    with pytest.raises(m.MessagingError, match="subject"):
+        _send(ws, to_session=key, subject="s" * (m.MAX_SUBJECT + 1))
+    with pytest.raises(m.MessagingError, match="payload"):
+        _send(ws, to_vm=vm, kind="request", payload=["review"])
+    assert _send(ws, to_session=key, subject="s" * m.MAX_SUBJECT)["subject"]
+    with psycopg.connect(_dsn(), autocommit=True) as conn:
+        for column, value in (("subject", "s" * 600), ("payload", '["review"]')):
+            cast = "::jsonb" if column == "payload" else ""
+            with pytest.raises(psycopg.errors.CheckViolation):
+                conn.execute(
+                    f"INSERT INTO agent_messages (workspace_id, from_vm, to_vm, body, {column}) "
+                    f"VALUES (%s, 'x', %s, 'b', %s{cast})",
+                    (ws, vm, value),
+                )
+
+
+def test_reply_subject_stays_within_the_limit(ws, vm):
+    key = _session(ws, vm)
+    original = _send(ws, to_session=key, from_session=key, subject="q" * m.MAX_SUBJECT)
+    reply = m.reply(original["id"], from_vm=vm, body="answer")
+    assert reply["subject"].startswith("Re: ") and len(reply["subject"]) <= m.MAX_SUBJECT
+
+
+def test_may_wake_rule():
+    session = {"session_key": "v/claude/s", "wake_policy": "direct", "project": "p"}
+    msg = {"to_session": "v/claude/s", "wake": True, "kind": "reply", "from_project": "q"}
+    assert m.may_wake(session, msg)
+    assert not m.may_wake(session, msg, sender_trust="untrusted-input")
+    assert not m.may_wake(session, {**msg, "wake": False})
+    assert not m.may_wake(session, {**msg, "to_session": "v/claude/other"})
+    assert not m.may_wake(session, {**msg, "kind": "request"})
+    assert not m.may_wake(None, msg)
+    assert not m.may_wake({**session, "wake_policy": "none"}, msg)
+    peer_only = {**session, "wake_policy": "any-direct-from-project"}
+    assert not m.may_wake(peer_only, msg)
+    assert m.may_wake(peer_only, {**msg, "from_project": "p"})
+    assert "untrusted" in m.wake_refusal(session, msg, sender_trust="untrusted-input")
+
+
+def test_answer_request_posts_one_reply_under_a_race(ws, vm):
+    requester = _session(ws, "req-vm")
+    req = _send(ws, to_vm=vm, kind="request", from_session=requester, payload={"job": "x"})
+    barrier = threading.Barrier(4)
+    results: list = []
+
+    def answer(n: int) -> None:
+        barrier.wait()
+        results.append(m.answer_request(req["id"], from_vm=vm, body=f"answer {n}"))
+
+    threads = [threading.Thread(target=answer, args=(n,)) for n in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    replies = m.replies_to(req["id"])
+    assert len(replies) == 1
+    assert sum(created for _row, created in results) == 1
+    assert {row["id"] for row, _created in results} == {replies[0]["id"]}
+    assert replies[0]["to_session"] == requester and replies[0]["wake"] is True
+    assert m.answer_request(10**12, from_vm=vm, body="x") == (None, False)
