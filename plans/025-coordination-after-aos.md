@@ -367,7 +367,7 @@ Phase 0 before anything is built on them.
 | **Codex** | SessionStart `additionalContext` (wired today) | UserPromptSubmit `additionalContext` | Stop `{"decision":"block","reason":…}`; the reason becomes the continuation prompt. Input has `stop_hook_active`. Our handler currently exits early on it (`codex_lifecycle.py:286`), which must change | Paseo `send` (Paseo drives Codex through app-server `turn/start`). A plain TUI session can't be reached from outside † |
 | **OpenCode 2** (v2.2.0 plugin API) | `context` hook (wired today) | `ctx.session.hook("prompt")` | No Stop equivalent in v2.2.0. `experimental.idle` exists only on the dev branch | Paseo `send`, **or in-process**: the plugin itself can `LISTEN` and call `ctx.session.prompt` on its own idle session (what agent-wake's adapter does today) |
 | **agy** CLI / desktop | `~/.gemini/config/hooks.json` SessionStart → `injectSteps` `systemMessage`, **orient summary only** (D6) | PreInvocation → `injectSteps` `ephemeralMessage`, used for all peer messages, including on the first turn | Stop `{"decision":"continue","reason":…}`. No `stop_hook_active`; the guard uses the `executionNum` input. The client caps consecutive continuations (ceiling unknown) | **CLI only**, via Paseo (it drives `agy`; no steering). Desktop: whether hooks fire is unconfirmed †, so desktop may get L0 only |
-| **Hermes** (stretch) | `pre_llm_call` with `is_first_turn` → `{"context":…}` | `pre_llm_call` | `pre_verify` only fires on turns that edited code (capped at 3 by default), so it isn't usable as a general L2 | Hermes API server (`POST /api/sessions/{id}/chat`) wakes API-owned sessions only. It returns 409 for CLI- or TUI-owned sessions. No Paseo provider |
+| **Hermes** (stretch; checked against hermes-agent 0.15.2 and `main` ef75bc70, 2026-10-29) | Shell hook `pre_llm_call` under `hooks:` in `~/.hermes/config.yaml`; stdin `extra.is_first_turn` marks a new session, and our handler also treats a session it has never seen as a first turn. Stdout `{"context":…}` is appended to the turn's user message | The same hook, which fires once per user turn | None. `pre_verify` exists only on `main` (not in 0.15.2), fires only on turns that edited files, and is capped by `agent.max_verify_nudges` (3), so it is not a general L2 | Hermes API server (`POST /api/sessions/{id}/chat`) wakes API-owned sessions only. It returns 409 for CLI- or TUI-owned sessions. No Paseo provider |
 
 Notes:
 - Prefer the structured `hookSpecificOutput.additionalContext` form on
@@ -381,6 +381,28 @@ Notes:
   hook gets its own minimal entry point: it imports only psycopg and
   `core/messaging`, does one indexed query, and targets < 400 ms on Windows.
   Hooks always write UTF-8, because the Windows console defaults to cp1252.
+
+Hermes specifics (source-verified 2026-10-29; Phase 0 item (g) had been left open):
+- **Consent.** Hermes prompts once per `(event, command)` pair, only in a
+  foreground `hermes chat`. The gateway, cron and ACP never prompt: they need
+  `HERMES_ACCEPT_HOOKS=1`, `--accept-hooks`, `hooks_auto_accept: true`, or an
+  entry in `~/.hermes/shell-hooks-allowlist.json`. `install-harness hermes`
+  adds the `hooks:` entry but never approves it or touches the allowlist; it
+  warns until the allowlist has the entry. The allowlist keys on the exact
+  command string, so the command must stay `agent-notes-hook hermes pre-llm-call`.
+- **Identity.** The hook's `session_id` equals `HERMES_SESSION_ID` in tool
+  subprocesses (both are `agent.session_id`). Context compression gives the
+  conversation a new id and updates the variable. The hook sees the new id
+  as an unknown session, registers it and repeats the orient summary and key
+  line. Messages addressed to the old key are not forwarded.
+- **Cap.** On `main`, hook context over 10,000 characters is spilled to a file
+  and replaced by a preview, so the 9,500-character hook cap matters here.
+- **Where context lands.** Hermes appends it to the user message and may
+  persist it with the turn, so a first-turn orient summary stays in the
+  history. Agents run with persistence disabled (`_persist_disabled`) skip
+  `pre_llm_call` on `main`.
+- **cwd** is the Hermes process's working directory, not the terminal tool's,
+  so a gateway-hosted session may resolve to the default workspace.
 
 L2 loop guard: `auto_continues` in `agent_sessions` goes up by one on each L2
 extension or L3 wake, and resets to 0 when the per-prompt hook sees a real
@@ -502,7 +524,7 @@ is identical for every reviewer/requester pair.
 | **4** | L1 hooks for all four harnesses; L2 behind a flag | Message sent mid-session appears on the recipient's next prompt in each harness |
 | **5** | Dispatcher: L3 wake (WI-5.1), the `review` job (WI-5.2), optional work-item fields in 023's `ReviewRequest` (WI-5.3), `review request` and `review show` CLI plus the skill text (WI-5.5); retire `agent-wake` | **The headline scenario (§6a), unattended:** a Paseo-hosted Codex session on Windows requests a Claude review, goes idle, and is woken with the verdict. agent-wake service disabled |
 | **6** | Codex reviewer runner (WI-6.1), so Claude can ask Codex | The reverse of the headline scenario |
-| **7** (stretch) | Hermes | L0 + L1 at minimum |
+| **7** (stretch) | Hermes | L0 + L1 at minimum. **Done 2026-10-29:** L1 via a `pre_llm_call` shell hook (`agent-notes-hook hermes pre-llm-call`), installed by `install-harness hermes` into `~/.hermes/config.yaml` (hash-owned entry, comment-preserving where Hermes' config allows it, otherwise a YAML rewrite with a `.agent-notes.bak` backup; `all` includes Hermes only where `~/.hermes` exists). No L2 or L3. Verified against real hermes-agent 0.15.2 and `main` (payloads captured; shell-hook dispatch, config loading and the `{"context"}` reply exercised end to end with no model call: `tests/test_hermes_real.py`, opt-in via `AGENT_NOTES_HERMES_PYTHON`). Not verified: a live model turn, and gateway/ACP surfaces |
 
 Phases 1 and 2 are independent and can run in parallel. 4 depends on 3. 5
 depends on 1 (023 shouldn't route anything through regista), on 3, and on

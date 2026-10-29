@@ -37,7 +37,10 @@ def read_text(path: Path) -> tuple[str, str]:
     """``(text with LF newlines, original newline)``; ``("", "\\n")`` if absent."""
     if not path.is_file():
         return "", "\n"
-    raw = path.read_text(encoding="utf-8", newline="")
+    try:
+        raw = path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ConfigError(f"{path} is not UTF-8 text; refusing to edit it.") from exc
     eol = "\r\n" if "\r\n" in raw else "\n"
     return raw.replace("\r\n", "\n"), eol
 

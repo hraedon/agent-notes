@@ -220,6 +220,15 @@ def test_unparseable_or_oddly_shaped_config_is_refused(tmp_path):
         _install(tmp_path)
 
 
+def test_a_non_utf8_config_is_refused_untouched(tmp_path):
+    path = _config(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"model: caf\xe9\n")
+    with pytest.raises(RuntimeError, match="not UTF-8"):
+        _install(tmp_path)
+    assert path.read_bytes() == b"model: caf\xe9\n"
+
+
 def test_crlf_line_endings_are_kept(tmp_path):
     original = COMMENTED.replace("\n", "\r\n")
     path = _write(tmp_path, original)
