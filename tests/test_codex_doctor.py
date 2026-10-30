@@ -13,7 +13,12 @@ from agent_notes.scripts import doctor
 from agent_notes.scripts.doctor import _check_codex_harness
 
 
-def test_plugin_probe_limits_query_to_configured_sources(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize(
+    ("installed_version", "expected_state"), [("9.8.7", "enabled"), ("9.8.6", "stale")]
+)
+def test_plugin_probe_limits_query_to_configured_sources(
+    monkeypatch, tmp_path, installed_version, expected_state
+) -> None:
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     (tmp_path / "config.toml").write_text(
         '[plugins."agent-notes@local-notes"]\nenabled = true\n'
@@ -21,6 +26,7 @@ def test_plugin_probe_limits_query_to_configured_sources(monkeypatch, tmp_path) 
         encoding="utf-8",
     )
     monkeypatch.setattr("shutil.which", lambda name: "codex.exe")
+    monkeypatch.setattr("importlib.metadata.version", lambda name: "9.8.7")
     calls = []
 
     def run(command, **kwargs):
@@ -29,13 +35,17 @@ def test_plugin_probe_limits_query_to_configured_sources(monkeypatch, tmp_path) 
             command,
             0,
             json.dumps(
-                {"installed": [{"name": "agent-notes", "version": "1.1.0", "enabled": True}]}
+                {
+                    "installed": [
+                        {"name": "agent-notes", "version": installed_version, "enabled": True}
+                    ]
+                }
             ),
         )
 
     monkeypatch.setattr(subprocess, "run", run)
-    assert doctor._probe_codex_agent_notes_plugin()[0] == "enabled"
-    assert calls == [["codex", "plugin", "list", "--json", "--marketplace", "local-notes"]]
+    assert doctor._probe_codex_agent_notes_plugin()[0] == expected_state
+    assert calls == [["codex.exe", "plugin", "list", "--json", "--marketplace", "local-notes"]]
 
 
 def _use_home(monkeypatch, home: Path, plugin_state: str = "absent") -> None:
