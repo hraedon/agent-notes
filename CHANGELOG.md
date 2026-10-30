@@ -66,6 +66,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `PyYAML` is now a declared dependency; `core/bc_files.py` imported it but it
   had arrived only transitively (regista, `huggingface_hub`).
 
+### Fixed
+
+- **`work-item claim` no longer strands the item (WI-086).** A claim records the
+  lease and leaves the status alone, so `update --status in_progress` and then
+  `in_review` work after a claim without `--force`. Items in `open` or
+  `in_progress` can be claimed. `claimable` now excludes items under a live
+  lease (it had been an alias for `ready`), and an expired lease makes an item
+  claimable again. Rows the old claim left in `claimed` leave it as `open`
+  would (`start`, `defer`, close), and `release` still returns them to `open`.
+
 ## [1.1.1] - 2026-10-17
 
 ### Fixed

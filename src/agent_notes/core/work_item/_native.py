@@ -20,6 +20,7 @@ from agent_notes.core import kernel
 from agent_notes.core.change_log import write_change
 from agent_notes.core.db import _conn
 from agent_notes.core.lifecycle import (
+    is_open,
     is_terminal,
 )
 from agent_notes.core.lifecycle import (
@@ -706,9 +707,14 @@ def claim_work_item(
         entity_id = old["entity_id"]
         status = old["status"]
 
-        # Only claimable items can be claimed
-        if status != "open":
-            raise ValueError(f"Cannot claim: status is {status!r} (must be 'open')")
+        # A lease is a separate axis from the lifecycle (WI-086, Plan 010
+        # WI-2): only active, unfinished work can be leased (``open``,
+        # ``in_progress`` and a legacy ``claimed`` row), and the claim never
+        # moves the status.
+        if not is_open(status):
+            raise ValueError(
+                f"Cannot claim: status is {status!r} (must be 'open' or 'in_progress')"
+            )
 
         # Check if already leased
         cur.execute(
@@ -749,17 +755,6 @@ def claim_work_item(
                 heartbeat_count = work_item_leases.heartbeat_count + 1
             """,
             (entity_id, stamped_actor, ttl_seconds),
-        )
-
-        # Write a set_status op to move status to 'claimed'
-        kernel.commit_op(
-            conn,
-            entity_id=entity_id,
-            entity_type=ENTITY_TYPE,
-            op_type="set_status",
-            payload=_independence.authored({"status": "claimed"}, producer),
-            parent_op_ids=[op["op_id"]],
-            actor_id=stamped_actor,
         )
 
         kernel.emit_event(
@@ -840,9 +835,11 @@ def release_work_item(
             (entity_id,),
         )
 
-        # Releasing gives up a claim. It never reopens an item that has moved
-        # on (in progress, in review, done): that would let an implementer
-        # take an item out of review and close it ungated (Plan 026 D2.4).
+        # Releasing gives up a claim; claims no longer move the status
+        # (WI-086). It never reopens an item that has moved on (in progress,
+        # in review, done): that would let an implementer take an item out of
+        # review and close it ungated (Plan 026 D2.4). Only a legacy
+        # ``claimed`` row, written by the old claim path, goes back to open.
         if old["status"] == "claimed":
             kernel.commit_op(
                 conn,

@@ -171,6 +171,15 @@ class TestTransitions:
         assert lifecycle.transition_for("open", "closed") == "close_from_open"
 
     @pytest.mark.parametrize(
+        "new,expected",
+        [("in_progress", "start"), ("deferred", "defer"), ("done", "close_from_open")],
+    )
+    def test_legacy_claimed_leaves_as_open(self, new, expected):
+        # WI-086: a legacy ``claimed`` row is an open item holding a lease, so
+        # it leaves the state the way ``open`` does.
+        assert lifecycle.transition_for("claimed", new) == expected
+
+    @pytest.mark.parametrize(
         "old,new",
         [
             # No valid transition from done to in_progress (must reopen first)
@@ -181,9 +190,12 @@ class TestTransitions:
             ("blocked", "done"),
             # No path from deferred to in_review (must start/resume first)
             ("deferred", "in_review"),
-            # claimed has no transitions (legacy liveness, not workflow)
+            # Nothing moves TO claimed (legacy liveness, not workflow), and
+            # claimed -> open is a release, not a status transition.
             ("claimed", "open"),
             ("open", "claimed"),
+            ("in_progress", "claimed"),
+            ("claimed", "in_review"),
         ],
     )
     def test_invalid_transition_raises(self, old, new):

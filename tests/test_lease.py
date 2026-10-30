@@ -1,11 +1,13 @@
 """Integration tests for Plan 008 P4 — claim / heartbeat / release lease lifecycle.
 
 These cover the local-lease code path (``claim_work_item``,
-``heartbeat_work_item``, ``release_work_item``) which previously had zero
-test coverage despite the CHANGELOG citing two bug fixes here:
+``heartbeat_work_item``, ``release_work_item``):
 
-- the ``set_status`` op written after a claim must be parented on the
-  ``claim`` op's ``op_id`` (NOT the ``entity_id``) — same for release.
+- a claim records a lease and leaves the lifecycle status alone (WI-086:
+  moving it to the legacy ``claimed`` state stranded the item, since the
+  canonical workflow has no transitions out of ``claimed``).
+- releasing a legacy ``claimed`` row writes a ``set_status(open)`` op parented
+  on the ``release`` op's ``op_id`` (NOT the ``entity_id``).
 - the heartbeat path must write both an op and an event, and advance the
   lease row.
 """
@@ -16,6 +18,7 @@ import pytest
 from psycopg.rows import dict_row
 
 from agent_notes.core import db as coredb
+from agent_notes.core import kernel
 from agent_notes.core.db import _conn
 from agent_notes.core.work_item_model import WorkItemModel
 
@@ -40,6 +43,42 @@ def default_project():
 def _vec768():
     """Return a dummy 768-dim vector (float list)."""
     return [0.0] * 768
+
+
+def _file_open(project_id: int, identifier: str) -> dict:
+    return WorkItemModel.file_work_item(
+        project_id=project_id,
+        identifier=identifier,
+        title=identifier,
+        status="open",
+        embedding=_vec768(),
+    )
+
+
+def _legacy_claimed(project_id: int, identifier: str) -> dict:
+    """An item in the legacy ``claimed`` state with a live lease, as the old
+    claim path left it (a ``set_status(claimed)`` op plus a lease row)."""
+    wi = _file_open(project_id, identifier)
+    WorkItemModel.update_work_item(project_id, identifier, status="claimed", force=True)
+    with _conn() as conn:
+        conn.execute(
+            "INSERT INTO work_item_leases (entity_id, actor_id, expires_at) "
+            "VALUES (%s, 'agent:worker', now() + interval '1 hour')",
+            (wi["entity_id"],),
+        )
+        conn.commit()
+    return WorkItemModel.get_work_item(project_id, identifier)
+
+
+def _lease(entity_id: str) -> dict | None:
+    with _conn() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute("SELECT * FROM work_item_leases WHERE entity_id = %s", (entity_id,))
+        return cur.fetchone()
+
+
+def _claimable_ids(project_id: int) -> set[str]:
+    return {r["identifier"] for r in WorkItemModel.claimable_work_items(project_id=project_id)}
 
 
 def _ops_for_entity(entity_id: str) -> list[dict]:
@@ -73,12 +112,12 @@ class TestClaim:
             project_id=default_project.id,
             identifier="WI-LEASE-01",
         )
-        assert claimed["status"] == "claimed"
+        # The lease is a separate axis: the lifecycle status is unchanged.
+        assert claimed["status"] == "open"
 
-        # work_items cache reflects claimed
         fetched = WorkItemModel.get_work_item(default_project.id, "WI-LEASE-01")
         assert fetched is not None
-        assert fetched["status"] == "claimed"
+        assert fetched["status"] == "open"
 
         # a lease row exists for the entity
         with _conn() as conn:
@@ -96,39 +135,12 @@ class TestClaim:
         claim_ops = [op for op in ops if op["op_type"] == "claim"]
         assert len(claim_ops) == 1
 
-    def test_claim_set_status_is_child_of_claim_op(self, default_project):
-        """The set_status(claimed) op's parent_op_ids must contain the claim
-        op's op_id — NOT the entity_id (the claim parent-chaining bug fix)."""
-        wi = WorkItemModel.file_work_item(
-            project_id=default_project.id,
-            identifier="WI-LEASE-02",
-            title="Parent chain",
-            status="open",
-            embedding=_vec768(),
-        )
-        entity_id = wi["entity_id"]
-
-        WorkItemModel.claim_work_item(
-            project_id=default_project.id,
-            identifier="WI-LEASE-02",
-        )
-
-        ops = _ops_for_entity(entity_id)
-        claim_ops = [op for op in ops if op["op_type"] == "claim"]
-        assert len(claim_ops) == 1
-        claim_op_id = claim_ops[0]["op_id"]
-
-        set_status_ops = [
-            op
-            for op in ops
-            if op["op_type"] == "set_status"
-            and (op.get("payload") or {}).get("status") == "claimed"
-        ]
-        assert len(set_status_ops) == 1
-
-        parents = set(set_status_ops[0]["parent_op_ids"])
-        assert claim_op_id in parents
-        assert entity_id not in parents  # the bug was parenting on entity_id
+    def test_claim_writes_no_status_op(self, default_project):
+        """WI-086: a claim must not move the lifecycle (no ``set_status`` op)."""
+        wi = _file_open(default_project.id, "WI-LEASE-02")
+        WorkItemModel.claim_work_item(project_id=default_project.id, identifier="WI-LEASE-02")
+        ops = _ops_for_entity(wi["entity_id"])
+        assert [op for op in ops if op["op_type"] == "set_status"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -202,14 +214,8 @@ class TestHeartbeat:
 
 
 class TestRelease:
-    def test_release_removes_lease_and_writes_ops(self, default_project):
-        wi = WorkItemModel.file_work_item(
-            project_id=default_project.id,
-            identifier="WI-LEASE-04",
-            title="Release me",
-            status="open",
-            embedding=_vec768(),
-        )
+    def test_release_removes_lease_and_keeps_status(self, default_project):
+        wi = _file_open(default_project.id, "WI-LEASE-04")
         entity_id = wi["entity_id"]
 
         WorkItemModel.claim_work_item(
@@ -222,38 +228,127 @@ class TestRelease:
             identifier="WI-LEASE-04",
         )
         assert released["status"] == "open"
+        assert _lease(entity_id) is None
 
-        # work_items cache reflects open again
-        fetched = WorkItemModel.get_work_item(default_project.id, "WI-LEASE-04")
-        assert fetched is not None
-        assert fetched["status"] == "open"
+        # a release op exists; there is no status op (the status never moved)
+        ops = _ops_for_entity(entity_id)
+        assert len([op for op in ops if op["op_type"] == "release"]) == 1
+        assert [op for op in ops if op["op_type"] == "set_status"] == []
 
-        # the lease row is deleted
-        with _conn() as conn:
-            cur = conn.cursor(row_factory=dict_row)
-            cur.execute(
-                "SELECT 1 FROM work_item_leases WHERE entity_id = %s",
-                (entity_id,),
-            )
-            assert cur.fetchone() is None
+    def test_release_of_legacy_claimed_row_reopens(self, default_project):
+        """A row the old claim path left in ``claimed`` goes back to ``open``,
+        via a ``set_status`` op parented on the release op (not the entity)."""
+        wi = _legacy_claimed(default_project.id, "WI-LEASE-04L")
+        assert wi["status"] == "claimed"
+        entity_id = wi["entity_id"]
 
-        # a release op and a set_status op exist in op_log
+        released = WorkItemModel.release_work_item(default_project.id, "WI-LEASE-04L")
+        assert released["status"] == "open"
+        assert _lease(entity_id) is None
+
         ops = _ops_for_entity(entity_id)
         release_ops = [op for op in ops if op["op_type"] == "release"]
         assert len(release_ops) == 1
-        release_op_id = release_ops[0]["op_id"]
-
-        set_status_ops = [
+        reopen_ops = [
             op
             for op in ops
             if op["op_type"] == "set_status" and (op.get("payload") or {}).get("status") == "open"
         ]
-        assert len(set_status_ops) == 1
-
-        # the set_status op is parented on the release op's op_id, NOT entity_id
-        parents = set(set_status_ops[0]["parent_op_ids"])
-        assert release_op_id in parents
+        assert len(reopen_ops) == 1
+        parents = set(reopen_ops[0]["parent_op_ids"])
+        assert release_ops[0]["op_id"] in parents
         assert entity_id not in parents
+
+
+# ---------------------------------------------------------------------------
+# WI-086: a claim must not strand the item outside the canonical workflow
+# ---------------------------------------------------------------------------
+
+
+class TestClaimThenWorkflow:
+    def test_claim_then_start_then_submit_for_review(self, default_project):
+        wi = _file_open(default_project.id, "WI-086-A")
+        entity_id = wi["entity_id"]
+
+        claimed = WorkItemModel.claim_work_item(default_project.id, "WI-086-A", 14400)
+        assert claimed["status"] == "open"
+
+        started = WorkItemModel.update_work_item(
+            default_project.id, "WI-086-A", status="in_progress"
+        )
+        assert started["status"] == "in_progress"
+        # The lease survives the lifecycle move and can still be heartbeated.
+        assert _lease(entity_id)["actor_id"] == "agent:worker"
+        lease = WorkItemModel.heartbeat_work_item(default_project.id, "WI-086-A", 600)
+        assert lease["heartbeat_count"] >= 1
+
+        submitted = WorkItemModel.update_work_item(
+            default_project.id, "WI-086-A", status="in_review"
+        )
+        assert submitted["status"] == "in_review"
+
+        # Releasing drops the lease and leaves the item in review.
+        released = WorkItemModel.release_work_item(default_project.id, "WI-086-A")
+        assert released["status"] == "in_review"
+        assert _lease(entity_id) is None
+
+    def test_live_lease_excludes_item_from_claimable(self, default_project):
+        wi = _file_open(default_project.id, "WI-086-B")
+        assert "WI-086-B" in _claimable_ids(default_project.id)
+
+        WorkItemModel.claim_work_item(default_project.id, "WI-086-B")
+        assert "WI-086-B" not in _claimable_ids(default_project.id)
+        # ``ready`` is "open and unblocked"; the lease is the claimable filter.
+        ready = WorkItemModel.ready_work_items(project_id=default_project.id)
+        assert "WI-086-B" in {r["identifier"] for r in ready}
+
+        # An expired lease no longer excludes it, and the sweep removes it.
+        with _conn() as conn:
+            conn.execute(
+                "UPDATE work_item_leases SET expires_at = now() - interval '1 second' "
+                "WHERE entity_id = %s",
+                (wi["entity_id"],),
+            )
+            conn.commit()
+        assert "WI-086-B" in _claimable_ids(default_project.id)
+        with _conn() as conn:
+            conn.execute("SELECT sweep_expired_leases()")
+            conn.commit()
+        assert _lease(wi["entity_id"]) is None
+
+        # A claim then a release leaves it claimable again.
+        WorkItemModel.claim_work_item(default_project.id, "WI-086-B")
+        WorkItemModel.release_work_item(default_project.id, "WI-086-B")
+        assert "WI-086-B" in _claimable_ids(default_project.id)
+
+    def test_in_progress_item_can_be_claimed(self, default_project):
+        """Work started without a claim (or whose lease lapsed) can be leased."""
+        wi = _file_open(default_project.id, "WI-086-C")
+        WorkItemModel.update_work_item(default_project.id, "WI-086-C", status="in_progress")
+        claimed = WorkItemModel.claim_work_item(default_project.id, "WI-086-C")
+        assert claimed["status"] == "in_progress"
+        assert _lease(wi["entity_id"]) is not None
+
+    def test_legacy_claimed_row_can_start(self, default_project):
+        """A row stranded in ``claimed`` by the old claim path is an open item
+        holding a lease: it starts as ``open`` would, and keeps its lease."""
+        wi = _legacy_claimed(default_project.id, "WI-086-D")
+        started = WorkItemModel.update_work_item(
+            default_project.id, "WI-086-D", status="in_progress"
+        )
+        assert started["status"] == "in_progress"
+        assert _lease(wi["entity_id"]) is not None
+        submitted = WorkItemModel.update_work_item(
+            default_project.id, "WI-086-D", status="in_review"
+        )
+        assert submitted["status"] == "in_review"
+
+    def test_fold_agrees_with_cache_after_claim(self, default_project):
+        wi = _file_open(default_project.id, "WI-086-E")
+        WorkItemModel.claim_work_item(default_project.id, "WI-086-E")
+        with _conn() as conn:
+            state = kernel.fold_work_item_state(conn, wi["entity_id"])
+        assert state["status"] == "open"
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +388,13 @@ class TestLeaseErrors:
                 project_id=default_project.id,
                 identifier="WI-LEASE-06",
             )
+
+    def test_claim_in_review_raises(self, default_project):
+        _file_open(default_project.id, "WI-LEASE-07R")
+        WorkItemModel.update_work_item(default_project.id, "WI-LEASE-07R", status="in_progress")
+        WorkItemModel.update_work_item(default_project.id, "WI-LEASE-07R", status="in_review")
+        with pytest.raises(ValueError, match="Cannot claim"):
+            WorkItemModel.claim_work_item(default_project.id, "WI-LEASE-07R")
 
     def test_claim_non_open_raises(self, default_project):
         WorkItemModel.file_work_item(

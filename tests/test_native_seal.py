@@ -303,7 +303,7 @@ class TestLazySealOnNativeWrites:
 
     def test_claim_close_on_chainless_open_row(self, project):
         _chainless_row(project, "P25-012", status="open")
-        assert WorkItemModel.claim_work_item(project.id, "P25-012")["status"] == "claimed"
+        assert WorkItemModel.claim_work_item(project.id, "P25-012")["status"] == "open"
         assert WorkItemModel.close_work_item(project.id, "P25-012")["status"] == "done"
 
 

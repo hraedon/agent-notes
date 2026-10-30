@@ -114,6 +114,10 @@ VALID_TRANSITIONS: dict[tuple[str, str], str] = {
     ("open", "done"): "close_from_open",
 }
 
+# Legacy states as the *source* of a transition: the canonical state they
+# leave as. Used only by ``transition_for``; no transition targets them.
+_LEGACY_SOURCE_ALIAS: dict[str, str] = {"closed": "done", "claimed": "open"}
+
 # ---------------------------------------------------------------------------
 # Legacy synonym → canonical mapping
 # ---------------------------------------------------------------------------
@@ -189,12 +193,14 @@ def transition_for(old_status: str, new_status: str) -> str | None:
     Raises ``ValueError`` if the transition is unsupported.
 
     ``closed`` (legacy terminal) is accepted as an alias for ``done``.
-    ``claimed`` (legacy liveness state) has no valid transitions — it
-    requires migration to the canonical workflow first.
+    ``claimed`` (legacy liveness state, written by claims before WI-086) is
+    an open item holding a lease, so it leaves the way ``open`` does
+    (``start``, ``defer``, ``close_from_open``). Nothing transitions *to*
+    ``claimed``, and ``claimed`` -> ``open`` is a ``release``, not an update.
     """
     if old_status == new_status:
         return None
-    old = "done" if old_status == "closed" else old_status
+    old = _LEGACY_SOURCE_ALIAS.get(old_status, old_status)
     new = "done" if new_status == "closed" else new_status
     transition = VALID_TRANSITIONS.get((old, new))
     if transition is not None:
