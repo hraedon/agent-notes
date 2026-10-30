@@ -186,8 +186,9 @@ def _notices(
 
 
 def _print_notices(payload: dict[str, Any]) -> None:
-    """Notice metadata only: subjects and bodies are peer content (Plan 025 D6),
-    and this text can land in a system-level channel (agy SessionStart)."""
+    """Generated metadata only (id, age). Subject, body and sender are all
+    asserted by the peer (Plan 025 D6), and this text can land in a
+    system-level channel (agy SessionStart)."""
     notices = payload["notices"]
     if payload.get("notices_error"):
         print(f"\nNotices: unavailable ({payload['notices_error']})")
@@ -196,7 +197,7 @@ def _print_notices(payload: dict[str, Any]) -> None:
     shown = _shown_label(notices, payload["has_more"]["notices"])
     print(f"\nNotices ({shown}; peer content, read with `agent-notes msg inbox`):")
     for n in notices:
-        print(f"  - #{n['id']} from {n['from']} ({n['age_days']}d old)")
+        print(f"  - #{n['id']} ({n['age_days']}d old)")
 
 
 def cmd_orient(args: argparse.Namespace) -> int:

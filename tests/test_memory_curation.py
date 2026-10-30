@@ -209,6 +209,29 @@ def test_cleared_findings_retire_the_notice_and_a_recurrence_posts_again(ws, cap
     assert len(_notices(ws, "busy", live_only=True)) == 1
 
 
+def test_findings_that_clear_after_the_notice_expires_still_post_on_recurrence(ws, capsys):
+    """Clearing retires the last notice even once it has expired, so its digest
+    can't suppress the same findings coming back."""
+    wid, pid = ws["ws"].id, ws["busy"].id
+    add_memory(wid, pid, "big-fact", "project", "big " + "x" * 2500)
+    _hygiene(ws, capsys)
+    [first] = _notices(ws, "busy")
+    with psycopg.connect(ws["dsn"]) as conn:
+        conn.execute(
+            "UPDATE agent_messages SET expires_at = now() - interval '1 second' WHERE id = %s",
+            (first["id"],),
+        )
+
+    delete_memory(wid, pid, "big-fact")
+    _code, out = _hygiene(ws, capsys)
+    assert [r["message_id"] for r in _mine(out, "retired", ws)] == [first["id"]]
+
+    add_memory(wid, pid, "big-fact", "project", "big " + "x" * 2500)
+    _code, out = _hygiene(ws, capsys)
+    assert [n["project"] for n in _mine(out, "posted", ws)] == ["busy"]
+    assert len(_notices(ws, "busy", live_only=True)) == 1
+
+
 def test_dry_run_posts_nothing_but_shows_the_notice(ws, capsys):
     _seed_busy(ws)
     code, out = _hygiene(ws, capsys, dry_run=True)

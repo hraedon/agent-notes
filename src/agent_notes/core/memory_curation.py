@@ -277,6 +277,32 @@ def _live_notices(conn: psycopg.Connection, project: tuple[int, str] | None = No
     return [dict(r) for r in conn.execute(sql + " ORDER BY m.id", params).fetchall()]
 
 
+def _clearable_notices(
+    conn: psycopg.Connection, project: tuple[int, str] | None = None
+) -> list[dict]:
+    """What to retire when a project's findings clear: its live notices, plus its
+    latest notice if that expired unretired. ``_is_current`` reads the latest one,
+    so leaving it unretired would suppress the same findings when they recur."""
+    sql = (
+        "SELECT * FROM (SELECT DISTINCT ON (m.workspace_id, m.to_project) "
+        "m.id, m.workspace_id, w.slug AS workspace, m.to_project AS project, m.payload "
+        "FROM agent_messages m JOIN workspaces w ON w.id = m.workspace_id "
+        f"WHERE {_CURATION_NOTICES}"  # noqa: S608
+    )
+    params: dict[str, Any] = {"sender": CURATION_SENDER}
+    if project is not None:
+        sql += " AND m.workspace_id = %(ws)s AND m.to_project = %(project)s"
+        params.update(ws=project[0], project=project[1])
+    sql += (
+        " ORDER BY m.workspace_id, m.to_project, m.id DESC) latest "
+        "WHERE NOT COALESCE((payload->'curation'->>'retired')::boolean, false)"
+    )
+    latest = [dict(r) for r in conn.execute(sql, params).fetchall()]
+    seen = {r["id"] for r in latest}
+    rows = latest + [r for r in _live_notices(conn, project) if r["id"] not in seen]
+    return sorted(rows, key=lambda r: r["id"])
+
+
 def _retire(conn: psycopg.Connection, ids: list[int]) -> None:
     if ids:
         conn.execute(
@@ -370,7 +396,7 @@ def post_curation_notices(
         if only is None or scope is not None:
             stale = [
                 r
-                for r in _live_notices(conn, scope)
+                for r in _clearable_notices(conn, scope)
                 if (r["workspace_id"], r["project"]) not in with_findings
             ]
         if not dry_run:

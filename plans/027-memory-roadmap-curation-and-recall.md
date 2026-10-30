@@ -612,8 +612,8 @@ payload sizes; why `gitea-orient` printed nothing.
   - ~~Notices only reach a session through `msg inbox` and the OpenCode
     plugin.~~ Closed the same day: `orient` now lists live notices for the
     project and VM (Plan 025 D4), so every SessionStart hook surfaces them.
-    The text and the Codex block show metadata only (id, sender, age), and
-    point at `agent-notes msg inbox`. Subjects and bodies are peer content,
+    The text and the Codex block show generated metadata only (id, age), and
+    point at `agent-notes msg inbox`. Subjects, bodies and senders are peer content,
     and on agy the orient text is a system-level channel (Plan 025 D6).
     `orient --json` carries the subject for tools. A failed notice query is
     reported as `notices_error`, never fatal.
