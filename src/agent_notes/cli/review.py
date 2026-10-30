@@ -149,7 +149,7 @@ def cmd_review_request(args: argparse.Namespace) -> int:
             exit_code=EXIT_CONFLICT,
         )
 
-    work_item = None
+    work_item = work_item_entity_id = None
     if args.work_item:
         from agent_notes.core.work_item_model import WorkItemModel
 
@@ -162,6 +162,7 @@ def cmd_review_request(args: argparse.Namespace) -> int:
                 exit_code=EXIT_NOT_FOUND,
             )
         work_item = wi["identifier"]
+        work_item_entity_id = wi.get("entity_id")
         title = f"{wi['identifier']}: {wi['title']}"
         brief = WorkItemModel.get_work_item_body(project_row.id, args.work_item) or ""
     elif args.brief is not None:
@@ -188,6 +189,8 @@ def cmd_review_request(args: argparse.Namespace) -> int:
         "title": title,
         "brief": brief,
         "work_item": work_item,
+        # The job binds the attempt to this entity, in this project (WI-087).
+        "work_item_entity_id": work_item_entity_id,
         "model": args.model,
         "timeout_seconds": args.timeout,
     }

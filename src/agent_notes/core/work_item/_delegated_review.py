@@ -131,6 +131,10 @@ class ReviewRequest:
     evidence_ref: str | None = None
     subject_kind: ReviewSubjectKind = ReviewSubjectKind.WORK_ITEM
     allow_dirty_checkout: bool = False
+    # The item's op-log lamport when its title and body were read (WI-087). The
+    # journal records the lower of this and the lamport at planning, so a
+    # content edit between the read and the plan leaves the attempt stale.
+    item_lamport: int | None = None
 
 
 BRIEF_ENTITY_PREFIX = "brief:"
