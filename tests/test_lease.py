@@ -12,6 +12,8 @@ test coverage despite the CHANGELOG citing two bug fixes here:
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from psycopg.rows import dict_row
 
@@ -32,7 +34,7 @@ def default_project():
         ws.id,
         slug="sf2",
         name="sf2",
-        repo_root="/projects/sf2",
+        repo_root=os.path.abspath("/projects/sf2"),
     )
     return proj
 

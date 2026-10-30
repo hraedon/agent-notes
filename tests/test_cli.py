@@ -32,7 +32,9 @@ def _run(*args: str, env: dict | None = None, check: bool = True) -> subprocess.
 @pytest.fixture
 def default_project():
     ws = coredb.get_or_create_workspace("default", "Default Workspace")
-    proj = coredb.get_or_create_project(ws.id, slug="sf2", name="sf2", repo_root="/projects/sf2")
+    proj = coredb.get_or_create_project(
+        ws.id, slug="sf2", name="sf2", repo_root=os.path.abspath("/projects/sf2")
+    )
     return proj
 
 
@@ -839,7 +841,7 @@ def test_breadcrumb_find_scopes(default_project):
 
     ws = _db.get_or_create_workspace("default", "Default Workspace")
     other_proj = _db.get_or_create_project(
-        ws.id, slug="other", name="other", repo_root="/projects/other"
+        ws.id, slug="other", name="other", repo_root=os.path.abspath("/projects/other")
     )
 
     WorkItemModel.file_work_item(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 
 import pytest
 
@@ -24,7 +25,7 @@ def default_project():
         ws.id,
         slug="sf2",
         name="sf2",
-        repo_root="/projects/sf2",
+        repo_root=os.path.abspath("/projects/sf2"),
     )
     return proj
 
@@ -36,7 +37,7 @@ def target_project():
         ws.id,
         slug="target",
         name="Target Project",
-        repo_root="/projects/target",
+        repo_root=os.path.abspath("/projects/target"),
     )
     return proj
 
@@ -68,7 +69,7 @@ class TestRegistry:
             ws.id,
             slug="reg-proj",
             name="Registry Project",
-            repo_root="/projects/reg",
+            repo_root=os.path.abspath("/projects/reg"),
             log_location="/logs/reg.jsonl",
             wake_channel="http://wake/reg",
         )

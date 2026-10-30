@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import inspect
 import json
+import os
 
 import pytest
 
@@ -38,7 +39,7 @@ def default_project():
         ws.id,
         slug="sf2",
         name="sf2",
-        repo_root="/projects/sf2",
+        repo_root=os.path.abspath("/projects/sf2"),
     )
 
 

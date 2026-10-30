@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 
 import pytest
 
@@ -25,7 +26,7 @@ def default_project():
         ws.id,
         slug="sf2",
         name="sf2",
-        repo_root="/projects/sf2",
+        repo_root=os.path.abspath("/projects/sf2"),
     )
     return proj
 
@@ -1829,7 +1830,7 @@ class TestCrossProjectRequest:
             default_project.workspace_id,
             slug="target-proj",
             name="Target Project",
-            repo_root="/projects/target",
+            repo_root=os.path.abspath("/projects/target"),
         )
 
         req = WorkItemModel.request_work_item(
@@ -1867,7 +1868,7 @@ class TestCrossProjectWait:
             default_project.workspace_id,
             slug="target-proj2",
             name="Target Project 2",
-            repo_root="/projects/target2",
+            repo_root=os.path.abspath("/projects/target2"),
         )
 
         wait = WorkItemModel.wait_on_work_item(
@@ -1890,7 +1891,7 @@ class TestCrossProjectLink:
             default_project.workspace_id,
             slug="target-proj3",
             name="Target Project 3",
-            repo_root="/projects/target3",
+            repo_root=os.path.abspath("/projects/target3"),
         )
 
         # Create a local work item
@@ -1964,7 +1965,7 @@ class TestCliCrossProject:
             default_project.workspace_id,
             slug="target-proj4",
             name="Target Project 4",
-            repo_root="/projects/target4",
+            repo_root=os.path.abspath("/projects/target4"),
         )
 
         ns = argparse.Namespace(
@@ -1989,7 +1990,7 @@ class TestCliCrossProject:
             default_project.workspace_id,
             slug="target-proj5",
             name="Target Project 5",
-            repo_root="/projects/target5",
+            repo_root=os.path.abspath("/projects/target5"),
         )
 
         ns = argparse.Namespace(
@@ -2011,7 +2012,7 @@ class TestCliCrossProject:
             default_project.workspace_id,
             slug="target-proj6",
             name="Target Project 6",
-            repo_root="/projects/target6",
+            repo_root=os.path.abspath("/projects/target6"),
         )
 
         WorkItemModel.file_work_item(
