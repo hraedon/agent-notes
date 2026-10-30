@@ -2,11 +2,13 @@
 
 The request payload (written by ``agent-notes review request``) names the
 project, the base and head SHAs, the reviewer, and either a brief or a work
-item's title and body. The job finds this VM's checkout of the project, fetches,
-checks both SHAs exist, and runs 023's ``evaluate_and_record`` with
-``ClaudePrintRunner`` in a detached worktree. It stops at ``result_validated``
-and makes no lifecycle transition (Plan 025 §8). Every failure becomes a reply
-with an error code.
+item. The job finds this VM's checkout of the project, fetches, checks both
+SHAs exist, and runs 023's ``evaluate_and_record`` with ``ClaudePrintRunner`` in
+a detached worktree. A brief is journalled store-only under a ``brief:``
+subject; a work item is journalled against its entity and lamport, so
+``work-item review pass|accept --attempt`` can apply it (WI-087). It stops at
+``result_validated`` and makes no lifecycle transition (Plan 025 §8). Every
+failure becomes a reply with an error code.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from typing import Any, Callable, Mapping
 from agent_notes.core.work_item._delegated_review import (
     DelegatedReviewError,
     ReviewEvaluation,
+    ReviewRequest,
     ReviewRunner,
     brief_review_request,
 )
@@ -49,6 +52,7 @@ REQUEST_INVALID = "REVIEW_REQUEST_INVALID"
 REVIEWER_UNSUPPORTED = "REVIEW_REVIEWER_UNSUPPORTED"
 NO_CHECKOUT = "REVIEW_NO_CHECKOUT"
 REVISION_MISSING = "REVIEW_REVISION_MISSING"
+WORK_ITEM_NOT_FOUND = "REVIEW_WORK_ITEM_NOT_FOUND"
 ATTEMPT_CONFLICT = "REVIEW_ATTEMPT_CONFLICT"
 JOB_ERROR = "REVIEW_JOB_FAILED"
 
@@ -158,6 +162,14 @@ def _payload(request: Mapping[str, Any], env: Mapping[str, str]) -> dict[str, An
     brief = raw.get("brief")
     if not isinstance(brief, str):
         brief = ""
+    work_item = raw.get("work_item")
+    if work_item is not None and (
+        not isinstance(work_item, str) or not work_item.strip() or len(work_item) > 200
+    ):
+        raise _JobError(REQUEST_INVALID, "payload.work_item is invalid")
+    entity_id = raw.get("work_item_entity_id")
+    if entity_id is not None and (work_item is None or not isinstance(entity_id, str)):
+        raise _JobError(REQUEST_INVALID, "payload.work_item_entity_id is invalid")
     return {
         "project": project,
         "workspace_id": workspace_id,
@@ -167,7 +179,8 @@ def _payload(request: Mapping[str, Any], env: Mapping[str, str]) -> dict[str, An
         "timeout": timeout,
         "title": title.strip()[:256],
         "brief": brief,
-        "work_item": raw.get("work_item") if isinstance(raw.get("work_item"), str) else None,
+        "work_item": work_item.strip() if work_item is not None else None,
+        "work_item_entity_id": entity_id,
     }
 
 
@@ -253,12 +266,18 @@ def _success_reply(request: Mapping[str, Any], spec: Mapping[str, Any], recorded
         lines += ["", f"Non-blocking risks: {len(result.non_blocking_risks)} (see the artifact)."]
     lines += ["", f"Full artifact: agent-notes review show {rid}"]
     attempt = recorded.attempt
+    if spec["work_item"] is not None and verdict == "accept":
+        lines.append(
+            f"Apply it: agent-notes work-item review pass {spec['work_item']} "
+            f"--attempt {attempt['attempt_id']} (accept instead, once it is in human review)"
+        )
     return JobReply(
         body="\n".join(lines),
         payload={
             "job": "review",
             "request_id": rid,
             "status": "ok",
+            "work_item": spec["work_item"],
             "verdict": verdict,
             "recommendation": evaluation.recommendation.value,
             "attempt_id": str(attempt["attempt_id"]),
@@ -345,20 +364,26 @@ def _run(
         _log.warning("review request #%s: %s (revisions were present)", request["id"], fetch_error)
 
     workspace_slug = _workspace_slug(spec["workspace_id"])
-    review = brief_review_request(
-        subject_ref=f"agent-message-{request['id']}",
-        title=spec["title"],
-        body=spec["brief"],
-        repository_identity=f"{workspace_slug}/{spec['project']}",
-        repository_root=Path(checkout),
-        base_revision=spec["base"],
-        head_revision=spec["head"],
-        harness="claude",
-        requested_model=spec["model"],
-        accepted_reported_models=tuple(_env_list(ACCEPT_MODELS_ENV, env)),
-        timeout_seconds=spec["timeout"],
-        allow_dirty_checkout=True,
-    )
+    common: dict[str, Any] = {
+        "repository_identity": f"{workspace_slug}/{spec['project']}",
+        "repository_root": Path(checkout),
+        "base_revision": spec["base"],
+        "head_revision": spec["head"],
+        "harness": "claude",
+        "requested_model": spec["model"],
+        "accepted_reported_models": tuple(_env_list(ACCEPT_MODELS_ENV, env)),
+        "timeout_seconds": spec["timeout"],
+        "allow_dirty_checkout": True,
+    }
+    if spec["work_item"] is not None:
+        review = _work_item_request(project.id, spec, common)
+    else:
+        review = brief_review_request(
+            subject_ref=f"agent-message-{request['id']}",
+            title=spec["title"],
+            body=spec["brief"],
+            **common,
+        )
     runner = runner_factory(spec["model"], env)
     if record is None:
         from agent_notes.core.work_item._review_orchestrator import evaluate_and_record
@@ -382,6 +407,57 @@ def _run(
         _log.exception("review request #%s raised", request["id"])
         raise _JobError(JOB_ERROR, f"review raised {type(exc).__name__}") from exc
     return _success_reply(request, spec, recorded)
+
+
+def _work_item_request(project_id: int, spec: Mapping[str, Any], common: dict) -> ReviewRequest:
+    """Bind the review to the work item itself, so ``--attempt`` can apply it (WI-087).
+
+    Title, body and status are read here, not taken from the payload, and with
+    them the item's lamport in the same statement: the attempt's freshness
+    watermark then covers exactly what the reviewer was shown. An item that
+    can't be found (or was refiled since the request) fails the job; it never
+    falls back to a store-only brief.
+    """
+    from agent_notes.core import kernel
+    from agent_notes.core.db import _conn
+
+    identifier = spec["work_item"]
+    with _conn() as conn:
+        row = conn.execute(
+            """
+            SELECT wi.entity_id, wi.identifier, wi.title, wi.status, wi.body_hash,
+                   (SELECT max(lamport) FROM op_log WHERE entity_id = wi.entity_id) AS lamport
+            FROM work_items wi
+            WHERE wi.project_id = %s AND wi.identifier = %s
+            """,
+            (project_id, identifier),
+        ).fetchone()
+        body = kernel.get_blob(conn, row["body_hash"]) if row and row["body_hash"] else None
+    if row is None:
+        raise _JobError(
+            WORK_ITEM_NOT_FOUND, f"work item {identifier!r} not found in {spec['project']}"
+        )
+    expected = spec["work_item_entity_id"]
+    if expected is not None and row["entity_id"] != expected:
+        raise _JobError(
+            WORK_ITEM_NOT_FOUND,
+            f"work item {identifier!r} in {spec['project']} is no longer the item the "
+            "request named; request a fresh review",
+        )
+    if row["lamport"] is None:
+        raise _JobError(
+            WORK_ITEM_NOT_FOUND,
+            f"work item {identifier!r} has no op-log history to bind a review to",
+        )
+    return ReviewRequest(
+        work_item_entity_id=row["entity_id"],
+        work_item_identifier=row["identifier"],
+        work_item_title=row["title"],
+        work_item_body=body or "",
+        work_item_status=row["status"],
+        item_lamport=row["lamport"],
+        **common,
+    )
 
 
 def _workspace_slug(workspace_id: int) -> str:

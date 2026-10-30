@@ -114,9 +114,16 @@ def _document(verdict: str = "accept", blocking: list | None = None) -> bytes:
 
 
 class FakeRunner:
-    def __init__(self, document: bytes | None = None, *, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        document: bytes | None = None,
+        *,
+        error: Exception | None = None,
+        model: str = MODEL,
+    ) -> None:
         self.document = document or _document()
         self.error = error
+        self.model = model
         self.prompt = ""
         self.timeout = 0.0
 
@@ -131,8 +138,8 @@ class FakeRunner:
             structured_outputs=(self.document,),
             harness="claude",
             harness_version="9.9.9",
-            requested_model=MODEL,
-            reported_model=MODEL,
+            requested_model=self.model,
+            reported_model=self.model,
             session_id="session-1",
             started_at="2026-10-28T00:00:00Z",
             ended_at="2026-10-28T00:00:01Z",
@@ -348,3 +355,277 @@ def test_review_show_returns_the_stored_artifact(ws, vm, project, repos, capsys)
     assert shown["attempt"]["head_sha"] == repos.head
     assert shown["artifact"]["result"]["verdict"] == "accept"
     assert shown["artifact"]["git"]["repository_identity"] == f"default/{project}"
+
+
+# ---------------------------------------------------------------------------
+# Work-item reviews bind to the real item (WI-087)
+# ---------------------------------------------------------------------------
+
+CLAUDE = "claude-opus-5-5"
+GPT = "gpt-6.1-sol"
+GEMINI = "gemini-4-argon-medium"
+
+
+@pytest.fixture
+def act_as(monkeypatch):
+    from agent_notes.core.work_item import _independence
+
+    for name in (
+        *_independence.MODEL_ENVS,
+        *_independence.HARNESS_ENVS,
+        m.SESSION_ENV,
+        *(var for var, _ in m.HARNESS_ENV_VARS),
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    def act(actor: str, model: str) -> None:
+        monkeypatch.setenv("AGENT_NOTES_ACTOR_ID", actor)
+        monkeypatch.setenv("AGENT_NOTES_MODEL", model)
+
+    return act
+
+
+def _project_id(ws: int, slug: str) -> int:
+    return coredb.get_project(ws, slug).id
+
+
+def _in_review(ws: int, slug: str, identifier: str) -> dict:
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    pid = _project_id(ws, slug)
+    WorkItemModel.file_work_item(
+        project_id=pid,
+        identifier=identifier,
+        title="Bump the value",
+        body="value must become 2",
+        status="open",
+        embedding=[0.0] * 768,
+    )
+    WorkItemModel.update_work_item(project_id=pid, identifier=identifier, status="in_progress")
+    WorkItemModel.update_work_item(project_id=pid, identifier=identifier, status="in_review")
+    return WorkItemModel.get_work_item(pid, identifier)
+
+
+def _work_item_request(ws, vm, slug, repos, wi: dict, **payload) -> dict:
+    values = {
+        "work_item": wi["identifier"],
+        "work_item_entity_id": wi["entity_id"],
+        "title": f"{wi['identifier']}: {wi['title']}",
+        "brief": "captured at request time",
+        "model": CLAUDE,
+    }
+    values.update(payload)
+    req, _ = _request(ws, vm, slug, repos, **values)
+    return req
+
+
+def _attempt_row(attempt_id: str) -> dict:
+    with coredb._conn() as conn:
+        return conn.execute(
+            "SELECT * FROM review_delegation_attempts WHERE attempt_id = %s",
+            (uuid.UUID(attempt_id),),
+        ).fetchone()
+
+
+def _max_lamport(entity_id: str) -> int:
+    with coredb._conn() as conn:
+        return conn.execute(
+            "SELECT max(lamport) AS l FROM op_log WHERE entity_id = %s", (entity_id,)
+        ).fetchone()["l"]
+
+
+def _reviewed(ws, vm, project, repos, identifier: str) -> tuple[dict, str]:
+    wi = _in_review(ws, project, identifier)
+    repos.push()
+    req = _work_item_request(ws, vm, project, repos, wi)
+    _run(vm, FakeRunner(model=CLAUDE))
+    payload = _reply(req["id"])["payload"]
+    assert payload["status"] == "ok", payload
+    return wi, payload["attempt_id"]
+
+
+def test_work_item_review_binds_the_item_and_applies_with_attempt(ws, vm, project, repos, act_as):
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    act_as("agent:codex", GPT)
+    wi = _in_review(ws, project, "RJ-1")
+    repos.push()
+    req = _work_item_request(ws, vm, project, repos, wi)
+    runner = FakeRunner(model=CLAUDE)
+
+    _run(vm, runner)
+
+    reply = _reply(req["id"])
+    payload = reply["payload"]
+    assert payload["status"] == "ok", reply["body"]
+    assert payload["work_item"] == "RJ-1"
+    assert f"work-item review pass RJ-1 --attempt {payload['attempt_id']}" in reply["body"]
+    assert runner.prompt.startswith("Perform an adversarial code review for this work item.")
+    assert "Work item: RJ-1" in runner.prompt
+    assert "value must become 2" in runner.prompt
+    attempt = _attempt_row(payload["attempt_id"])
+    assert attempt["work_item_entity_id"] == wi["entity_id"]
+    assert attempt["work_item_identifier"] == "RJ-1"
+    assert attempt["project_id"] == _project_id(ws, project)
+    assert attempt["item_lamport"] == _max_lamport(wi["entity_id"])
+
+    pid = _project_id(ws, project)
+    WorkItemModel.review_transition(
+        pid, "RJ-1", "adversarial_pass", "Claude accepted", attempt_id=payload["attempt_id"]
+    )
+    assert WorkItemModel.get_work_item(pid, "RJ-1")["status"] == "in_human_review"
+    assert _attempt_row(payload["attempt_id"])["status"] == "transition_applied"
+
+
+def test_work_item_review_attempt_can_accept(ws, vm, project, repos, act_as):
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    act_as("agent:codex", GPT)
+    _, attempt_id = _reviewed(ws, vm, project, repos, "RJ-2")
+    pid = _project_id(ws, project)
+    act_as("agent:gemini", GEMINI)
+    WorkItemModel.review_transition(pid, "RJ-2", "adversarial_pass", "Gemini passed")
+    act_as("agent:codex", GPT)
+    WorkItemModel.review_transition(pid, "RJ-2", "accept", "Claude accepted", attempt_id=attempt_id)
+    assert WorkItemModel.get_work_item(pid, "RJ-2")["status"] == "done"
+
+
+def test_same_lineage_work_item_attempt_is_still_refused(ws, vm, project, repos, act_as):
+    from agent_notes.core.work_item._independence import IndependenceError
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    act_as("agent:claude-impl", "claude-sonnet-5-5")
+    _, attempt_id = _reviewed(ws, vm, project, repos, "RJ-3")
+    with pytest.raises(IndependenceError, match="shares the reviewer's model lineage"):
+        WorkItemModel.review_transition(
+            _project_id(ws, project), "RJ-3", "adversarial_pass", "x", attempt_id=attempt_id
+        )
+
+
+def test_work_item_attempt_is_stale_after_a_content_edit(ws, vm, project, repos, act_as):
+    from agent_notes.core.work_item._independence import IndependenceError
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    act_as("agent:codex", GPT)
+    _, attempt_id = _reviewed(ws, vm, project, repos, "RJ-4")
+    pid = _project_id(ws, project)
+    WorkItemModel.update_work_item(project_id=pid, identifier="RJ-4", body="changed")
+    with pytest.raises(IndependenceError, match="changed after review attempt"):
+        WorkItemModel.review_transition(pid, "RJ-4", "adversarial_pass", "x", attempt_id=attempt_id)
+
+
+def test_unknown_work_item_fails_instead_of_becoming_a_brief(ws, vm, project, repos):
+    repos.push()
+    req, _ = _request(ws, vm, project, repos, work_item="RJ-404", model=CLAUDE)
+    runner = FakeRunner(model=CLAUDE)
+    _run(vm, runner)
+    reply = _reply(req["id"])
+    assert reply["payload"]["status"] == "error"
+    assert reply["payload"]["error_code"] == rj.WORK_ITEM_NOT_FOUND
+    assert "RJ-404" in reply["body"]
+    assert runner.prompt == ""
+    with coredb._conn() as conn:
+        count = conn.execute(
+            "SELECT count(*) AS n FROM review_delegation_attempts WHERE work_item_entity_id = %s",
+            (f"brief:agent-message-{req['id']}",),
+        ).fetchone()["n"]
+    assert count == 0
+
+
+def test_a_refiled_work_item_is_not_the_one_requested(ws, vm, project, repos, act_as):
+    act_as("agent:codex", GPT)
+    wi = _in_review(ws, project, "RJ-5")
+    repos.push()
+    req = _work_item_request(ws, vm, project, repos, wi, work_item_entity_id="f" * 64)
+    runner = FakeRunner(model=CLAUDE)
+    _run(vm, runner)
+    assert _reply(req["id"])["payload"]["error_code"] == rj.WORK_ITEM_NOT_FOUND
+    assert runner.prompt == ""
+
+
+def test_work_item_not_in_review_is_refused(ws, vm, project, repos, act_as):
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    act_as("agent:codex", GPT)
+    wi = _in_review(ws, project, "RJ-6")
+    WorkItemModel.update_work_item(
+        project_id=_project_id(ws, project), identifier="RJ-6", status="in_progress"
+    )
+    repos.push()
+    req = _work_item_request(ws, vm, project, repos, wi)
+    runner = FakeRunner(model=CLAUDE)
+    _run(vm, runner)
+    assert _reply(req["id"])["payload"]["error_code"] == "REVIEW_DELEGATION_STATE_INVALID"
+    assert runner.prompt == ""
+
+
+def test_old_shape_work_item_request_binds_by_identifier(ws, vm, project, repos, act_as):
+    """A request queued before WI-087 carries no entity id; the identifier suffices."""
+    act_as("agent:codex", GPT)
+    wi = _in_review(ws, project, "RJ-7")
+    repos.push()
+    req, _ = _request(ws, vm, project, repos, work_item="RJ-7", model=CLAUDE)
+    _run(vm, FakeRunner(model=CLAUDE))
+    payload = _reply(req["id"])["payload"]
+    assert payload["status"] == "ok"
+    assert _attempt_row(payload["attempt_id"])["work_item_entity_id"] == wi["entity_id"]
+
+
+def test_the_journal_never_records_a_watermark_newer_than_the_read(ws, project, act_as):
+    """The lower of the caller's lamport and the plan-time lamport is kept."""
+    from agent_notes.core.work_item._delegated_review import ReviewRequest
+    from agent_notes.core.work_item._review_git import ResolvedGitTarget
+    from agent_notes.core.work_item._review_journal import plan_attempt
+
+    act_as("agent:codex", GPT)
+    wi = _in_review(ws, project, "RJ-9")
+    current = _max_lamport(wi["entity_id"])
+    target = ResolvedGitTarget(
+        repository_root=Path("/repository"),
+        base_sha="a" * 40,
+        head_sha="b" * 40,
+        merge_base_sha="a" * 40,
+        changed_paths=("code.py",),
+    )
+    recorded = {}
+    for read_at in (current - 1, current + 5, None):
+        request = ReviewRequest(
+            work_item_entity_id=wi["entity_id"],
+            work_item_identifier="RJ-9",
+            work_item_title="t",
+            work_item_body="b",
+            work_item_status="in_review",
+            repository_identity="default/x",
+            repository_root=Path("/repository"),
+            base_revision="a" * 40,
+            head_revision="b" * 40,
+            harness="claude",
+            requested_model=CLAUDE,
+            item_lamport=read_at,
+        )
+        with coredb._conn() as conn:
+            row = plan_attempt(
+                conn,
+                project_id=_project_id(ws, project),
+                request=request,
+                target=target,
+                prompt_digest=uuid.uuid4().hex * 2,
+            )
+            conn.commit()
+        recorded[read_at] = row["item_lamport"]
+    assert recorded == {current - 1: current - 1, current + 5: current, None: current}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{"work_item": 7}, {"work_item": "  "}, {"work_item": "RJ-8", "work_item_entity_id": 5}],
+)
+def test_malformed_work_item_is_refused(ws, vm, project, repos, payload):
+    req, _ = _request(ws, "vm-x", project, repos, **payload)
+    reply = rj.run_review_job(
+        m.get_message(req["id"]),
+        JobContext(vm="vm-x"),
+        env={},
+        runner_factory=lambda model, env: FakeRunner(),
+    )
+    assert reply.payload["error_code"] == rj.REQUEST_INVALID

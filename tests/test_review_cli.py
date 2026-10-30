@@ -169,7 +169,9 @@ def test_work_item_brief(capsys, checkout, monkeypatch):
     monkeypatch.setattr(
         WorkItemModel,
         "get_work_item",
-        classmethod(lambda cls, pid, ident: {"identifier": ident, "title": "Fix it"}),
+        classmethod(
+            lambda cls, pid, ident: {"identifier": ident, "title": "Fix it", "entity_id": "e" * 64}
+        ),
     )
     monkeypatch.setattr(
         WorkItemModel, "get_work_item_body", classmethod(lambda cls, pid, ident: "The body.")
@@ -183,6 +185,8 @@ def test_work_item_brief(capsys, checkout, monkeypatch):
     assert code == 0
     payload = m.get_message(out["request_id"])["payload"]
     assert payload["work_item"] == "WI-7"
+    assert payload["work_item_entity_id"] == "e" * 64
+    assert payload["project"] == checkout["slug"] and payload["workspace_id"] == checkout["ws"]
     assert payload["title"] == "WI-7: Fix it" and payload["brief"] == "The body."
 
 
