@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from agent_notes.cli import orient
-from agent_notes.core import change_log, memory_model
+from agent_notes.core import change_log, config, db, memory_model
 from agent_notes.core.work_item_model import WorkItemModel
 
 
@@ -53,6 +53,17 @@ def summary_reads(monkeypatch):
         return rows[: kwargs["limit"]]
 
     monkeypatch.setattr(orient, "_resolve", lambda *_: (1, 2, "test-workspace", "test-project"))
+    monkeypatch.setattr(config, "resolve_vm_id", lambda *_: "fixture-vm")
+    monkeypatch.setattr(
+        db,
+        "find_scope_project",
+        lambda ws_id, scope, vm_id=None: SimpleNamespace(id=1) if scope == "global" else None,
+    )
+
+    def unexpected_database_read():
+        pytest.fail("orientation presentation tests must not open a database connection")
+
+    monkeypatch.setattr(db, "_conn", unexpected_database_read)
     monkeypatch.setattr(
         WorkItemModel, "query_work_items", lambda **kwargs: work_items[: kwargs["limit"]]
     )

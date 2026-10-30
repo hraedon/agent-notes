@@ -76,7 +76,11 @@ def test_dispatched_envelope_is_byte_identical(code, monkeypatch, capsys):
     rc = _dispatch(lambda args: (actor.write_actor(), 0)[1], argparse.Namespace(json=True))
 
     assert rc == EXIT_NOT_CONFIGURED
-    assert capsys.readouterr().out == _GOLDENS[code]
+    # The archived capture uses a POSIX path; only that environment-dependent
+    # value changes on Windows. Keep every other stdout byte pinned.
+    captured_path = _CAPTURE_ENV["AGENT_NOTES_CONFIG"]
+    expected = _GOLDENS[code].replace(captured_path, json.dumps(str(Path(captured_path)))[1:-1])
+    assert capsys.readouterr().out == expected
 
 
 def test_agent_notes_error_renders_like_registas():
