@@ -792,7 +792,7 @@ class TestReadyQuery:
         ws = coredb.get_or_create_workspace("prerequisite-vocabulary", "Prerequisite vocabulary")
         coredb.add_vocabulary(ws.id, "wi_kind", "todo")
         coredb.add_vocabulary(ws.id, "wi_status", "deferred")
-        coredb.add_vocabulary(ws.id, "severity", "medium")
+        coredb.add_vocabulary(ws.id, "wi_severity", "medium")
         target = coredb.get_or_create_project(ws.id, "target", "Target")
         WorkItemModel.file_work_item(
             project_id=target.id,
