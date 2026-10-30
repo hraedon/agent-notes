@@ -148,6 +148,7 @@ CLI is dumb storage; the policy lives in the skill Markdown.
 | `update-breadcrumb` | Status transitions, body appends, resolving. |
 | `find-breadcrumb` | Search-before-file dedup helper. |
 | `add-memory` | Cross-session fact recording with naming/dedup. |
+| `curate-memory` | Act on a nightly "memory curation" notice: merge, split, settle contradictions, distil reflections. |
 | `start` | Session-start orientation. |
 | `steward-change` | Risk-bounded change workflow for declared intent, isolation, evidence, and review. |
 | `reflect` | Write a session reflection (now via CLI, not MCP). |

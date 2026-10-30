@@ -27,6 +27,7 @@ def test_component_owned_plugin_bundles_exact_canonical_skills() -> None:
         "add-memory",
         "adversarial-review",
         "agent-messages",
+        "curate-memory",
         "end",
         "file-breadcrumb",
         "find-breadcrumb",

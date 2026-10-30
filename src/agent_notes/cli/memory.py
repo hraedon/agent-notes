@@ -908,9 +908,39 @@ def _print_hygiene(report: dict) -> None:
             print(f"  {where(r)} id={r['id']}{state}: {patterns}")
 
 
+def _print_notify(result: dict) -> None:
+    verb = "would post" if result["dry_run"] else "posted"
+    print(
+        f"memory curation: {verb} {len(result['posted'])}, unchanged "
+        f"{len(result['unchanged'])}, "
+        f"{'would retire' if result['dry_run'] else 'retired'} {len(result['retired'])}"
+    )
+    for n in result["posted"]:
+        print(f"\n[{verb}] {n['workspace']}/{n['project']}: {n['subject']} ({n['bytes']} bytes)")
+        if result["dry_run"]:
+            print(n["body"])
+    for n in result["unchanged"]:
+        print(f"[unchanged] {n['workspace']}/{n['project']}: {n['subject']}")
+    for r in result["retired"]:
+        print(f"[retired] {r['workspace']}/{r['project']}: notice #{r['message_id']}")
+    if result["unrouted"]:
+        print(
+            "Not routed (no repo project; see the full report): "
+            + ", ".join(f"{k} {v}" for k, v in result["unrouted"].items())
+        )
+
+
 def cmd_mem_hygiene(args: argparse.Namespace) -> int:
-    """WI-1.5: deterministic, read-only store hygiene report."""
+    """WI-1.5: deterministic store hygiene report; WI-2.1: ``--notify`` posts it."""
     use_json = getattr(args, "json", False)
+    notify = getattr(args, "notify", False)
+    if getattr(args, "dry_run", False) and not notify:
+        return emit_error(
+            "VALIDATION_FAILED",
+            "--dry-run applies to --notify",
+            use_json=use_json,
+            exit_code=EXIT_CONFLICT,
+        )
     project_id: int | None = None
     scope: dict[str, Any] = {"all": True}
     if getattr(args, "all", False):
@@ -941,6 +971,25 @@ def cmd_mem_hygiene(args: argparse.Namespace) -> int:
         "scope": redact_strings(scope),
         **hygiene_report(project_id=project_id, stale_days=args.stale_days),
     }
+    if notify:
+        from agent_notes.core.config import VmIdError
+        from agent_notes.core.memory_curation import post_curation_notices
+
+        only = None if scope["all"] else (scope["workspace"], scope["project"])
+        try:
+            result = post_curation_notices(
+                report, only=only, dry_run=getattr(args, "dry_run", False)
+            )
+        except VmIdError as exc:
+            return emit_error(
+                "NOT_CONFIGURED", str(exc), use_json=use_json, exit_code=EXIT_NOT_CONFIGURED
+            )
+        if use_json:
+            out = {"scope": report["scope"], "summary": report["summary"], "notify": result}
+            print(json.dumps(out, indent=2, default=str))
+        else:
+            _print_notify(result)
+        return EXIT_SUCCESS
     if use_json:
         print(json.dumps(report, indent=2, default=str))
     else:
@@ -1055,7 +1104,9 @@ def register_memory_parsers(sub: argparse._SubParsersAction) -> None:
         p.set_defaults(func=func)
 
     mem_hygiene = mem_sub.add_parser(
-        "hygiene", help="Read-only store hygiene report (duplicates, size, staleness, secrets)"
+        "hygiene",
+        help="Store hygiene report (duplicates, size, staleness, secrets); "
+        "--notify posts it to project inboxes",
     )
     mem_hygiene.add_argument(
         "--all", action="store_true", help="Every project and tier, not just this repo"
@@ -1065,6 +1116,17 @@ def register_memory_parsers(sub: argparse._SubParsersAction) -> None:
         type=int,
         default=180,
         help="Report facts not updated for this many days (default 180)",
+    )
+    mem_hygiene.add_argument(
+        "--notify",
+        action="store_true",
+        help="Post one 'memory curation' notice to each project inbox with findings; "
+        "an unchanged report is not posted again (Plan 027 WI-2.1)",
+    )
+    mem_hygiene.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="With --notify: show what would be posted or retired; write nothing",
     )
     _add_common(mem_hygiene)
     mem_hygiene.set_defaults(func=cmd_mem_hygiene)

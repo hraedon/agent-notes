@@ -565,3 +565,57 @@ payload sizes; why `gitea-orient` printed nothing.
     with `POSSIBLE_DUPLICATE`, and nothing was written.
   - `memory recall` returned results.
 
+
+### 2026-10-30: Phase 2 built, not deployed (Claude, worktree branch)
+
+- **WI-2.1 `memory hygiene --notify [--dry-run]`.** Works with `--all` (the
+  nightly run) or one project. `core/memory_curation.py` splits the report
+  per repo project and posts one `notice` through `messaging.send_message`:
+  - subject `memory curation: N items`, sender `payload.sender =
+    "memory-curation"`, expiry 30 days;
+  - body at most 2,048 bytes: one line per section with up to three examples
+    (shrinking to one, then none, if needed), ending with `agent-notes memory
+    hygiene --workspace W --project P`. `--workspace` is included because
+    `--project` alone only resolves from inside the checkout.
+  - Pair findings go to every repo project they touch. Findings with no repo
+    memory (vm or global tier only) have no project inbox; they are counted
+    under `unrouted` in the output and left to the full report.
+  - Reflection backlogs under 3 reflections are not notice-worthy (they are
+    normal between facts); the full report still lists them.
+  - `--dry-run` prints each notice that would be posted or retired and writes
+    nothing; it needs no VM ID.
+- **Decision: the dedupe digest lives in the notice itself**
+  (`payload.curation.digest`); no table, no migration. The job reads the
+  latest curation notice for the project, live or expired. Same digest and
+  not retired: nothing is posted, so an unchanged report never reposts, even
+  after its notice expires. A changed digest posts a new notice and retires
+  the older live one; a project whose findings are gone has its live notice
+  retired. Retiring sets `expires_at` to now and `payload.curation.retired`,
+  so the same findings coming back later post again. Only `msg prune`
+  deleting an expired notice makes an unchanged report post once more.
+- **Digest keys** are scope and name per finding (row ID for possible
+  secrets), never scores or sizes, and a reflection backlog is keyed by its
+  oldest reflection. Revising a still-oversized fact, or one more reflection
+  on an existing backlog, is not a change.
+- **Deploy artifacts:** `deploy/agent-notes-memory-curation.service` and
+  `.timer` (systemd user units, nightly 03:30 with a 10-minute random delay,
+  `Persistent=true`), following the dispatcher unit's convention. Not
+  installed anywhere.
+- **WI-2.2 skill `curate-memory`** (canonical under `skills/`, byte-equal copy
+  in `plugins/agent-notes`). One finding in writing it: Phase 1's revision
+  rule means `--supersedes` can't merge into an *existing* name. The skill
+  gives two merges: revise the keeper and delete the other, or add under a
+  new name with `--supersedes A --related B` and delete B.
+- `data/cli-manifest.json`: `memory hygiene` is now `mutating` (with
+  `--notify`), as `breadcrumb reconcile` is for `--apply`.
+- **Open:**
+  - Notices only reach a session through `msg inbox` and the OpenCode
+    plugin (once per session). The Claude, Codex, agy and Hermes hooks claim
+    messages but never notices, and `orient` shows none, although Plan 025 D4
+    says notices appear in orient. Until one of them surfaces notices, the
+    Phase 2 exit check (are notices acted on?) will mostly measure that they
+    aren't seen.
+  - Deploy on mvmcc02 after the usual upgrade: copy both units to
+    `~/.config/systemd/user/`, `systemctl --user daemon-reload`, run
+    `agent-notes memory hygiene --all --notify --dry-run` once and read it,
+    then `systemctl --user enable --now agent-notes-memory-curation.timer`.

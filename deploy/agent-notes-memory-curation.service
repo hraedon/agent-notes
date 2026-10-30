@@ -1,0 +1,22 @@
+[Unit]
+Description=agent-notes memory curation notices (Plan 027 WI-2.1)
+Documentation=file:///projects/agent-notes/plans/027-memory-roadmap-curation-and-recall.md
+After=network-online.target
+Wants=network-online.target
+
+# A systemd *user* unit, started by agent-notes-memory-curation.timer. Install
+# both under ~/.config/systemd/user/, then
+# `systemctl --user daemon-reload && systemctl --user enable --now agent-notes-memory-curation.timer`.
+# Run `loginctl enable-linger $USER` once so it runs without a login session.
+# The DSN comes from ~/.config/agent-notes/config.json (or AGENT_NOTES_DSN). The
+# notices' sender VM is AGENT_NOTES_VM, else the short hostname. Never put
+# secrets here.
+#
+# Read-only on memories: it runs the hygiene report and posts one notice per
+# project with findings; an unchanged report posts nothing. Preview with
+# `agent-notes memory hygiene --all --notify --dry-run`.
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/bin/agent-notes memory hygiene --all --notify

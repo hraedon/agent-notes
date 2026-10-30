@@ -321,7 +321,7 @@
     },
     {
       "name": "memory hygiene",
-      "mutability": "read-only",
+      "mutability": "mutating",
       "json": true,
       "framing": "document",
       "aliases": []

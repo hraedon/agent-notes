@@ -1,0 +1,12 @@
+[Unit]
+Description=agent-notes nightly memory curation notices (Plan 027 WI-2.1)
+
+[Timer]
+# Nightly, outside working hours; Persistent catches up a run missed while the
+# host was down.
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=10m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
