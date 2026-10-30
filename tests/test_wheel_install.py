@@ -42,6 +42,17 @@ WHEEL_PLUGIN_PREFIX = "agent_notes/integrations/opencode/"
 # the tests follow whichever layout the venv actually uses (WI-055).
 _SCRIPT_DIR_NAME = "Scripts" if os.name == "nt" else "bin"
 
+# Variables that would let the wheel venv's interpreter import the source tree
+# (or another environment's packages) instead of the installed wheel (WI-058).
+_SOURCE_LEAK_VARS = ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "VIRTUAL_ENV")
+
+
+def _wheel_env(**extra: str) -> dict[str, str]:
+    """Return the inherited environment minus every route back to the source tree."""
+    env = {k: v for k, v in os.environ.items() if k not in _SOURCE_LEAK_VARS}
+    env.update(extra)
+    return env
+
 
 def _venv_script_dir(venv: Path) -> Path:
     """Return the directory holding the venv's console scripts.
@@ -55,6 +66,7 @@ def _venv_script_dir(venv: Path) -> Path:
         [str(_venv_python(venv)), "-c", "import sysconfig; print(sysconfig.get_path('scripts'))"],
         capture_output=True,
         text=True,
+        env=_wheel_env(),
         check=False,
     )
     if probe.returncode == 0 and probe.stdout.strip():
@@ -112,6 +124,7 @@ def _install_wheel(wheel: Path, venv: Path) -> Path:
         [str(_venv_python(venv)), "-m", "pip", "install", "--no-deps", str(wheel)],
         capture_output=True,
         text=True,
+        env=_wheel_env(),
         check=False,
     )
     if proc.returncode != 0:
@@ -169,6 +182,7 @@ def test_wheel_install_migrate_resolves_schema_with_no_source_tree(tmp_path: Pat
         capture_output=True,
         text=True,
         cwd=str(tmp_path),
+        env=_wheel_env(),
         check=False,
     )
     assert proc.returncode == 0, f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
