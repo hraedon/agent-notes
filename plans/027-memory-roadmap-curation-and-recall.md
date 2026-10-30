@@ -621,3 +621,34 @@ payload sizes; why `gitea-orient` printed nothing.
     `~/.config/systemd/user/`, `systemctl --user daemon-reload`, run
     `agent-notes memory hygiene --all --notify --dry-run` once and read it,
     then `systemctl --user enable --now agent-notes-memory-curation.timer`.
+
+### 2026-10-30: Phase 2 deployed (`eadd7f2`)
+
+- **Review.** Codex gpt-6.1-sol reviewed it twice. It found three defects,
+  all fixed with tests:
+  - a notice sender injectable into the orient text (`8465b14`);
+  - dedupe state never cleared once a notice had expired (`8465b14`);
+  - newline-bearing titles and names reaching hook context (`2e65f02`).
+- **Merge.** The work merged with PR #45 (migration 861, Windows fixtures).
+  At `eadd7f2` the full suite passes on native Windows: 1685 passed,
+  0 failed.
+- **Database.** Backed up to
+  `/mnt/bulk/agent-notes-backups/agent_notes-pre-861-20261030T193503Z.dump`
+  (with a `.sha256`), then migration 861 was applied with `--file`.
+- **Hosts.**
+  - mvmcc02, mvmhermes01 (`~/agent-notes-025`, detached at `origin/main`) and
+    shodan were reinstalled with `uv tool install --force --reinstall`.
+  - The dispatchers were restarted on mvmcc02 (systemd user unit) and shodan
+    (scheduled task, wrapper processes killed first). mvmhermes01 runs none.
+  - Harnesses were refreshed: `all` on the Linux hosts; Claude, OpenCode and
+    Codex only on shodan, which keeps agy unwired there (Plan 026 Phase 1).
+  - `doctor` is healthy on mvmcc02 and mvmhermes01. shodan fails only the
+    known `codex_harness` marketplace check.
+- **Timer.** The units are in `~/.config/systemd/user/` on mvmcc02 and the
+  timer is enabled (03:30 UTC nightly, linger on).
+  - The first run, started by hand, posted 20 notices.
+  - The next dry run reported 0 posted and 20 unchanged.
+  - `orient` on shodan lists the agent-notes notice (#43).
+- **Exit check.** Around 2026-11-30, count how many notices were acted on
+  (curation edits in the noticed projects). If they weren't, cut Phase 2
+  (§4).
