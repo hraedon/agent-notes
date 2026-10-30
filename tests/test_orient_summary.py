@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from agent_notes.cli import orient
-from agent_notes.core import change_log, config, db, memory_model
+from agent_notes.core import change_log, config, db, memory_model, messaging
 from agent_notes.core.work_item_model import WorkItemModel
 
 
@@ -68,6 +68,7 @@ def summary_reads(monkeypatch):
         WorkItemModel, "query_work_items", lambda **kwargs: work_items[: kwargs["limit"]]
     )
     monkeypatch.setattr(memory_model, "list_memories", list_memories)
+    monkeypatch.setattr(messaging, "live_notices", lambda **_: [])
     monkeypatch.setattr(
         change_log, "changes_since", lambda *_, **kwargs: changes[: kwargs["limit"]]
     )
