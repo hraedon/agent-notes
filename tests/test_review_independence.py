@@ -625,11 +625,8 @@ def test_release_keeps_progress_when_the_lease_outlives_the_claim(monkeypatch, p
         project_id=project.id, identifier="IND-30", title="t", status="open", embedding=[0.0] * 768
     )
     WorkItemModel.claim_work_item(project.id, "IND-30")
-    # The lifecycle has no claimed -> in_progress move; only a forced one
-    # leaves the lease behind.
-    WorkItemModel.update_work_item(
-        project_id=project.id, identifier="IND-30", status="in_progress", force=True
-    )
+    # A claim leaves the item open (WI-086), so starting it keeps the lease.
+    WorkItemModel.update_work_item(project_id=project.id, identifier="IND-30", status="in_progress")
     assert WorkItemModel.release_work_item(project.id, "IND-30")["status"] == "in_progress"
     entity_id = WorkItemModel.get_work_item(project.id, "IND-30")["entity_id"]
     with _conn() as conn:
@@ -727,7 +724,7 @@ def test_the_same_actor_can_claim_and_release_repeatedly(monkeypatch, project):
         project_id=project.id, identifier="IND-36", title="t", status="open", embedding=[0.0] * 768
     )
     for _ in range(2):
-        assert WorkItemModel.claim_work_item(project.id, "IND-36")["status"] == "claimed"
+        assert WorkItemModel.claim_work_item(project.id, "IND-36")["status"] == "open"
         assert WorkItemModel.release_work_item(project.id, "IND-36")["status"] == "open"
 
 

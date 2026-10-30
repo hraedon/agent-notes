@@ -472,7 +472,7 @@ class TestWorkItemClose:
                 WorkItemModel.close_work_item(default_project.id, "WI-ATOMIC")
 
         wi = WorkItemModel.get_work_item(default_project.id, "WI-ATOMIC")
-        assert wi["status"] == "claimed"
+        assert wi["status"] == "open"
         with _conn() as conn:
             row = conn.execute(
                 "SELECT count(*) AS n FROM work_item_leases WHERE entity_id = %s",
@@ -512,7 +512,7 @@ class TestWorkItemClose:
             embedding=_vec768(),
         )
         claimed = WorkItemModel.claim_work_item(default_project.id, "WI-FCC")
-        assert claimed["status"] == "claimed"
+        assert claimed["status"] == "open"
         closed = WorkItemModel.close_work_item(default_project.id, "WI-FCC")
         assert closed["status"] == "done"
         with _conn() as conn:

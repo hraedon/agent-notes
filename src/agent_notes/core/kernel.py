@@ -691,6 +691,28 @@ def ready_work_items(
     limit: int = 50,
 ) -> list[dict]:
     """Query the ``work_items_ready_v`` view (repo projects only, Plan 025 D3)."""
+    return _coordination_query("work_items_ready_v", project_id, workspace_id, limit)
+
+
+def claimable_work_items(
+    project_id: int | None = None,
+    workspace_id: int | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """Query the ``work_items_claimable_v`` view: ready and not under a live lease.
+
+    A claim no longer moves the status to ``claimed`` (WI-086), so the lease
+    table, not the status, is what keeps a claimed item out of this list.
+    """
+    return _coordination_query("work_items_claimable_v", project_id, workspace_id, limit)
+
+
+def _coordination_query(
+    view: str,
+    project_id: int | None,
+    workspace_id: int | None,
+    limit: int,
+) -> list[dict]:
     conditions: list[str] = ["project_id IN (SELECT id FROM projects WHERE kind = 'repo')"]
     params: list[Any] = []
     if project_id is not None:
@@ -709,7 +731,7 @@ def ready_work_items(
             SELECT id, entity_id, project_id, identifier, title, status,
                    kind, severity, created_at, updated_at, workspace_id,
                    project_slug, workspace_slug
-            FROM work_items_ready_v
+            FROM {view}
             WHERE {where}
             ORDER BY updated_at DESC
             LIMIT %s
@@ -717,15 +739,3 @@ def ready_work_items(
             params,
         )
         return [dict(r) for r in cur.fetchall()]
-
-
-def claimable_work_items(
-    project_id: int | None = None,
-    workspace_id: int | None = None,
-    limit: int = 50,
-) -> list[dict]:
-    """Query the ``work_items_claimable_v`` view.
-
-    For P0 this is identical to ``ready``; P4 adds the lease table.
-    """
-    return ready_work_items(project_id, workspace_id, limit)

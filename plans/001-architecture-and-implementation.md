@@ -572,6 +572,16 @@ state (Plan 010 WI-2): lease is a regista claim (a separate axis), not a state.
 Agent `close` maps to `submit_for_review` (→ `in_review`), NOT `done` — the
 agent cannot reach `done` unilaterally.
 
+*Native follow-through (2026-10-30, WI-086):* the native claim path kept
+writing `set_status(claimed)` after regista was retired, and `claimed` has no
+canonical transitions, so a claimed item could only move with `--force`. A
+claim now records only the lease (`work_item_leases`) and leaves the status
+unchanged; it is not an implicit `start`. `open` and `in_progress` items can
+be claimed. `claimable` reads `work_items_claimable_v` (the lease filter),
+not the status. A legacy `claimed` row is treated as `open` holding a lease:
+`lifecycle.transition_for` lets it leave as `open` would, and `release`
+returns it to `open`.
+
 **Projection vocabulary (Decision 59):** the local `work_items.status` column
 holds canonical states directly (no display remapping layer). The schema CHECK
 constraint and `wi_status` vocabulary accept both canonical and legacy breadcrumb

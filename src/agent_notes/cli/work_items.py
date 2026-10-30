@@ -326,6 +326,15 @@ def cmd_wi_find(args: argparse.Namespace) -> int:
 
 def cmd_wi_ready(args: argparse.Namespace) -> int:
     """Show work items that are ready (not blocked)."""
+    return _list_coordination(args, claimable=False)
+
+
+def cmd_wi_claimable(args: argparse.Namespace) -> int:
+    """Show work items that are claimable (ready + not under a live lease)."""
+    return _list_coordination(args, claimable=True)
+
+
+def _list_coordination(args: argparse.Namespace, *, claimable: bool) -> int:
     use_json = getattr(args, "json", False)
     try:
         ws_id, proj_id, ws_slug, proj_slug = _resolve(args.workspace, args.project, args.path)
@@ -336,7 +345,9 @@ def cmd_wi_ready(args: argparse.Namespace) -> int:
 
     from agent_notes.core.work_item_model import WorkItemModel
 
-    rows = WorkItemModel.ready_work_items(
+    query = WorkItemModel.claimable_work_items if claimable else WorkItemModel.ready_work_items
+    label = "claimable" if claimable else "ready"
+    rows = query(
         project_id=proj_id,
         workspace_id=ws_id,
         limit=min(args.limit or 50, 200),
@@ -344,20 +355,16 @@ def cmd_wi_ready(args: argparse.Namespace) -> int:
     if use_json:
         for r in rows:
             r.pop("embedding", None)
+        # ``claimable`` keeps the ``ready_work_items`` key it has always emitted.
         print(json.dumps({"ready_work_items": rows}, indent=2, default=str))
     else:
         if not rows:
-            print("No work items are ready.")
+            print(f"No work items are {label}.")
         else:
-            print(f"{len(rows)} work item(s) ready:")
+            print(f"{len(rows)} work item(s) {label}:")
             for r in rows:
                 print(f"- **{r['identifier']}** ({r['kind']}) — {r['title']}")
     return EXIT_SUCCESS
-
-
-def cmd_wi_claimable(args: argparse.Namespace) -> int:
-    """Show work items that are claimable (ready + not leased). P0: same as ready."""
-    return cmd_wi_ready(args)
 
 
 def cmd_wi_delete(args: argparse.Namespace) -> int:

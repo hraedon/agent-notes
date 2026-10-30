@@ -355,6 +355,37 @@ def test_file_without_canonical_actor_emits_a_named_error(default_project):
     assert ok.returncode == 0, ok.stderr
 
 
+def test_claim_then_start_and_submit_for_review(default_project):
+    """WI-086: a claimed item still follows the canonical workflow, unforced."""
+    from agent_notes.core.work_item_model import WorkItemModel
+
+    WorkItemModel.file_work_item(
+        project_id=default_project.id,
+        identifier="WI-CLI-CLAIM",
+        title="claim then review",
+        status="open",
+        embedding=[0.0] * 768,
+    )
+    scope = ("--workspace", "default", "--project", "sf2", "--json")
+
+    def wi(*args: str) -> dict:
+        result = _run("work-item", *args, *scope, check=False)
+        assert result.returncode == 0, result.stdout + result.stderr
+        return json.loads(result.stdout)
+
+    claimed = wi("claim", "WI-CLI-CLAIM", "--ttl", "14400")
+    assert claimed["work_item"]["status"] == "open"
+    claimable = wi("claimable")["ready_work_items"]
+    assert "WI-CLI-CLAIM" not in {r["identifier"] for r in claimable}
+
+    started = wi("update", "WI-CLI-CLAIM", "--status", "in_progress")
+    assert started["work_item"]["status"] == "in_progress"
+    assert wi("heartbeat", "WI-CLI-CLAIM", "--ttl", "600")["lease"]["actor_id"] == "agent:worker"
+    submitted = wi("update", "WI-CLI-CLAIM", "--status", "in_review")
+    assert submitted["work_item"]["status"] == "in_review"
+    assert wi("release", "WI-CLI-CLAIM")["work_item"]["status"] == "in_review"
+
+
 def test_breadcrumb_get(default_project):
     from agent_notes.core.work_item_model import WorkItemModel
 
