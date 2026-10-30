@@ -158,6 +158,47 @@ def _print_tier_sections(payload: dict[str, Any]) -> None:
         print(f"  - {m['name']} ({m['type']}; {_age_label(m)})")
 
 
+def _notices(
+    ws_id: int, project: str | None, vm: str | None, limit: int, now: datetime
+) -> tuple[list[dict[str, Any]], bool, str | None]:
+    """Live notices for this project and VM (Plan 025 D4), plus has_more and any error.
+
+    Fail-safe: a messaging failure is reported, never fatal to orient.
+    """
+    from agent_notes.core import messaging
+
+    try:
+        rows = messaging.live_notices(workspace_id=ws_id, project=project, vm=vm, limit=limit + 1)
+    except Exception as exc:
+        return [], False, type(exc).__name__
+    notices = [
+        {
+            "id": r["id"],
+            "from": r["from_session"] or r["from_vm"],
+            "subject": r["subject"],
+            "created_at": r["created_at"].isoformat(),
+            "expires_at": r["expires_at"].isoformat(),
+            "age_days": max((now - r["created_at"]).days, 0),
+        }
+        for r in rows[:limit]
+    ]
+    return notices, len(rows) > limit, None
+
+
+def _print_notices(payload: dict[str, Any]) -> None:
+    """Notice metadata only: subjects and bodies are peer content (Plan 025 D6),
+    and this text can land in a system-level channel (agy SessionStart)."""
+    notices = payload["notices"]
+    if payload.get("notices_error"):
+        print(f"\nNotices: unavailable ({payload['notices_error']})")
+    if not notices:
+        return
+    shown = _shown_label(notices, payload["has_more"]["notices"])
+    print(f"\nNotices ({shown}; peer content, read with `agent-notes msg inbox`):")
+    for n in notices:
+        print(f"  - #{n['id']} from {n['from']} ({n['age_days']}d old)")
+
+
 def cmd_orient(args: argparse.Namespace) -> int:
     use_json = getattr(args, "json", False)
     try:
@@ -210,6 +251,9 @@ def cmd_orient(args: argparse.Namespace) -> int:
         ws_id, tier_limit, now, stale_after_days, getattr(args, "vm", None)
     )
     has_more.update(tiers.pop("has_more"))
+    notices, has_more["notices"], notices_error = _notices(
+        ws_id, proj_slug, tiers["vm"], tier_limit, now
+    )
 
     def memory_summary(memory: dict) -> dict[str, Any]:
         return {
@@ -336,6 +380,8 @@ def cmd_orient(args: argparse.Namespace) -> int:
         ],
         "memories": [memory_summary(m) for m in memories],
         **tiers,
+        "notices": notices,
+        "notices_error": notices_error,
         "latest_reflection": memory_summary(reflections[0]) if reflections else None,
         "resolved_in_git": [
             {"identifier": ident, "commit": info["commit"], "subject": info["subject"]}
@@ -352,11 +398,14 @@ def cmd_orient(args: argparse.Namespace) -> int:
         print(f"Orientation (no registered project here; workspace {ws_slug}):")
         print(f"As of {now.isoformat()} — recorded ages, not verified accuracy.")
         print(f"Aged: last updated at least {stale_after_days}d ago.")
+        _print_notices(payload)
         _print_tier_sections(payload)
     else:
         print(f"Orientation for {proj_slug} (workspace {ws_slug}):")
         print(f"As of {now.isoformat()} — recorded ages, not verified accuracy.")
         print(f"Aged: last updated at least {stale_after_days}d ago.")
+        # Before the long sections, so the hooks' length cap keeps it.
+        _print_notices(payload)
         print(f"\nOpen work items ({_shown_label(open_wis, has_more['open_work_items'])}):")
         for wi in payload["open_work_items"]:
             print(

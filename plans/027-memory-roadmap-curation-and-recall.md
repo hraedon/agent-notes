@@ -609,12 +609,14 @@ payload sizes; why `gitea-orient` printed nothing.
 - `data/cli-manifest.json`: `memory hygiene` is now `mutating` (with
   `--notify`), as `breadcrumb reconcile` is for `--apply`.
 - **Open:**
-  - Notices only reach a session through `msg inbox` and the OpenCode
-    plugin (once per session). The Claude, Codex, agy and Hermes hooks claim
-    messages but never notices, and `orient` shows none, although Plan 025 D4
-    says notices appear in orient. Until one of them surfaces notices, the
-    Phase 2 exit check (are notices acted on?) will mostly measure that they
-    aren't seen.
+  - ~~Notices only reach a session through `msg inbox` and the OpenCode
+    plugin.~~ Closed the same day: `orient` now lists live notices for the
+    project and VM (Plan 025 D4), so every SessionStart hook surfaces them.
+    The text and the Codex block show metadata only (id, sender, age), and
+    point at `agent-notes msg inbox`. Subjects and bodies are peer content,
+    and on agy the orient text is a system-level channel (Plan 025 D6).
+    `orient --json` carries the subject for tools. A failed notice query is
+    reported as `notices_error`, never fatal.
   - Deploy on mvmcc02 after the usual upgrade: copy both units to
     `~/.config/systemd/user/`, `systemctl --user daemon-reload`, run
     `agent-notes memory hygiene --all --notify --dry-run` once and read it,

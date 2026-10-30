@@ -882,6 +882,30 @@ def inbox(
     return listed
 
 
+def live_notices(
+    *,
+    workspace_id: int,
+    project: str | None,
+    vm: str | None,
+    limit: int = 5,
+    conn: psycopg.Connection | None = None,
+) -> list[dict]:
+    """Unexpired notices a session in ``project`` on ``vm`` would see, newest first.
+
+    Plan 025 D4: every matching session sees a notice in orient until it
+    expires. Read-only; notices are never claimed.
+    """
+    with _use(conn) as conn:
+        who = _Addressee(None, workspace_id, vm or "", project)
+        where, params = _match_sql(who)
+        rows = conn.execute(
+            f"SELECT {_MESSAGE_COLUMNS} FROM agent_messages m "  # noqa: S608
+            f"WHERE {where} AND m.kind = 'notice' ORDER BY m.id DESC LIMIT %s",
+            [*params, limit],
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def claim_deliverable(
     session: str,
     *,

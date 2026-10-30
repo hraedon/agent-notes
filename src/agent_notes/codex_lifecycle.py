@@ -156,6 +156,15 @@ def _format_orientation(payload: dict[str, Any]) -> str:
                 f"- [{severity}] {identifier} ({status}; recorded update: {age_label}{freshness})"
             )
 
+    notices = payload.get("notices")
+    if isinstance(notices, list) and notices:
+        # Subjects are peer content; the count and ids are enough to prompt a read.
+        ids = [
+            f"#{n['id']}" for n in notices if isinstance(n, dict) and isinstance(n.get("id"), int)
+        ]
+        suffix = "; more available" if more.get("notices") else ""
+        lines.append(f"Live notices: {', '.join(ids)}{suffix} (read with `agent-notes msg inbox`)")
+
     changes = payload.get("recent_changes")
     if isinstance(changes, list):
         suffix = "; more available" if more.get("recent_changes") else ""
