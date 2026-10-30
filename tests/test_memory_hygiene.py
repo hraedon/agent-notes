@@ -150,6 +150,65 @@ def _active(ws, name, project_id=None) -> list[dict]:
     return [dict(zip(keys, r, strict=True)) for r in rows]
 
 
+def test_body_update_refreshes_search_and_duplicate_candidates(ws, capsys):
+    _add(capsys, ws, "edited-fact", "deploy instructions")
+    _add(capsys, ws, "unchanged-fact", "near-deploy instructions", distinct=True)
+    code, out = _run(cmd_mem_update, capsys, ws, name="edited-fact", body="cache instructions")
+    assert code == 0, out
+    from agent_notes.core.memory_model import search_memory_with_body
+
+    rows = search_memory_with_body(ws["ws"].id, _vec(0.0, 0.0, 1.0).tolist(), ws["proj"].id)
+    assert rows[0]["name"] == "edited-fact"
+    assert rows[0]["score"] == pytest.approx(1.0)
+    code, out = _run(cmd_mem_add, capsys, ws, name="new-cache-fact", body="cache instructions")
+    assert code == 4
+    assert out["error"]["code"] == "POSSIBLE_DUPLICATE"
+    with psycopg.connect(ws["dsn"]) as conn:
+        payload = conn.execute(
+            "SELECT payload FROM change_log WHERE project_id = %s "
+            "AND identifier = 'edited-fact' AND event = 'updated' ORDER BY id DESC LIMIT 1",
+            (ws["proj"].id,),
+        ).fetchone()[0]
+    assert payload["fields"] == ["body"]
+
+
+def test_metadata_update_preserves_embedding_without_loading_model(ws, capsys):
+    _add(capsys, ws, "metadata-only", "deploy instructions")
+    with patch("agent_notes.core.embed.embed", side_effect=AssertionError("must not embed")):
+        code = cmd_mem_update(_args(ws, name="metadata-only", body=None, attributes='{"x": 1}'))
+    assert code == 0, capsys.readouterr().out
+    with psycopg.connect(ws["dsn"]) as conn:
+        vector, attributes = conn.execute(
+            "SELECT embedding::text, attributes FROM memories WHERE project_id = %s "
+            "AND name = 'metadata-only' AND active",
+            (ws["proj"].id,),
+        ).fetchone()
+    assert json.loads(vector) == _vec(1).tolist()
+    assert attributes == {"x": 1}
+
+
+def test_embedding_failure_leaves_body_vector_and_audit_unchanged(ws, capsys):
+    _add(capsys, ws, "embedding-failure", "deploy instructions")
+    from agent_notes.core.memory_model import update_memory
+
+    with psycopg.connect(ws["dsn"]) as conn:
+        before = conn.execute("SELECT count(*) FROM change_log").fetchone()[0]
+    with patch("agent_notes.core.memory_model._conn") as transaction:
+        with patch("agent_notes.core.embed.embed", side_effect=RuntimeError("embedding failed")):
+            with pytest.raises(RuntimeError, match="embedding failed"):
+                update_memory(ws["ws"].id, ws["proj"].id, "embedding-failure", body="cache new")
+        transaction.assert_not_called()
+    with psycopg.connect(ws["dsn"]) as conn:
+        body, vector = conn.execute(
+            "SELECT body, embedding::text FROM memories WHERE project_id = %s "
+            "AND name = 'embedding-failure' AND active",
+            (ws["proj"].id,),
+        ).fetchone()
+        assert conn.execute("SELECT count(*) FROM change_log").fetchone()[0] == before
+    assert body == "deploy instructions"
+    assert json.loads(vector) == _vec(1).tolist()
+
+
 # ---------------------------------------------------------------------------
 # WI-1.1 write-time dedup
 # ---------------------------------------------------------------------------

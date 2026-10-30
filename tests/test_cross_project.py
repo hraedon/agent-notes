@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 
 import pytest
 
@@ -24,7 +25,7 @@ def default_project():
         ws.id,
         slug="sf2",
         name="sf2",
-        repo_root="/projects/sf2",
+        repo_root=os.path.abspath("/projects/sf2"),
     )
     return proj
 
@@ -36,7 +37,7 @@ def target_project():
         ws.id,
         slug="target",
         name="Target Project",
-        repo_root="/projects/target",
+        repo_root=os.path.abspath("/projects/target"),
     )
     return proj
 
@@ -68,7 +69,7 @@ class TestRegistry:
             ws.id,
             slug="reg-proj",
             name="Registry Project",
-            repo_root="/projects/reg",
+            repo_root=os.path.abspath("/projects/reg"),
             log_location="/logs/reg.jsonl",
             wake_channel="http://wake/reg",
         )
@@ -344,6 +345,57 @@ class TestCrossRepoLinks:
 
 
 class TestCrossProjectReady:
+    @pytest.mark.parametrize(
+        "status",
+        [
+            "open",
+            "claimed",
+            "in_progress",
+            "blocked",
+            "in_review",
+            "in_human_review",
+            "deferred",
+            "done",
+            "closed",
+            None,
+            "unknown",
+        ],
+    )
+    def test_foreign_prerequisite_blocks_until_terminal(self, default_project, status):
+        dependent = f"WI-FOREIGN-DEPENDENT-{status}"
+        source = f"foreign-state-{status}"
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier=dependent,
+            title=dependent,
+            embedding=_vec768(),
+        )
+        cp.add_cross_repo_link(
+            from_project_id=default_project.id,
+            from_identifier=dependent,
+            to_project_slug=source,
+            to_identifier="WI-PREREQUISITE",
+        )
+        op = {
+            "op_id": f"state-{status}",
+            "entity_id": f"entity-{status}",
+            "entity_type": "work_item",
+            "op_type": "create",
+            "lamport": 1,
+            "payload": {
+                "project_id": 1,
+                "identifier": "WI-PREREQUISITE",
+                "title": "Prerequisite",
+                "status": status,
+            },
+            "parent_op_ids": [],
+        }
+        cp.ingest_jsonl_ops(json.dumps(op) + "\n", source)
+        cp.rebuild_cross_project_cache()
+        for query in (WorkItemModel.ready_work_items, WorkItemModel.claimable_work_items):
+            ids = {r["identifier"] for r in query(project_id=default_project.id, limit=200)}
+            assert (dependent in ids) == (status in ("done", "closed"))
+
     def test_ready_excludes_cross_repo_blocked(self, default_project):
         # Create a local work item
         WorkItemModel.file_work_item(

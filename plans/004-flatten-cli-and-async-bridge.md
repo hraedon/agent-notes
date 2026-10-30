@@ -38,6 +38,16 @@ Numbered to extend Plan 003 (which reserved 39–48). 49–60 reserved for Plan 
 
 51. **CLI shape: `agent-notes <noun> <verb> [flags]`.** Not `agent-notes <verb> --kind <noun>`. Reads naturally (`agent-notes breadcrumb file …`, `agent-notes memory add …`, `agent-notes search all …`). One subparser per noun; subparser-of-subparser for verb. Path-based project resolution is universal — every command accepts `--path` (default cwd) and resolves via `core.db.resolve_project`. `--workspace`/`--project` remain for explicit override.
 
+    *Readiness correction (2026-10-30, WI-089):* `work-item ready` and
+    `claimable` remain blocked while a prerequisite is in any nonterminal
+    state, including in progress, blocked, deferred or in review. Migration
+    `861` replaces the ready view without changing rows or lease rules. Local
+    targets use their own workspace's `wi_status.is_terminal`; the foreign
+    cache carries no vocabulary, so only `done`/`closed` establish completion.
+    Unknown/NULL foreign statuses block; dangling links retain their prior
+    behavior. The old `open`/`claimed` predicate predated canonical lifecycle
+    states and made starting a prerequisite release its dependents.
+
 52. **CLI outputs are stable, machine-parseable, human-readable.** Default human-friendly tabular; `--json` for skill consumption. Exit codes: 0 success, 2 not-found, 3 not-configured, 4 conflict, 1 anything else. Reason: skills will shell out and parse output; an unstable surface burns trust.
 
 53. **Judgment lives in skill prose.** "When to file a breadcrumb," "what makes a memory worth recording," "how to title a finding" — all moves into the skill Markdown. The CLI is dumb storage/retrieval; it never refuses input on judgment grounds (only on schema grounds: missing required field, unknown project, etc.). Reason: the prior MCP tool descriptions tried to carry both schema and policy; only one of those is enforced by the runtime, and the other was duplicating with skill prose anyway.

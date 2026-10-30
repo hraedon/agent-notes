@@ -15,6 +15,8 @@ operator-invoked gate-waiver attestation that the detector recognizes.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from agent_notes.core import db as coredb
@@ -32,7 +34,7 @@ def default_project():
         ws.id,
         slug="sf2",
         name="sf2",
-        repo_root="/projects/sf2",
+        repo_root=os.path.abspath("/projects/sf2"),
     )
 
 

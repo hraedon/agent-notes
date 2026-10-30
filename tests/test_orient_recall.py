@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from typing import Any
 from unittest.mock import patch
 
@@ -72,7 +73,7 @@ def default_project():
         ws.id,
         slug="or-proj",
         name="Orient Recall Proj",
-        repo_root="/projects/or-proj",
+        repo_root=os.path.abspath("/projects/or-proj"),
     )
 
 
