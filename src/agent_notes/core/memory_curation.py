@@ -353,6 +353,7 @@ def post_curation_notices(
     }
     with _conn() as conn:
         with_findings: set[tuple[int, str]] = set()
+        replaced: list[dict] = []
         for notice in planned:
             located = messaging.lookup_project(notice["workspace"], notice["project"], conn=conn)
             if located is None:  # a redacted or vanished slug: nowhere to post
@@ -368,6 +369,9 @@ def post_curation_notices(
                 )
                 continue
             entry = {**_brief(notice), "body": notice["body"], "bytes": notice["bytes"]}
+            # The new notice replaces the project's live ones; a dry run shows that too.
+            older = _live_notices(conn, (workspace_id, notice["project"]))
+            replaced.extend(older)
             if not dry_run:
                 msg = messaging.send_message(
                     workspace_id=workspace_id,
@@ -384,8 +388,7 @@ def post_curation_notices(
                     conn=conn,
                 )
                 entry["message_id"] = msg["id"]
-                older = _live_notices(conn, (workspace_id, notice["project"]))
-                _retire(conn, [r["id"] for r in older if r["id"] != msg["id"]])
+                _retire(conn, [r["id"] for r in older])
             result["posted"].append(entry)
 
         scope = None
@@ -403,7 +406,7 @@ def post_curation_notices(
             _retire(conn, [r["id"] for r in stale])
         result["retired"] = [
             {"workspace": r["workspace"], "project": r["project"], "message_id": r["id"]}
-            for r in stale
+            for r in replaced + stale
         ]
     return result
 

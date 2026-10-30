@@ -75,6 +75,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   lease (it had been an alias for `ready`), and an expired lease makes an item
   claimable again. Rows the old claim left in `claimed` leave it as `open`
   would (`start`, `defer`, close), and `release` still returns them to `open`.
+- **Async `review request --work-item` can be applied with `--attempt` (WI-087).**
+  The dispatcher journalled every review job as a freeform brief, so `work-item
+  review pass|accept --attempt` always refused it as "for a different work
+  item". It now binds the attempt to the real work item and its freshness
+  watermark. An item that is missing, refiled or not `in_review` fails the job
+  instead of falling back to a brief. Attempts already journalled as briefs stay
+  unusable; request a fresh review.
+- **orient text collapses newlines in stored titles and names.** Hooks inject
+  this text (on agy as a system message), so a newline in a work-item title or
+  memory name could forge orient lines. The OpenCode plugin does the same.
+
+### Added (Plan 027 Phase 2)
+
+- **`memory hygiene --notify`** posts one "memory curation: N items" notice per
+  project with findings, and skips an unchanged report. `--dry-run` previews it.
+  The new `curate-memory` skill covers acting on a notice. Systemd units for the
+  nightly run are in `deploy/`.
+- **orient lists live notices** (Plan 025 D4): id and age in the text, plus the
+  subject in `--json`. Read them with `agent-notes msg inbox`.
 
 ## [1.1.1] - 2026-10-17
 

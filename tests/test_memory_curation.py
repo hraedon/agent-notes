@@ -173,9 +173,15 @@ def test_changed_report_posts_again_and_retires_the_old_notice(ws, capsys):
     old = _notices(ws, "busy")[0]
 
     add_memory(ws["ws"].id, ws["busy"].id, "big-two", "feedback", "big " + "z" * 2100)
+    # A dry run previews the replacement, retirement included.
+    _code, out = _hygiene(ws, capsys, dry_run=True)
+    assert [r["message_id"] for r in _mine(out, "retired", ws)] == [old["id"]]
+    assert _notices(ws, "busy")[0]["live"] is True
+
     code, out = _hygiene(ws, capsys)
     assert code == 0
     assert [n["project"] for n in _mine(out, "posted", ws)] == ["busy"]
+    assert [r["message_id"] for r in _mine(out, "retired", ws)] == [old["id"]]
     rows = _notices(ws, "busy")
     assert len(rows) == 2
     assert rows[1]["subject"] == "memory curation: 4 items"

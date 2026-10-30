@@ -114,6 +114,13 @@ function invokeAgentNotes(args, timeoutMs = ORIENT_TIMEOUT_MS, opts = {}) {
   });
 }
 
+// Stored titles and names are written by other sessions; a newline in one
+// could forge lines that look like the orientation's own. Mirrors orient's
+// `_one_line`.
+function oneLine(value) {
+  return String(value).split(/\s+/).filter(Boolean).join(" ");
+}
+
 function formatOrientPayload(payload) {
   const lines = [
     "## Session Orientation",
@@ -123,7 +130,7 @@ function formatOrientPayload(payload) {
   ];
 
   for (const b of payload.open_work_items) {
-    lines.push(`- [${b.severity}] ${b.identifier} (${b.status}) — ${b.title}`);
+    lines.push(`- [${b.severity}] ${b.identifier} (${b.status}) — ${oneLine(b.title)}`);
   }
 
   if (payload.resolved_in_git && payload.resolved_in_git.length > 0) {
@@ -132,14 +139,14 @@ function formatOrientPayload(payload) {
       `⚠ Resolved in git but still open in DB (${payload.resolved_in_git.length}):`
     );
     for (const r of payload.resolved_in_git) {
-      lines.push(`  - ${r.identifier} — ${r.commit} ${r.subject}`);
+      lines.push(`  - ${r.identifier} — ${r.commit} ${oneLine(r.subject)}`);
     }
   }
 
   if (payload.memories && payload.memories.length > 0) {
     lines.push("", `**Active memories (${payload.memories.length}):**`);
     for (const m of payload.memories) {
-      lines.push(`- ${m.name} (${m.type})`);
+      lines.push(`- ${oneLine(m.name)} (${m.type})`);
     }
   }
 

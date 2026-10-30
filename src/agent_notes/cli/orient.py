@@ -78,6 +78,16 @@ def _shown_label(rows: list, has_more: bool, *, sampled: bool = False) -> str:
     return f"{len(rows)} {verb}" + ("; more available" if has_more else "")
 
 
+def _one_line(value: object) -> str:
+    """Collapse every whitespace run, newlines included, to one space.
+
+    Stored titles and names are written by other sessions. In the text, which
+    hooks inject (on agy as a system message), a newline in one could forge
+    lines that look like orient's own.
+    """
+    return " ".join(str(value).split())
+
+
 def _origin_label(origin: OriginClass) -> str:
     """Human-readable provenance label for a recalled result's origin class."""
     match origin:
@@ -151,11 +161,11 @@ def _print_tier_sections(payload: dict[str, Any]) -> None:
     if payload.get("vm_error"):
         print(f"  VM ID unresolved: {payload['vm_error']}")
     for m in payload["memories_vm"]:
-        print(f"  - {m['name']} ({m['type']}; {_age_label(m)})")
+        print(f"  - {_one_line(m['name'])} ({m['type']}; {_age_label(m)})")
     glob = payload["memories_global"]
     print(f"\nGlobal memories ({_shown_label(glob, more['memories_global'])}):")
     for m in glob:
-        print(f"  - {m['name']} ({m['type']}; {_age_label(m)})")
+        print(f"  - {_one_line(m['name'])} ({m['type']}; {_age_label(m)})")
 
 
 def _notices(
@@ -411,7 +421,7 @@ def cmd_orient(args: argparse.Namespace) -> int:
         for wi in payload["open_work_items"]:
             print(
                 f"  - [{wi['severity']}] {wi['identifier']} ({wi['status']}) — "
-                f"{wi['title']} [{_age_label(wi)}]"
+                f"{_one_line(wi['title'])} [{_age_label(wi)}]"
             )
         if drift:
             print(
@@ -429,10 +439,10 @@ def cmd_orient(args: argparse.Namespace) -> int:
                 print(f"  - [{c.kind}] {c.identifier} {c.event} @ {c.changed_at}")
         print(f"\nMemories ({_shown_label(memories, has_more['memories'])}):")
         for m in payload["memories"]:
-            print(f"  - {m['name']} ({m['type']}; {_age_label(m)})")
+            print(f"  - {_one_line(m['name'])} ({m['type']}; {_age_label(m)})")
         reflection = payload["latest_reflection"]
         if reflection:
-            print(f"Latest handoff: {reflection['name']} ({_age_label(reflection)})")
+            print(f"Latest handoff: {_one_line(reflection['name'])} ({_age_label(reflection)})")
         else:
             print("Latest handoff: no reflection recorded.")
         _print_tier_sections(payload)
@@ -443,7 +453,7 @@ def cmd_orient(args: argparse.Namespace) -> int:
             for r in learned_context["results"]:
                 origin = OriginClass(r["origin"])
                 label = _origin_label(origin)
-                print(f"  - [{label}] {r['text']}")
+                print(f"  - [{label}] {_one_line(r['text'])}")
     return EXIT_SUCCESS
 
 
