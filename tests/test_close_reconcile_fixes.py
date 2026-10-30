@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -29,7 +30,9 @@ pytestmark = pytest.mark.usefixtures("ephemeral_db")
 @pytest.fixture
 def default_project():
     ws = coredb.get_or_create_workspace("default", "Default Workspace")
-    return coredb.get_or_create_project(ws.id, slug="sf2", name="sf2", repo_root="/projects/sf2")
+    return coredb.get_or_create_project(
+        ws.id, slug="sf2", name="sf2", repo_root=os.path.abspath("/projects/sf2")
+    )
 
 
 def _vec768():

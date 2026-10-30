@@ -20,6 +20,8 @@ The refusal existed to stop the root being stolen, and a checkout cannot steal i
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from agent_notes.core import db as coredb
@@ -35,28 +37,32 @@ def _ws():
 def test_second_checkout_does_not_steal_repo_root():
     ws = _ws()
     first = coredb.get_or_create_project(
-        ws.id, slug="widget", name="widget", repo_root="/projects/widget"
+        ws.id, slug="widget", name="widget", repo_root=os.path.abspath("/projects/widget")
     )
 
     # A scratch clone of the same repo, same basename -> same slug.
     second = coredb.get_or_create_project(
-        ws.id, slug="widget", name="widget", repo_root="/tmp/widget"
+        ws.id, slug="widget", name="widget", repo_root=os.path.abspath("/tmp/widget")
     )
 
     assert second.id == first.id, "must be the same project row"
-    assert second.repo_root == "/projects/widget", "the real checkout keeps the root"
+    assert second.repo_root == os.path.abspath("/projects/widget"), (
+        "the real checkout keeps the root"
+    )
     assert coredb.resolve_project("/projects/widget")["project"] == "widget"
 
 
 def test_relocate_opts_in_to_repointing():
     ws = _ws()
-    coredb.get_or_create_project(ws.id, slug="gadget", name="gadget", repo_root="/projects/gadget")
-
-    moved = coredb.get_or_create_project(
-        ws.id, slug="gadget", name="gadget", repo_root="/srv/gadget", relocate=True
+    coredb.get_or_create_project(
+        ws.id, slug="gadget", name="gadget", repo_root=os.path.abspath("/projects/gadget")
     )
 
-    assert moved.repo_root == "/srv/gadget"
+    moved = coredb.get_or_create_project(
+        ws.id, slug="gadget", name="gadget", repo_root=os.path.abspath("/srv/gadget"), relocate=True
+    )
+
+    assert moved.repo_root == os.path.abspath("/srv/gadget")
     assert coredb.resolve_project("/srv/gadget")["project"] == "gadget"
 
 
@@ -66,17 +72,19 @@ def test_first_registration_still_sets_the_root():
     ws = _ws()
     coredb.get_or_create_project(ws.id, slug="doohickey", name="doohickey")
     later = coredb.get_or_create_project(
-        ws.id, slug="doohickey", name="doohickey", repo_root="/projects/doohickey"
+        ws.id, slug="doohickey", name="doohickey", repo_root=os.path.abspath("/projects/doohickey")
     )
 
-    assert later.repo_root == "/projects/doohickey"
+    assert later.repo_root == os.path.abspath("/projects/doohickey")
 
 
 def test_reinit_at_the_same_path_is_idempotent():
     ws = _ws()
-    coredb.get_or_create_project(ws.id, slug="thing", name="thing", repo_root="/projects/thing")
+    coredb.get_or_create_project(
+        ws.id, slug="thing", name="thing", repo_root=os.path.abspath("/projects/thing")
+    )
     again = coredb.get_or_create_project(
-        ws.id, slug="thing", name="thing", repo_root="/projects/thing"
+        ws.id, slug="thing", name="thing", repo_root=os.path.abspath("/projects/thing")
     )
 
-    assert again.repo_root == "/projects/thing"
+    assert again.repo_root == os.path.abspath("/projects/thing")

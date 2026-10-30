@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 
 import pytest
 
@@ -25,7 +26,7 @@ def default_project():
         ws.id,
         slug="sf2",
         name="sf2",
-        repo_root="/projects/sf2",
+        repo_root=os.path.abspath("/projects/sf2"),
     )
     return proj
 
@@ -786,6 +787,96 @@ class TestWorkItemQuery:
 
 
 class TestReadyQuery:
+    def test_prerequisite_uses_its_own_workspace_terminal_vocabulary(self, default_project):
+        from agent_notes.core.links import add_link
+
+        ws = coredb.get_or_create_workspace("prerequisite-vocabulary", "Prerequisite vocabulary")
+        coredb.add_vocabulary(ws.id, "wi_kind", "todo")
+        coredb.add_vocabulary(ws.id, "wi_status", "deferred")
+        coredb.add_vocabulary(ws.id, "wi_severity", "medium")
+        target = coredb.get_or_create_project(ws.id, "target", "Target")
+        WorkItemModel.file_work_item(
+            project_id=target.id,
+            identifier="WI-VOCAB-TARGET",
+            title="Target",
+            status="deferred",
+            embedding=_vec768(),
+        )
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-VOCAB-DEPENDENT",
+            title="Dependent",
+            embedding=_vec768(),
+        )
+        add_link(
+            from_kind="work_item",
+            from_workspace=default_project.workspace_id,
+            from_project=default_project.id,
+            from_identifier="WI-VOCAB-DEPENDENT",
+            to_kind="work_item",
+            to_workspace=ws.id,
+            to_project=target.id,
+            to_identifier="WI-VOCAB-TARGET",
+            relationship="blocks",
+        )
+
+        def ready():
+            return {
+                r["identifier"]
+                for r in WorkItemModel.ready_work_items(project_id=default_project.id, limit=200)
+            }
+
+        assert "WI-VOCAB-DEPENDENT" not in ready()
+        with _conn() as conn:
+            conn.execute(
+                "UPDATE vocabularies SET is_terminal = true WHERE workspace_id = %s "
+                "AND kind_namespace = 'wi_status' AND name = 'deferred'",
+                (ws.id,),
+            )
+        assert "WI-VOCAB-DEPENDENT" in ready()
+
+    @pytest.mark.parametrize(
+        "status",
+        [
+            "open",
+            "claimed",
+            "in_progress",
+            "blocked",
+            "in_review",
+            "in_human_review",
+            "deferred",
+            "done",
+            "closed",
+        ],
+    )
+    def test_prerequisite_blocks_until_terminal(self, default_project, status):
+        from agent_notes.core.links import add_link
+
+        blocker = f"WI-PREREQ-{status}"
+        dependent = f"WI-DEPENDENT-{status}"
+        for identifier, initial in ((blocker, status), (dependent, "open")):
+            WorkItemModel.file_work_item(
+                project_id=default_project.id,
+                identifier=identifier,
+                title=identifier,
+                status=initial,
+                embedding=_vec768(),
+            )
+        add_link(
+            from_kind="work_item",
+            from_workspace=default_project.workspace_id,
+            from_project=default_project.id,
+            from_identifier=dependent,
+            to_kind="work_item",
+            to_workspace=default_project.workspace_id,
+            to_project=default_project.id,
+            to_identifier=blocker,
+            relationship="blocks",
+        )
+        for query in (WorkItemModel.ready_work_items, WorkItemModel.claimable_work_items):
+            ids = {r["identifier"] for r in query(project_id=default_project.id, limit=200)}
+            assert (dependent in ids) == (status in ("done", "closed"))
+
     def test_ready_excludes_deferred(self, default_project):
         WorkItemModel.file_work_item(
             project_id=default_project.id,
@@ -1739,7 +1830,7 @@ class TestCrossProjectRequest:
             default_project.workspace_id,
             slug="target-proj",
             name="Target Project",
-            repo_root="/projects/target",
+            repo_root=os.path.abspath("/projects/target"),
         )
 
         req = WorkItemModel.request_work_item(
@@ -1777,7 +1868,7 @@ class TestCrossProjectWait:
             default_project.workspace_id,
             slug="target-proj2",
             name="Target Project 2",
-            repo_root="/projects/target2",
+            repo_root=os.path.abspath("/projects/target2"),
         )
 
         wait = WorkItemModel.wait_on_work_item(
@@ -1800,7 +1891,7 @@ class TestCrossProjectLink:
             default_project.workspace_id,
             slug="target-proj3",
             name="Target Project 3",
-            repo_root="/projects/target3",
+            repo_root=os.path.abspath("/projects/target3"),
         )
 
         # Create a local work item
@@ -1874,7 +1965,7 @@ class TestCliCrossProject:
             default_project.workspace_id,
             slug="target-proj4",
             name="Target Project 4",
-            repo_root="/projects/target4",
+            repo_root=os.path.abspath("/projects/target4"),
         )
 
         ns = argparse.Namespace(
@@ -1899,7 +1990,7 @@ class TestCliCrossProject:
             default_project.workspace_id,
             slug="target-proj5",
             name="Target Project 5",
-            repo_root="/projects/target5",
+            repo_root=os.path.abspath("/projects/target5"),
         )
 
         ns = argparse.Namespace(
@@ -1921,7 +2012,7 @@ class TestCliCrossProject:
             default_project.workspace_id,
             slug="target-proj6",
             name="Target Project 6",
-            repo_root="/projects/target6",
+            repo_root=os.path.abspath("/projects/target6"),
         )
 
         WorkItemModel.file_work_item(

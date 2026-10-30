@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from typing import Any
 from unittest.mock import patch
 
@@ -57,7 +58,7 @@ def default_project():
         ws.id,
         slug="fs-proj",
         name="Federated Search Proj",
-        repo_root="/projects/fs-proj",
+        repo_root=os.path.abspath("/projects/fs-proj"),
     )
 
 

@@ -1053,9 +1053,15 @@ def update_memory(
 ) -> dict:
     """Update an active memory in-place. Returns the updated row.
 
-    Raises ValueError if the memory is not found or not active.
+    A body edit re-embeds before the transaction (decision 26); metadata-only
+    edits preserve the vector. Raises ValueError if the memory is not active.
     """
     reject_regista_writes()
+    embedding = None
+    if body is not None:
+        from agent_notes.core.embed import embed
+
+        embedding = embed(body, task="document").tolist()
     with _conn() as conn:
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
@@ -1070,8 +1076,8 @@ def update_memory(
         sets = ["updated_at = now()"]
         params: list[Any] = []
         if body is not None:
-            sets.append("body = %s")
-            params.append(body)
+            sets.extend(["body = %s", "embedding = %s"])
+            params.extend([body, embedding])
         if attributes is not None:
             merged = dict(existing.get("attributes") or {})
             merged.update(attributes)
@@ -1097,7 +1103,13 @@ def update_memory(
             project_id=project_id,
             identifier=name,
             event="updated",
-            payload={"fields": [k for k in ("body", "attributes") if locals().get(k) is not None]},
+            payload={
+                "fields": [
+                    key
+                    for key, value in (("body", body), ("attributes", attributes))
+                    if value is not None
+                ]
+            },
         )
         conn.commit()
         return dict(row)

@@ -47,6 +47,12 @@ Round-3 revisions:
 25. **Reflections start as a memory experiment, not a dedicated server** (DeepSeek #10, partial). Phase 5 demoted from "build reflections-mcp" to "spike: store reflections as memories with `memory_type='reflection'` plus JSONB metadata; if schema strains or query patterns get ugly, then build the dedicated server." Saves 300 lines + a schema + a binary if memories suffice.
 26. **Embedding call precedes the DB transaction** (DeepSeek #11). Order: embed → `BEGIN` → insert with vector → insert `change_log` row → `COMMIT`. Embedding is a pure function and recomputable; doing it outside the transaction means failure aborts before any DB writes. With decision 2 reversed (no sidecar), the call is in-process and synchronous — no leaked-embedding concern at all.
 
+    *Revision (2026-10-30, WI-089):* memory body updates also compute a new
+    document embedding before opening their transaction, then write body and
+    vector together. Metadata-only updates preserve the vector and do not load
+    the model. Previously a body edit left the old vector behind, so recall and
+    duplicate detection continued to match the previous text.
+
 ## 3. Repository layout
 
 ```
