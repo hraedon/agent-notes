@@ -43,7 +43,7 @@ def test_plugin_probe_limits_query_to_configured_sources(
 
     monkeypatch.setattr(subprocess, "run", run)
     assert doctor._probe_codex_agent_notes_plugin()[0] == expected_state
-    assert calls == [["codex", "plugin", "list", "--json", "--marketplace", "local-notes"]]
+    assert calls == [["codex.exe", "plugin", "list", "--json", "--marketplace", "local-notes"]]
 
 
 def _use_home(monkeypatch, home: Path, plugin_state: str = "absent") -> None:

@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Work-item readiness keeps dependents blocked while prerequisites are in
+  progress, deferred, blocked or under review. Apply migration `861`.
+- Memory body updates refresh their search embedding atomically and record the
+  changed audit fields; metadata-only edits preserve the existing embedding.
+- Doctor tests isolate operator harness state and check the resolved Codex path.
+- Declare the `python-frontmatter` dependency required by the shipped
+  `agent-notes-import-reflections` command.
+
 ### Added
 
 - **Memory tiers (Plan 025 Phase 2):** memories now live at `repo`, `vm`, or

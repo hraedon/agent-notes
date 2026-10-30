@@ -786,6 +786,93 @@ class TestWorkItemQuery:
 
 
 class TestReadyQuery:
+    def test_prerequisite_uses_its_own_workspace_terminal_vocabulary(self, default_project):
+        from agent_notes.core.links import add_link
+
+        ws = coredb.get_or_create_workspace("prerequisite-vocabulary", "Prerequisite vocabulary")
+        target = coredb.get_or_create_project(ws.id, "target", "Target")
+        WorkItemModel.file_work_item(
+            project_id=target.id,
+            identifier="WI-VOCAB-TARGET",
+            title="Target",
+            status="deferred",
+            embedding=_vec768(),
+        )
+        WorkItemModel.file_work_item(
+            project_id=default_project.id,
+            identifier="WI-VOCAB-DEPENDENT",
+            title="Dependent",
+            embedding=_vec768(),
+        )
+        add_link(
+            from_kind="work_item",
+            from_workspace=default_project.workspace_id,
+            from_project=default_project.id,
+            from_identifier="WI-VOCAB-DEPENDENT",
+            to_kind="work_item",
+            to_workspace=ws.id,
+            to_project=target.id,
+            to_identifier="WI-VOCAB-TARGET",
+            relationship="blocks",
+        )
+
+        def ready():
+            return {
+                r["identifier"]
+                for r in WorkItemModel.ready_work_items(project_id=default_project.id, limit=200)
+            }
+
+        assert "WI-VOCAB-DEPENDENT" not in ready()
+        with _conn() as conn:
+            conn.execute(
+                "UPDATE vocabularies SET is_terminal = true WHERE workspace_id = %s "
+                "AND kind_namespace = 'wi_status' AND name = 'deferred'",
+                (ws.id,),
+            )
+        assert "WI-VOCAB-DEPENDENT" in ready()
+
+    @pytest.mark.parametrize(
+        "status",
+        [
+            "open",
+            "claimed",
+            "in_progress",
+            "blocked",
+            "in_review",
+            "in_human_review",
+            "deferred",
+            "done",
+            "closed",
+        ],
+    )
+    def test_prerequisite_blocks_until_terminal(self, default_project, status):
+        from agent_notes.core.links import add_link
+
+        blocker = f"WI-PREREQ-{status}"
+        dependent = f"WI-DEPENDENT-{status}"
+        for identifier, initial in ((blocker, status), (dependent, "open")):
+            WorkItemModel.file_work_item(
+                project_id=default_project.id,
+                identifier=identifier,
+                title=identifier,
+                status=initial,
+                embedding=_vec768(),
+            )
+        add_link(
+            from_kind="work_item",
+            from_workspace=default_project.workspace_id,
+            from_project=default_project.id,
+            from_identifier=dependent,
+            to_kind="work_item",
+            to_workspace=default_project.workspace_id,
+            to_project=default_project.id,
+            to_identifier=blocker,
+            relationship="blocks",
+        )
+        for query in (WorkItemModel.ready_work_items, WorkItemModel.claimable_work_items):
+            ids = {r["identifier"] for r in query(project_id=default_project.id, limit=200)}
+            assert (dependent in ids) == (status in ("done", "closed"))
+
     def test_ready_excludes_deferred(self, default_project):
         WorkItemModel.file_work_item(
             project_id=default_project.id,
