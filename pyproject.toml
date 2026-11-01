@@ -49,6 +49,7 @@ agent-notes-hook         = "agent_notes.hooks:main"
 agent-notes-dispatch     = "agent_notes.dispatcher:main"
 agent-notes-trigger-loop = "agent_notes.trigger_loop:main"
 agent-notes-web          = "agent_notes.web.app:main"
+agent-notes-embed-server = "agent_notes.embed_server:main"
 
 
 [build-system]

@@ -1,0 +1,20 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agent-notes-embed
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod-porkbun
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+spec:
+  ingressClassName: traefik-internal
+  rules:
+    - host: agent-notes-embed.k8s.hraedon.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: agent-notes-embed, port: { name: http } }
+  tls:
+    - hosts: [agent-notes-embed.k8s.hraedon.com]
+      secretName: agent-notes-embed-k8s-hraedon-com-tls

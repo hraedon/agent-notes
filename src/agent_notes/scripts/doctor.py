@@ -209,6 +209,36 @@ def _check_embedding() -> tuple[bool, str]:
         return False, _sanitize_conn_error(exc)
 
 
+def _check_embed_service() -> tuple[bool | None, str]:
+    """Check the warm embedding service named by ``AGENT_NOTES_EMBED_URL``.
+
+    Unset is a skip: every embedding call then loads the model in-process.
+    """
+    try:
+        from agent_notes.core import embed
+
+        url = embed.service_url()
+        if not url:
+            return None, "not configured (AGENT_NOTES_EMBED_URL unset; calls load the model)"
+        health = embed.request_service(url, "/health")
+        if health.get("model") != embed._MODEL_NAME or health.get("dim") != embed._EMBED_DIM:
+            return False, (
+                f"{url} serves {health.get('model')} (dim {health.get('dim')}), but this host "
+                f"expects {embed._MODEL_NAME} (dim {embed._EMBED_DIM}); embed calls will fail"
+            )
+        # /health is open; one real embed also checks the bearer token.
+        t0 = time.perf_counter()
+        embed.request_service(url, "/embed", {"texts": ["doctor"], "task": "query"})
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        return True, f"{url} embedded in {elapsed_ms:.0f}ms ({health.get('device')})"
+    except embed.EmbedServiceError as exc:
+        return False, f"{exc}; embed calls will fail"
+    except Exception as exc:
+        return False, (
+            f"unreachable ({type(exc).__name__}); calls fall back to loading the model in-process"
+        )
+
+
 def _check_links_audit() -> tuple[bool | None, str]:
     """Audit referential integrity of the local links table.
 
@@ -920,6 +950,9 @@ def run_json(check_embed: bool = False) -> tuple[dict, int]:
     ok, msg = _check_retired_settings()
     add("retired_settings", ok, msg)
 
+    ok, msg = _check_embed_service()
+    add("embedding_service", ok, msg)
+
     if dsn_ok and schema_ok:
         if check_embed:
             ok, msg = _check_embedding()
@@ -1047,6 +1080,14 @@ def run(skip_embed: bool = False, check_embed: bool = False) -> int:
     else:
         _print_section("4. Embedding Model")
         print("  SKIPPED: use --check-embed to verify (~270MB model load)")
+
+    ok, msg = _check_embed_service()
+    _print_section("4b. Embedding Service")
+    if ok is None:
+        print(f"  SKIPPED: {msg}")
+    else:
+        _print_result(ok, msg)
+        all_ok = all_ok and ok
 
     ok, msg = _check_links_audit()
     _print_section("5. Links Audit")

@@ -18,6 +18,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Warm embedding service:** `agent-notes-embed-server` keeps the model
+  loaded (127.0.0.1:8766). With `AGENT_NOTES_EMBED_URL` set (env or suite.env)
+  every embedding call uses it, so `search`, `memory search|recall` and writes
+  drop from ~9s to ~0.5s. Vectors are identical to in-process; an unreachable
+  service falls back to in-process with a warning, and a service on another
+  model fails the call. `doctor` reports `embedding_service`. The shared
+  deployment is k8s (`deploy/k8s/embed/`: image, manifests, build script)
+  behind the internal ingress with `AGENT_NOTES_EMBED_TOKEN` as a bearer
+  token; per-host units are `deploy/agent-notes-embed.service` and
+  `deploy/windows/agent-notes-embed.ps1`.
 - **Memory tiers (Plan 025 Phase 2):** memories now live at `repo`, `vm`, or
   `global` scope. `memory add|get|update|delete --scope repo|vm|global [--vm ID]`;
   `memory list|search|recall --scope ...|composed` (`search` and the new `recall`

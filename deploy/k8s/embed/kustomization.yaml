@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: agent-notes
+resources:
+  - namespace.yaml
+  - deployment.yaml
+  - ingress.yaml
+# The base manifest carries a placeholder tag; the digest below is the only source of the
+# deployed image. Set it from build-image.ps1's output before applying.
+images:
+  - name: git.hraedon.com/glassbreak/agent-notes-embed
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
