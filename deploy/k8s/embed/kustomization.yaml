@@ -9,4 +9,4 @@ resources:
 # deployed image. Set it from build-image.ps1's output before applying.
 images:
   - name: git.hraedon.com/glassbreak/agent-notes-embed
-    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    digest: sha256:1ea5d9c8b3d173f873b1150a6440da2384870822934a5fc39a75bf2fef7aa28f

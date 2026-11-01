@@ -36,6 +36,9 @@ spec:
       labels: { app: agent-notes-embed }
     spec:
       automountServiceAccountToken: false
+      # Service links would set AGENT_NOTES_EMBED_PORT=tcp://... (from this Service's
+      # name) over the server's own port setting.
+      enableServiceLinks: false
       imagePullSecrets:
         - name: agent-notes-registry
       topologySpreadConstraints:
