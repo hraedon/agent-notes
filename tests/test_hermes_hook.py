@@ -63,6 +63,9 @@ def _hook_env(monkeypatch, tmp_path):
         monkeypatch.delenv(var, raising=False)
 
 
+_OUTAGE = "mailbox database is unreachable"
+
+
 def _no_store(monkeypatch) -> None:
     def unavailable():
         import psycopg
@@ -81,7 +84,10 @@ def _no_store(monkeypatch) -> None:
     "name", ["pre_llm_call_first_turn", "pre_llm_call_multimodal", "pre_llm_call_main"]
 )
 def test_store_errors_fail_open_for_real_payloads(monkeypatch, tmp_path, name):
+    # Told once that the mailbox is unreachable, then quiet until it recovers.
     _no_store(monkeypatch)
+    first = _run_hook(monkeypatch, "pre-llm-call", _fixture(name))
+    assert _OUTAGE in first["context"]
     assert _run_hook(monkeypatch, "pre-llm-call", _fixture(name)) == {}
     assert "OperationalError" in (tmp_path / "hooks.log").read_text(encoding="utf-8")
 
@@ -104,7 +110,10 @@ def test_unsupported_event_and_missing_session_fail_open(monkeypatch):
 def test_the_underscore_event_name_is_accepted(monkeypatch):
     # `agent-notes-hook hermes pre_llm_call` normalises to the same handler.
     _no_store(monkeypatch)
-    assert _run_hook(monkeypatch, "pre_llm_call", _fixture("pre_llm_call_main")) == {}
+    # The pre-llm-call handler ran: it reached the store and reported the outage.
+    assert (
+        _OUTAGE in _run_hook(monkeypatch, "pre_llm_call", _fixture("pre_llm_call_main"))["context"]
+    )
     assert common.normalize_event("pre_llm_call") == "pre-llm-call"
 
 
@@ -116,15 +125,21 @@ def test_unreachable_database_fails_open_in_a_subprocess(tmp_path):
         common.LOG_PATH_ENV: str(tmp_path / "sub.log"),
         "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
     }
-    proc = subprocess.run(
-        [sys.executable, "-m", "agent_notes.hooks", "hermes", "pre-llm-call"],
-        input=json.dumps(_fixture("pre_llm_call_first_turn")).encode(),
-        capture_output=True,
-        env=env,
-        timeout=60,
-    )
-    assert proc.returncode == 0
-    assert json.loads(proc.stdout.decode("utf-8")) == {}
+
+    def hook() -> dict:
+        proc = subprocess.run(
+            [sys.executable, "-m", "agent_notes.hooks", "hermes", "pre-llm-call"],
+            input=json.dumps(_fixture("pre_llm_call_first_turn")).encode(),
+            capture_output=True,
+            env=env,
+            timeout=60,
+        )
+        assert proc.returncode == 0
+        return json.loads(proc.stdout.decode("utf-8"))
+
+    first = hook()
+    assert _OUTAGE in first["context"] and "pw@" not in first["context"]
+    assert hook() == {}
     assert "pw@" not in (tmp_path / "sub.log").read_text(encoding="utf-8")
 
 

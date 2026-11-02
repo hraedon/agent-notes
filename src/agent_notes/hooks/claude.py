@@ -148,6 +148,17 @@ _HANDLERS = {
     "stop": stop,
 }
 
+_CONTEXT_EVENTS = {"session-start": "SessionStart", "user-prompt-submit": "UserPromptSubmit"}
+
+
+def outage(
+    event: str, payload: Mapping[str, Any], env: Mapping[str, str], exc: BaseException
+) -> dict[str, Any] | None:
+    """The mailbox-unreachable notice as context, once per outage. Never at Stop."""
+    name = _CONTEXT_EVENTS.get(event)
+    text = common.outage_notice(_input(payload, env), exc) if name else None
+    return _context(name, text) if name and text else None
+
 
 def handle(event: str, payload: Mapping[str, Any], env: Mapping[str, str]) -> dict[str, Any]:
     handler = _HANDLERS.get(event)

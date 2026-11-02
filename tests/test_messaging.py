@@ -804,3 +804,118 @@ def test_answer_request_marks_the_reply_as_from_the_dispatcher(ws, vm):
     assert created and reply["payload"] == {"status": "ok", "sender": "dispatcher"}
     stored = m.replies_to(req["id"])[0]
     assert m.sender_label(stored) == f"{vm}/dispatcher"
+
+
+# ---------------------------------------------------------------------------
+# Claim after output (at-least-once)
+# ---------------------------------------------------------------------------
+
+
+class _OutputLostError(Exception):
+    pass
+
+
+def _lose_output(_rows) -> None:
+    raise _OutputLostError("stdout closed")
+
+
+def test_inbox_claim_rolls_back_when_the_output_is_lost(ws, vm):
+    s = _session(ws, vm)
+    msg = _send(ws, to_session=s)["id"]
+    with pytest.raises(_OutputLostError):
+        m.inbox(s, claim=True, emit=_lose_output)
+    assert m.get_message(msg)["claimed_by"] is None
+    shown: list[list[dict]] = []
+    rows = m.inbox(s, claim=True, emit=shown.append)
+    assert _ids(rows) == {msg} and _ids(shown[0]) == {msg}
+    assert m.get_message(msg)["claimed_by"] == s
+
+
+def test_inbox_claim_is_not_visible_while_the_output_is_written(ws, vm):
+    s = _session(ws, vm)
+    msg = _send(ws, to_session=s)["id"]
+    seen: dict = {}
+
+    def emit(_rows) -> None:
+        # Another connection, as another session's claim would see it.
+        with psycopg.connect(_dsn(), autocommit=True) as other:
+            seen["claimed_by"] = other.execute(
+                "SELECT claimed_by FROM agent_messages WHERE id = %s", (msg,)
+            ).fetchone()[0]
+
+    m.inbox(s, claim=True, emit=emit)
+    assert seen == {"claimed_by": None}
+    assert m.get_message(msg)["claimed_by"] == s
+
+
+def test_a_held_claim_bounds_the_dispatcher_and_skips_the_stop_hook(monkeypatch, ws, vm):
+    # A reader holds its claim until its output is written. The Stop hook
+    # skips the row; the dispatcher waits a bounded time, then gives up.
+    monkeypatch.setattr(m, "CLAIM_LOCK_TIMEOUT", "300ms")
+    s = _session(ws, vm)
+    msg = _send(ws, to_session=s, wake=True)["id"]
+    seen: dict = {}
+
+    def emit(_rows) -> None:
+        seen["stop_hook"] = m.next_wakeable({"session_key": s, "wake_policy": "direct"}, claim=True)
+        seen["dispatcher"] = m.claim_message(msg, f"{vm}/dispatcher")
+
+    started = time.monotonic()
+    m.inbox(s, claim=True, emit=emit)
+    assert seen == {"stop_hook": None, "dispatcher": None}
+    assert time.monotonic() - started < 5
+    assert m.get_message(msg)["claimed_by"] == s
+
+
+def test_the_dispatcher_claims_a_wake_whose_reader_rolled_back(ws, vm):
+    # Skipping instead of waiting would lose the wake: nothing notifies again.
+    s = _session(ws, vm)
+    msg = _send(ws, to_session=s, wake=True)["id"]
+    holding = threading.Event()
+    release = threading.Event()
+
+    def reader() -> None:
+        def emit(_rows) -> None:
+            holding.set()
+            release.wait(10)
+            raise _OutputLostError("reader died")
+
+        with pytest.raises(_OutputLostError):
+            m.inbox(s, claim=True, emit=emit)
+
+    t = threading.Thread(target=reader)
+    t.start()
+    assert holding.wait(10)
+    threading.Timer(0.3, release.set).start()
+    claimed = m.claim_message(msg, f"{vm}/dispatcher")
+    t.join(10)
+    assert claimed is not None and claimed["claimed_by"] == f"{vm}/dispatcher"
+
+
+def test_a_commit_lost_after_the_output_leaves_the_message_unclaimed(ws, vm):
+    # Shown, then the connection dies before COMMIT: the message is shown
+    # again rather than recorded as delivered.
+    s = _session(ws, vm)
+    msg = _send(ws, to_session=s)["id"]
+
+    def emit_then_lose_the_connection(_rows) -> None:
+        with psycopg.connect(_dsn(), autocommit=True) as admin:
+            admin.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_locks "
+                "WHERE relation = 'agent_messages'::regclass AND mode = 'RowExclusiveLock' "
+                "AND pid <> pg_backend_pid()"
+            )
+
+    with pytest.raises(psycopg.OperationalError):
+        m.inbox(s, claim=True, emit=emit_then_lose_the_connection)
+    assert m.get_message(msg)["claimed_by"] is None
+    assert _ids(m.inbox(s, claim=True)) == {msg}
+
+
+def test_await_claim_rolls_back_when_the_output_is_lost(ws, vm):
+    s = _session(ws, vm)
+    msg = _send(ws, to_session=s)["id"]
+    with pytest.raises(_OutputLostError):
+        m.await_message(s, timeout=5, emit=_lose_output)
+    assert m.get_message(msg)["claimed_by"] is None
+    assert m.await_message(s, timeout=5)["id"] == msg

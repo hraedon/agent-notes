@@ -83,28 +83,96 @@ def _no_store(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("harness", "event", "expected"),
-    [
-        ("claude", "user-prompt-submit", {}),
-        ("claude", "stop", {}),
-        ("codex", "user-prompt-submit", {"continue": True}),
-        ("codex", "stop", {"continue": True}),
-        ("agy", "pre-invocation", {}),
-        ("agy", "stop", {}),
-    ],
-)
-def test_store_errors_fail_open(monkeypatch, tmp_path, harness, event, expected):
-    _no_store(monkeypatch)
-    payload = {
+_OUTAGE = "mailbox database is unreachable"
+
+
+def _outage_payload(tmp_path) -> dict:
+    return {
         "session_id": "s1",
         "conversationId": "s1",
         "cwd": str(tmp_path),
         "prompt": "hi",
         "hook_event_name": "Stop",
     }
-    assert _run_hook(monkeypatch, harness, event, payload) == expected
+
+
+@pytest.mark.parametrize(
+    ("harness", "event", "expected"),
+    [
+        ("claude", "stop", {}),
+        ("codex", "stop", {"continue": True}),
+        ("agy", "stop", {}),
+    ],
+)
+def test_store_errors_fail_open(monkeypatch, tmp_path, harness, event, expected):
+    _no_store(monkeypatch)
+    assert _run_hook(monkeypatch, harness, event, _outage_payload(tmp_path)) == expected
     assert "OperationalError" in (tmp_path / "hooks.log").read_text(encoding="utf-8")
+
+
+def _context_reply(name: str, **extra):
+    return lambda text: {
+        **extra,
+        "hookSpecificOutput": {"hookEventName": name, "additionalContext": text},
+    }
+
+
+@pytest.mark.parametrize(
+    ("harness", "event", "framed", "fallback"),
+    [
+        ("claude", "session-start", _context_reply("SessionStart"), {}),
+        ("claude", "user-prompt-submit", _context_reply("UserPromptSubmit"), {}),
+        (
+            "codex",
+            "session-start",
+            _context_reply("SessionStart", **{"continue": True}),
+            {"continue": True},
+        ),
+        (
+            "codex",
+            "user-prompt-submit",
+            _context_reply("UserPromptSubmit", **{"continue": True}),
+            {"continue": True},
+        ),
+        (
+            "agy",
+            "session-start",
+            lambda text: {"injectSteps": [{"systemMessage": {"systemMessage": text}}]},
+            {},
+        ),
+        ("agy", "pre-invocation", lambda text: {"injectSteps": [{"ephemeralMessage": text}]}, {}),
+        ("hermes", "pre-llm-call", lambda text: {"context": text}, {}),
+    ],
+)
+def test_an_unreachable_mailbox_is_reported_once(
+    monkeypatch, tmp_path, harness, event, framed, fallback
+):
+    # Failing open used to be silent: the agent never learned its messages
+    # had stopped. It is told once per outage, then the hook is quiet again.
+    _no_store(monkeypatch)
+    payload = _outage_payload(tmp_path)
+    if event == "session-start":
+        payload["hook_event_name"] = "SessionStart"  # Codex checks it
+    notice = common.OUTAGE_NOTICE.format(error="OperationalError", log=tmp_path / "hooks.log")
+    assert _run_hook(monkeypatch, harness, event, payload) == framed(notice)
+    assert _run_hook(monkeypatch, harness, event, payload) == fallback
+    assert "OperationalError" in (tmp_path / "hooks.log").read_text(encoding="utf-8")
+
+
+def test_a_lost_response_does_not_use_up_the_outage_notice(monkeypatch, tmp_path):
+    _no_store(monkeypatch)
+    payload = _outage_payload(tmp_path)
+    with monkeypatch.context() as mp:
+        mp.setattr(common, "write_json", _broken_write)
+        with pytest.raises(BrokenPipeError):
+            _run_hook(monkeypatch, "claude", "user-prompt-submit", payload)
+    assert _OUTAGE in json.dumps(_run_hook(monkeypatch, "claude", "user-prompt-submit", payload))
+    assert _run_hook(monkeypatch, "claude", "user-prompt-submit", payload) == {}
+
+
+def test_a_hook_bug_is_not_reported_as_an_outage(monkeypatch, tmp_path):
+    monkeypatch.setattr(common, "connect", _fail)
+    assert _run_hook(monkeypatch, "claude", "user-prompt-submit", _outage_payload(tmp_path)) == {}
 
 
 @pytest.mark.parametrize("raw", ["not-json", "[1, 2]", ""])
@@ -128,15 +196,22 @@ def test_unreachable_database_fails_open_in_a_subprocess(tmp_path):
         common.LOG_PATH_ENV: str(tmp_path / "sub.log"),
         "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
     }
-    proc = subprocess.run(
-        [sys.executable, "-m", "agent_notes.hooks", "claude", "user-prompt-submit"],
-        input=json.dumps({"session_id": "s", "cwd": str(tmp_path), "prompt": "hi"}).encode(),
-        capture_output=True,
-        env=env,
-        timeout=60,
-    )
-    assert proc.returncode == 0
-    assert json.loads(proc.stdout.decode("utf-8")) == {}
+
+    def hook() -> dict:
+        proc = subprocess.run(
+            [sys.executable, "-m", "agent_notes.hooks", "claude", "user-prompt-submit"],
+            input=json.dumps({"session_id": "s", "cwd": str(tmp_path), "prompt": "hi"}).encode(),
+            capture_output=True,
+            env=env,
+            timeout=60,
+        )
+        assert proc.returncode == 0
+        return json.loads(proc.stdout.decode("utf-8"))
+
+    first = hook()
+    assert _OUTAGE in first["hookSpecificOutput"]["additionalContext"]
+    assert "pw@" not in json.dumps(first)
+    assert hook() == {}
     log = (tmp_path / "sub.log").read_text(encoding="utf-8")
     assert "failed" in log and "pw@" not in log
 
@@ -678,6 +753,191 @@ def test_stop_failure_after_claiming_leaves_nothing_claimed(monkeypatch, ws, tmp
     assert _run_hook(monkeypatch, "codex", "stop", _claude(sid, tmp_path)) == {"continue": True}
     assert m.get_message(msg["id"])["claimed_by"] is None
     assert m.get_session(key)["auto_continues"] == 0
+
+
+# ---------------------------------------------------------------------------
+# At-least-once: the claim commits only after the response is written
+# ---------------------------------------------------------------------------
+
+
+def test_messages_stay_unclaimed_until_the_response_is_written(monkeypatch, ws, tmp_path):
+    sid = _uid()
+    key = _key("claude", sid)
+    _run_hook(monkeypatch, "claude", "user-prompt-submit", _claude(sid, tmp_path, prompt="x"))
+    sent = _send(ws, key, "held until written")
+    seen: dict = {}
+    real_write = common.write_json
+
+    def write(result, stream) -> None:
+        # The pool is another connection, as another session would see it.
+        seen["claimed_by"] = m.get_message(sent["id"])["claimed_by"]
+        real_write(result, stream)
+
+    monkeypatch.setattr(common, "write_json", write)
+    out = _run_hook(monkeypatch, "claude", "user-prompt-submit", _claude(sid, tmp_path, prompt="y"))
+    assert "held until written" in out["hookSpecificOutput"]["additionalContext"]
+    assert seen == {"claimed_by": None}
+    assert m.get_message(sent["id"])["claimed_by"] == key
+
+
+def _broken_write(result, stream) -> None:
+    raise BrokenPipeError("the harness stopped reading")
+
+
+def test_a_hook_that_dies_before_its_output_leaves_messages_for_the_next_prompt(
+    monkeypatch, ws, tmp_path
+):
+    # The claim used to commit before the output was written, so a hook killed
+    # or cut off in between lost the message: claimed, never shown.
+    sid = _uid()
+    key = _key("claude", sid)
+    _run_hook(monkeypatch, "claude", "user-prompt-submit", _claude(sid, tmp_path, prompt="x"))
+    sent = _send(ws, key, "survives a lost response")
+    with monkeypatch.context() as mp:
+        mp.setattr(common, "write_json", _broken_write)
+        with pytest.raises(BrokenPipeError):
+            _run_hook(
+                monkeypatch, "claude", "user-prompt-submit", _claude(sid, tmp_path, prompt="y")
+            )
+    assert m.get_message(sent["id"])["claimed_by"] is None
+    out = _run_hook(monkeypatch, "claude", "user-prompt-submit", _claude(sid, tmp_path, prompt="z"))
+    assert "survives a lost response" in out["hookSpecificOutput"]["additionalContext"]
+    assert m.get_message(sent["id"])["claimed_by"] == key
+
+
+def test_a_wake_that_is_never_written_is_neither_claimed_nor_counted(monkeypatch, ws, tmp_path):
+    sid = _uid()
+    key = _key("claude", sid)
+    _run_hook(monkeypatch, "claude", "user-prompt-submit", _claude(sid, tmp_path, prompt="x"))
+    m.set_session_policy(key, wake_policy="direct")
+    msg = _send(ws, key, "wake me", wake=True)
+    with monkeypatch.context() as mp:
+        mp.setattr(common, "write_json", _broken_write)
+        with pytest.raises(BrokenPipeError):
+            _run_hook(monkeypatch, "claude", "stop", _claude(sid, tmp_path))
+    assert m.get_message(msg["id"])["claimed_by"] is None
+    assert m.get_session(key)["auto_continues"] == 0
+    out = _run_hook(monkeypatch, "claude", "stop", _claude(sid, tmp_path))
+    assert out["decision"] == "block" and "wake me" in out["reason"]
+    assert m.get_message(msg["id"])["claimed_by"] == key
+
+
+def test_a_commit_that_fails_after_the_write_redelivers(monkeypatch, ws, tmp_path):
+    # The other side of at-least-once: shown, then shown again.
+    from agent_notes.core.config import resolve_dsn
+
+    sid = _uid()
+    key = _key("claude", sid)
+    _run_hook(monkeypatch, "claude", "user-prompt-submit", _claude(sid, tmp_path, prompt="x"))
+    sent = _send(ws, key, "shown twice")
+    real_write = common.write_json
+
+    def write_then_lose_the_connection(result, stream) -> None:
+        real_write(result, stream)
+        (held,) = common._held
+        with psycopg.connect(resolve_dsn(), autocommit=True) as admin:
+            admin.execute("SELECT pg_terminate_backend(%s)", (held.info.backend_pid,))
+
+    with monkeypatch.context() as mp:
+        mp.setattr(common, "write_json", write_then_lose_the_connection)
+        out = _run_hook(
+            monkeypatch, "claude", "user-prompt-submit", _claude(sid, tmp_path, prompt="y")
+        )
+    assert "shown twice" in out["hookSpecificOutput"]["additionalContext"]
+    assert m.get_message(sent["id"])["claimed_by"] is None
+    assert "redelivered" in (tmp_path / "hooks.log").read_text(encoding="utf-8")
+    again = _run_hook(
+        monkeypatch, "claude", "user-prompt-submit", _claude(sid, tmp_path, prompt="z")
+    )
+    assert "shown twice" in again["hookSpecificOutput"]["additionalContext"]
+
+
+def _run_codex_hook(monkeypatch, event: str, payload: dict) -> dict:
+    """``agent-notes codex-hook <event>``: the entry point older Codex installs trust."""
+    import argparse
+
+    from agent_notes import codex_lifecycle
+
+    stdin = io.TextIOWrapper(io.BytesIO(json.dumps(payload).encode("utf-8")), encoding="utf-8")
+    out = _Stdout()
+    with monkeypatch.context() as mp:
+        mp.setattr(sys, "stdin", stdin)
+        mp.setattr(sys, "stdout", out)
+        args = argparse.Namespace(codex_hook_event=event)
+        assert codex_lifecycle.cmd_codex_hook(args) == 0
+    return json.loads(out.raw_bytes().decode("utf-8"))
+
+
+def test_the_legacy_codex_hook_commits_what_it_delivers(monkeypatch, ws, tmp_path):
+    # It writes its own response, so it must commit the held claim itself;
+    # otherwise every prompt shows the same message again.
+    sid = _uid()
+    key = _key("codex", sid)
+    _run_codex_hook(monkeypatch, "user-prompt-submit", _claude(sid, tmp_path, prompt="x"))
+    sent = _send(ws, key, "via the legacy hook")
+    out = _run_codex_hook(monkeypatch, "user-prompt-submit", _claude(sid, tmp_path, prompt="y"))
+    assert "via the legacy hook" in out["hookSpecificOutput"]["additionalContext"]
+    assert m.get_message(sent["id"])["claimed_by"] == key
+    again = _run_codex_hook(monkeypatch, "user-prompt-submit", _claude(sid, tmp_path, prompt="z"))
+    assert again == {"continue": True}
+    assert common._held == []
+
+
+def test_the_legacy_codex_stop_wakes_once(monkeypatch, ws, tmp_path):
+    # An uncommitted wake would leave the message unclaimed and the counter
+    # at zero, so every Stop would block again with the same message.
+    sid = _uid()
+    key = _key("codex", sid)
+    _run_codex_hook(monkeypatch, "user-prompt-submit", _claude(sid, tmp_path, prompt="x"))
+    m.set_session_policy(key, wake_policy="direct")
+    msg = _send(ws, key, "wake me once", wake=True)
+    out = _run_codex_hook(monkeypatch, "stop", _claude(sid, tmp_path))
+    assert out["decision"] == "block" and "wake me once" in out["reason"]
+    assert m.get_message(msg["id"])["claimed_by"] == key
+    assert m.get_session(key)["auto_continues"] == 1
+    assert _run_codex_hook(monkeypatch, "stop", _claude(sid, tmp_path)) == {"continue": True}
+
+
+def test_only_connection_failures_count_as_an_outage():
+    from psycopg import errors
+    from psycopg_pool import PoolTimeout
+
+    assert common.is_outage(psycopg.OperationalError("connection timeout expired"))
+    assert common.is_outage(PoolTimeout("couldn't get a connection after 30.00 sec"))
+    assert common.is_outage(errors.ConnectionFailure())
+    assert common.is_outage(errors.InvalidPassword())
+    assert common.is_outage(errors.TooManyConnections())
+    assert common.is_outage(errors.AdminShutdown())
+    # The mailbox answered: slow or contended, not unreachable.
+    assert not common.is_outage(errors.QueryCanceled())
+    assert not common.is_outage(errors.DeadlockDetected())
+    assert not common.is_outage(errors.SerializationFailure())
+    assert not common.is_outage(RuntimeError("bug"))
+
+
+def test_old_outage_markers_are_pruned(monkeypatch, tmp_path):
+    _no_store(monkeypatch)
+    stale = tmp_path / "outage" / "ended-session"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("OperationalError", encoding="utf-8")
+    week_ago = os.path.getmtime(stale) - 8 * 86400
+    os.utime(stale, (week_ago, week_ago))
+    _run_hook(monkeypatch, "claude", "user-prompt-submit", _outage_payload(tmp_path))
+    assert not stale.exists()
+    assert len(list(stale.parent.iterdir())) == 1
+
+
+def test_the_outage_notice_returns_after_the_mailbox_recovers(monkeypatch, ws, tmp_path):
+    sid = _uid()
+    payload = _claude(sid, tmp_path, prompt="x")
+    real_connect = common.connect
+    _no_store(monkeypatch)
+    assert _OUTAGE in json.dumps(_run_hook(monkeypatch, "claude", "user-prompt-submit", payload))
+    assert _run_hook(monkeypatch, "claude", "user-prompt-submit", payload) == {}
+    monkeypatch.setattr(common, "connect", real_connect)
+    assert _run_hook(monkeypatch, "claude", "user-prompt-submit", payload) == {}
+    _no_store(monkeypatch)
+    assert _OUTAGE in json.dumps(_run_hook(monkeypatch, "claude", "user-prompt-submit", payload))
 
 
 def test_agy_cap_holds_with_an_unwritable_state_dir(monkeypatch, ws, tmp_path):

@@ -232,37 +232,72 @@ def cmd_msg_reply(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _after_output(call: Callable[[], Any], printed: list[bool]) -> Any:
+    """Run a claiming read whose ``emit`` prints; returns its result.
+
+    A store error after the output is out means the claim didn't commit: the
+    messages were shown and will be shown again. That goes to stderr, so
+    stdout holds one document; an error before any output is raised as usual.
+    """
+    import psycopg
+
+    try:
+        return call()
+    except psycopg.Error as exc:
+        if not printed:
+            raise
+        print(
+            f"warning: the claim was not recorded ({type(exc).__name__}); "
+            "these messages will be delivered again",
+            file=sys.stderr,
+        )
+        return None
+
+
 @_guarded
 def cmd_msg_inbox(args: argparse.Namespace) -> int:
     caller = resolve_caller(args)
-    rows = messaging.inbox(
-        caller.key,
-        claim=args.claim,
-        include_claimed=args.all,
-        vm=caller.vm,
-        project=caller.project,
-        workspace_id=caller.workspace_id,
-        limit=args.limit,
+
+    # Printed before the claim commits, so a claimed message is never lost to
+    # a closed pipe or a killed process (at-least-once).
+    printed: list[bool] = []
+
+    def show(rows: list[dict]) -> None:
+        if args.json:
+            _print_json(
+                {
+                    "session": caller.key,
+                    "project": caller.project,
+                    "vm": caller.vm,
+                    "claimed": bool(args.claim),
+                    "messages": rows,
+                }
+            )
+        else:
+            who = caller.key or f"{caller.vm} (anonymous)"
+            if not rows:
+                print(f"No messages for {who}.")
+            else:
+                print(f"{len(rows)} message(s) for {who}:")
+                for row in rows:
+                    print()
+                    print(messaging.format_peer_message(row))
+        sys.stdout.flush()
+        printed.append(True)
+
+    _after_output(
+        lambda: messaging.inbox(
+            caller.key,
+            claim=args.claim,
+            include_claimed=args.all,
+            vm=caller.vm,
+            project=caller.project,
+            workspace_id=caller.workspace_id,
+            limit=args.limit,
+            emit=show,
+        ),
+        printed,
     )
-    if args.json:
-        _print_json(
-            {
-                "session": caller.key,
-                "project": caller.project,
-                "vm": caller.vm,
-                "claimed": bool(args.claim),
-                "messages": rows,
-            }
-        )
-        return EXIT_SUCCESS
-    who = caller.key or f"{caller.vm} (anonymous)"
-    if not rows:
-        print(f"No messages for {who}.")
-        return EXIT_SUCCESS
-    print(f"{len(rows)} message(s) for {who}:")
-    for row in rows:
-        print()
-        print(messaging.format_peer_message(row))
     return EXIT_SUCCESS
 
 
@@ -271,16 +306,32 @@ def cmd_msg_await(args: argparse.Namespace) -> int:
     caller = resolve_caller(args)
     if caller.key is None and args.reply_to is None and args.from_session is None:
         print(f"Note: {_no_session_hint(caller)}; awaiting inbox messages only.", file=sys.stderr)
-    msg = messaging.await_message(
-        caller.key,
-        reply_to=args.reply_to,
-        from_session=args.from_session,
-        timeout=args.timeout,
-        vm=caller.vm,
-        project=caller.project,
-        workspace_id=caller.workspace_id,
+
+    # Printed before the claim commits, as in msg inbox.
+    printed: list[bool] = []
+
+    def show(msg: dict) -> None:
+        if args.json:
+            _print_json({"message": msg})
+        else:
+            print(messaging.format_peer_message(msg))
+        sys.stdout.flush()
+        printed.append(True)
+
+    msg = _after_output(
+        lambda: messaging.await_message(
+            caller.key,
+            reply_to=args.reply_to,
+            from_session=args.from_session,
+            timeout=args.timeout,
+            vm=caller.vm,
+            project=caller.project,
+            workspace_id=caller.workspace_id,
+            emit=show,
+        ),
+        printed,
     )
-    if msg is None:
+    if msg is None and not printed:
         return emit_error(
             "AWAIT_TIMEOUT",
             f"no matching message within {args.timeout:g}s; run msg await again to keep waiting",
@@ -288,10 +339,6 @@ def cmd_msg_await(args: argparse.Namespace) -> int:
             retryable=True,
             exit_code=EXIT_TIMEOUT,
         )
-    if args.json:
-        _print_json({"message": msg})
-    else:
-        print(messaging.format_peer_message(msg))
     return EXIT_SUCCESS
 
 

@@ -61,15 +61,16 @@ def request_work_item(
             "request_type": "create_work_item",
         }
 
-        entity_id = kernel._make_op_id(ENTITY_TYPE, "request", payload, [])
+        # A root op names its own entity (entity_id = its op_id).
         op = kernel.commit_op(
             conn,
-            entity_id=entity_id,
+            entity_id=None,
             entity_type=ENTITY_TYPE,
             op_type="request",
             payload=payload,
             actor_id=actor.actor_id,
         )
+        entity_id = op["entity_id"]
 
         # Request entities don't go into the work_items cache (they're
         # not real work items — they're signed evidence). They live only
@@ -140,15 +141,16 @@ def wait_on_work_item(
             "status": "waiting",
         }
 
-        entity_id = kernel._make_op_id(ENTITY_TYPE, "wait", payload, [])
+        # A root op names its own entity (entity_id = its op_id).
         op = kernel.commit_op(
             conn,
-            entity_id=entity_id,
+            entity_id=None,
             entity_type=ENTITY_TYPE,
             op_type="wait",
             payload=payload,
             actor_id=actor.actor_id,
         )
+        entity_id = op["entity_id"]
 
         # Wait records don't go into the work_items cache. They live only
         # in the op_log as signed evidence of the wait intent.
@@ -264,10 +266,10 @@ def add_cross_project_link(
             "cross_project": True,
         }
 
-        entity_id = kernel._make_op_id(ENTITY_TYPE, "add_link", payload, [])
+        # A root op names its own entity (entity_id = its op_id).
         op = kernel.commit_op(
             conn,
-            entity_id=entity_id,
+            entity_id=None,
             entity_type=ENTITY_TYPE,
             op_type="add_link",
             payload=payload,

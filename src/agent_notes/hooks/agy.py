@@ -148,6 +148,20 @@ _HANDLERS = {
 }
 
 
+def outage(
+    event: str, payload: Mapping[str, Any], env: Mapping[str, str], exc: BaseException
+) -> dict[str, Any] | None:
+    """The mailbox-unreachable notice, once per outage. Never at Stop."""
+    if event not in ("session-start", "pre-invocation"):
+        return None
+    text = common.outage_notice(_input(payload, env), exc)
+    if text is None:
+        return None
+    if event == "session-start":
+        return _inject({"systemMessage": {"systemMessage": text}})
+    return _inject({"ephemeralMessage": text})
+
+
 def handle(event: str, payload: Mapping[str, Any], env: Mapping[str, str]) -> dict[str, Any]:
     handler = _HANDLERS.get(event)
     if handler is None:

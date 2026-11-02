@@ -8,6 +8,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Repeated work-item ops no longer collide.** An `op_id` was a pure content
+  hash and every native op parents the entity, so a second identical
+  heartbeat (same actor and TTL), a field set back to an earlier value, a
+  repeated force-close or the same review note twice hit the `op_log.op_id`
+  unique constraint and failed. Every op but `create` now hashes its own
+  lamport (`op_seq` in the payload); `verify` checks it matches the stored
+  `lamport`. Existing ops verify unchanged. Root ops (`request`, `wait`,
+  `add_link`) are named by their own op_id, so an entity is still the hash of
+  its first op and a repeated link is a new entity, not a second root.
+- **Concurrent memory attribute updates keep each other's keys.**
+  `memory update --attributes` and `mark_gaps_filed` lock the row before
+  their read-merge-write; two concurrent updates used to drop one side's keys.
+- **Mailbox delivery is at-least-once.** Harness hooks (both
+  `agent-notes-hook` and the older `agent-notes codex-hook`), `msg inbox
+  --claim` and `msg await` commit a claim only after the messages are written
+  out. A hook killed, timed out or cut off before its output leaves the
+  messages for the next prompt instead of claimed and never shown; a commit
+  that fails after the write shows them again (`msg` prints a warning on
+  stderr, keeping stdout one document). `review request --wait` prints the
+  verdict the same way. The dispatcher waits up to 5 s for a reader holding a
+  wake message, so a reader that rolls back doesn't lose the wake; the Stop
+  hook skips a held row.
+- **An unreachable mailbox is reported.** Hooks still fail open, but a
+  session whose hook can't reach Postgres (connect, auth, capacity or pool
+  timeout failures) is told once, in the injected context, until a hook for it
+  reaches the mailbox again. Stop hooks stay silent. Query timeouts,
+  deadlocks and hook bugs are logged as before, not reported as outages.
 - Work-item readiness keeps dependents blocked while prerequisites are in
   progress, deferred, blocked or under review. Apply migration `861`.
 - Memory body updates refresh their search embedding atomically and record the

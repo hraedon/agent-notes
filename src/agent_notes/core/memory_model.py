@@ -1055,6 +1055,8 @@ def update_memory(
 
     A body edit re-embeds before the transaction (decision 26); metadata-only
     edits preserve the vector. Raises ValueError if the memory is not active.
+    The row is locked before ``attributes`` is merged, so concurrent updates
+    each keep the other's keys.
     """
     reject_regista_writes()
     embedding = None
@@ -1066,7 +1068,8 @@ def update_memory(
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(
             "SELECT id, body, attributes FROM memories "
-            "WHERE project_id = %s AND workspace_id = %s AND name = %s AND active = true",
+            "WHERE project_id = %s AND workspace_id = %s AND name = %s AND active = true "
+            "FOR UPDATE",
             (project_id, workspace_id, name),
         )
         existing = cur.fetchone()
@@ -1233,13 +1236,14 @@ def mark_gaps_filed(
         cur.execute(
             "SELECT id, attributes FROM memories "
             "WHERE project_id = %s AND workspace_id = %s AND name = %s "
-            "AND active = true AND memory_type = 'reflection'",
+            "AND active = true AND memory_type = 'reflection' FOR UPDATE",
             (project_id, workspace_id, name),
         )
         row = cur.fetchone()
         if row is None:
             return {"error": f"Reflection '{name}' not found"}
 
+        # Locked above, so a concurrent call's identifiers aren't overwritten.
         attrs = dict(row.get("attributes") or {})
         existing = set(attrs.get("gaps_filed_as", []))
         existing.update(filed_identifiers)

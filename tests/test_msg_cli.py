@@ -311,3 +311,48 @@ def test_no_store_gives_envelope_not_traceback(vm, tmp_path):
     )
     assert proc.returncode == 3
     assert _json(proc)["error"]["code"] == "STORE_NOT_CONFIGURED"
+
+
+def _in_process_inbox(monkeypatch, capsys, inbox) -> tuple[int, str, str]:
+    import argparse
+
+    from agent_notes.cli import msg as msg_cli
+
+    monkeypatch.setattr(
+        msg_cli,
+        "resolve_caller",
+        lambda args: msg_cli.Caller(
+            vm="vm-x", workspace_id=1, project_id=None, project=None, session=None
+        ),
+    )
+    monkeypatch.setattr(m, "inbox", inbox)
+    args = argparse.Namespace(json=True, claim=True, all=False, limit=20)
+    code = msg_cli.cmd_msg_inbox(args)
+    out = capsys.readouterr()
+    return code, out.out, out.err
+
+
+def test_a_commit_failure_after_printing_keeps_stdout_one_document(monkeypatch, capsys):
+    # The messages are out; the claim didn't commit, so they come again.
+    # A second (error) document on stdout would break `--json` readers.
+    import psycopg
+
+    def shown_then_lost(*_a, emit, **_k):
+        emit([{"id": 7, "body": "hi"}])
+        raise psycopg.OperationalError("server closed the connection unexpectedly")
+
+    code, out, err = _in_process_inbox(monkeypatch, capsys, shown_then_lost)
+    assert code == 0
+    assert json.loads(out)["messages"] == [{"id": 7, "body": "hi"}]
+    assert "will be delivered again" in err
+
+
+def test_a_store_error_before_printing_is_still_an_error_envelope(monkeypatch, capsys):
+    import psycopg
+
+    def unavailable(*_a, **_k):
+        raise psycopg.OperationalError("connection refused")
+
+    code, out, _err = _in_process_inbox(monkeypatch, capsys, unavailable)
+    assert code != 0
+    assert json.loads(out)["error"]["code"] == "STORE_UNAVAILABLE"

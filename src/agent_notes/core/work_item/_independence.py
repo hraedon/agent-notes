@@ -167,7 +167,7 @@ def _is_bookkeeping(op: Mapping[str, Any], prev: Mapping[str, Any] | None) -> bo
         return True
     if op["op_type"] != "set_field":
         return False
-    fields = {k for k in payload if k not in ("envelope", "producer")}
+    fields = {k for k in payload if k not in ("envelope", "producer", kernel.OP_SEQ_KEY)}
     diag = payload.get("diagnostic_keys")
     if fields != {"diagnostic_keys"} or not isinstance(diag, Mapping):
         return False

@@ -105,6 +105,14 @@ def pre_llm_call(payload: Mapping[str, Any], env: Mapping[str, str]) -> dict[str
 _HANDLERS = {"pre-llm-call": pre_llm_call}
 
 
+def outage(
+    event: str, payload: Mapping[str, Any], env: Mapping[str, str], exc: BaseException
+) -> dict[str, Any] | None:
+    """The mailbox-unreachable notice as context, once per outage."""
+    text = common.outage_notice(_input(payload, env), exc) if event == "pre-llm-call" else None
+    return {"context": text} if text else None
+
+
 def handle(event: str, payload: Mapping[str, Any], env: Mapping[str, str]) -> dict[str, Any]:
     handler = _HANDLERS.get(event)
     if handler is None:

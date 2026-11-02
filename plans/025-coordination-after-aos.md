@@ -323,6 +323,12 @@ Semantics, kept deliberately small:
   after a crash isn't worth the complexity for chat-sized messages. Notices
   are never claimed. A claiming read returns exactly the rows its `UPDATE …
   RETURNING` claimed, plus notices, which never count against its limit.
+  *Amended 2026-11-02:* the claim commits only after the claimed rows are
+  written out (hooks, `msg inbox --claim`, `msg await`), so delivery is
+  at-least-once without a `delivered`/`acked` split. A reader that dies
+  before its output is out leaves the rows unclaimed; a commit that fails
+  after the write delivers them again. OpenCode's plugin still holds claimed
+  text in memory until the next context build (its README's limitation).
 - **Expiry** is a query-time filter (`expires_at > now()`), plus a prune
   folded into the existing `doctor`/maintenance path. There's no `expired`
   status that nothing would ever set.
@@ -437,8 +443,12 @@ message, a `wake_policy` that allows it, and a sender that isn't
 `untrusted-input` (D6). The cap and the Stop switch sit on top. A message the
 rule refuses is still delivered at L1. A hook's claim, the release of what
 didn't fit and its bookkeeping are one transaction, so a failure leaves
-nothing claimed and unshown. Rendering shortens a message (subject, sender,
-then body) to fit the budget, and unclaims what still doesn't fit.
+nothing claimed and unshown. That transaction commits after the hook's JSON
+is written (amended 2026-11-02), so a hook killed by its harness timeout in
+between loses nothing either. Rendering shortens a message (subject, sender,
+then body) to fit the budget, and unclaims what still doesn't fit. Hooks fail
+open, but a session that can't reach the mailbox is told so once per outage
+in its injected context (never at Stop).
 
 **Dispatcher** (`agent-notes-bridge --dispatch`, one per machine, next to the
 Paseo daemon). It does `LISTEN agent_notes_messages` and, for each direct

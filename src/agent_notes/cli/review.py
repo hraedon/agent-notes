@@ -221,53 +221,59 @@ def cmd_review_request(args: argparse.Namespace) -> int:
             f"{to_vm} is Windows, where review jobs can't run; set {REVIEW_VM_ENV} or pass --on"
         )
 
-    reply = None
-    if args.wait:
-        reply = messaging.await_message(
-            caller.key,
-            reply_to=msg["id"],
-            timeout=args.wait,
-            vm=caller.vm,
-            project=project,
-            workspace_id=caller.workspace_id,
-        )
-        if reply is None:
-            return emit_error(
-                "AWAIT_TIMEOUT",
-                f"request #{msg['id']} has no verdict after {args.wait:g}s; "
-                f"check later with `agent-notes review show {msg['id']}`",
-                use_json=use_json,
-                detail={"request_id": msg["id"]},
-                retryable=True,
-                exit_code=EXIT_TIMEOUT,
+    def output(reply: dict | None) -> None:
+        if use_json:
+            _print_json(
+                {
+                    "request_id": msg["id"],
+                    "request": _message_out(msg),
+                    "to_vm": to_vm,
+                    "base": {"ref": args.base, "sha": base_sha},
+                    "head": {"ref": args.head, "sha": head_sha, "pushed": pushed},
+                    "session": caller.key,
+                    "instruction": INSTRUCTION,
+                    "reply": reply,
+                    "warnings": warnings,
+                }
             )
+        else:
+            for warning in warnings:
+                print(f"Warning: {warning}", file=sys.stderr)
+            print(
+                f"Review request #{msg['id']} queued for {to_vm} "
+                f"({args.reviewer}, {base_sha[:12]}..{head_sha[:12]})."
+            )
+            if reply is None:
+                print(INSTRUCTION)
+            else:
+                print()
+                print(messaging.format_peer_message(reply))
+        sys.stdout.flush()
 
-    if use_json:
-        _print_json(
-            {
-                "request_id": msg["id"],
-                "request": _message_out(msg),
-                "to_vm": to_vm,
-                "base": {"ref": args.base, "sha": base_sha},
-                "head": {"ref": args.head, "sha": head_sha, "pushed": pushed},
-                "session": caller.key,
-                "instruction": INSTRUCTION,
-                "reply": reply,
-                "warnings": warnings,
-            }
-        )
+    if not args.wait:
+        output(None)
         return EXIT_SUCCESS
-    for warning in warnings:
-        print(f"Warning: {warning}", file=sys.stderr)
-    print(
-        f"Review request #{msg['id']} queued for {to_vm} "
-        f"({args.reviewer}, {base_sha[:12]}..{head_sha[:12]})."
+    # The verdict is printed before its claim commits (at-least-once). It is
+    # also always listed by `review show`, claimed or not.
+    reply = messaging.await_message(
+        caller.key,
+        reply_to=msg["id"],
+        timeout=args.wait,
+        vm=caller.vm,
+        project=project,
+        workspace_id=caller.workspace_id,
+        emit=output,
     )
     if reply is None:
-        print(INSTRUCTION)
-    else:
-        print()
-        print(messaging.format_peer_message(reply))
+        return emit_error(
+            "AWAIT_TIMEOUT",
+            f"request #{msg['id']} has no verdict after {args.wait:g}s; "
+            f"check later with `agent-notes review show {msg['id']}`",
+            use_json=use_json,
+            detail={"request_id": msg["id"]},
+            retryable=True,
+            exit_code=EXIT_TIMEOUT,
+        )
     return EXIT_SUCCESS
 
 

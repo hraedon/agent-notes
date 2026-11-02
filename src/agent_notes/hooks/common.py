@@ -10,6 +10,14 @@ The per-prompt path opens one short-lived connection (``connect_timeout=1``)
 and imports only psycopg and ``core.messaging``. Full project resolution and
 ``orient`` (which need the pool and the CLI) run only at session start, or
 once for a session the hooks have not seen before.
+
+Delivery is at-least-once. A hook that claims messages holds the claim in an
+open transaction and commits it only after its response is written, so a hook
+that fails or is killed first leaves the messages unclaimed for the next
+prompt. A commit that fails after the write shows them again.
+
+A session whose hook can't reach the mailbox is told so once, in the context
+it injects, until a hook for that session reaches the mailbox again.
 """
 
 from __future__ import annotations
@@ -104,6 +112,8 @@ def run(argv: list[str] | None = None) -> int:
     # Anything a library prints must not corrupt the JSON channel.
     sys.stdout = io.StringIO()
     result: dict[str, Any] = {}
+    adapter: Any = None
+    payload: dict[str, Any] | None = None
     try:
         if harness not in HARNESSES:
             raise ValueError(f"unknown harness {harness!r}")
@@ -115,10 +125,12 @@ def run(argv: list[str] | None = None) -> int:
         else:
             result = adapter.handle(event, payload, os.environ)
     except BaseException as exc:  # noqa: BLE001 - hooks fail open, always
+        finish_held(commit=False)
         log("%s %s failed: %s: %s", harness, event, type(exc).__name__, exc)
+        result = _outage_result(adapter, event, payload, exc, result)
     finally:
         sys.stdout = real_stdout
-    write_json(result, real_stdout)
+    respond(result, real_stdout)
     if os.environ.get(DEBUG_ENV):
         log("%s %s done in %.0f ms", harness, event, (time.perf_counter() - started) * 1000)
     return 0
@@ -137,6 +149,23 @@ def read_payload(stream: TextIO) -> dict[str, Any] | None:
     except (TypeError, ValueError):
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def respond(result: Mapping[str, Any], stream: TextIO) -> None:
+    """Write the hook's response, then commit the claims it carries.
+
+    Every hook entry point ends here (``agent-notes-hook`` and the older
+    ``agent-notes codex-hook``): a held claim that never reaches this commit
+    rolls back, and the message is shown again at the next prompt.
+    """
+    try:
+        write_json(result, stream)
+    except BaseException:
+        finish_held(commit=False)
+        _pending_markers.clear()
+        raise
+    finish_held(commit=True)
+    _record_outage_markers()
 
 
 def write_json(result: Mapping[str, Any], stream: TextIO) -> None:
@@ -213,7 +242,12 @@ def log(message: str, *args: object) -> None:
 
 @contextmanager
 def connect() -> Iterator[Any]:
-    """One short-lived autocommit connection with tight timeouts."""
+    """One short-lived autocommit connection with tight timeouts.
+
+    A connection :func:`hold` was called on outlives the block: :func:`run`
+    commits it once the hook's response is written. Leaving the block with
+    an exception closes it, which rolls the held transaction back.
+    """
     import psycopg
     from psycopg.rows import dict_row
 
@@ -225,8 +259,57 @@ def connect() -> Iterator[Any]:
     try:
         conn.execute(f"SET statement_timeout = {STATEMENT_TIMEOUT_MS}")
         yield conn
-    finally:
+    except BaseException:
+        _drop_held(conn)
         conn.close()
+        raise
+    if not any(held is conn for held in _held):
+        conn.close()
+
+
+# Connections whose transaction holds message claims until the response is out.
+_held: list[Any] = []
+
+
+def hold(conn: Any) -> None:
+    """Open a transaction on ``conn`` that :func:`run` commits after writing.
+
+    Claims made on ``conn`` from here on become visible only once the hook's
+    output has been written; ``conn.transaction()`` blocks inside become
+    savepoints. Calling it again on a held connection does nothing.
+    """
+    if any(held is conn for held in _held):
+        return
+    conn.execute("BEGIN")
+    _held.append(conn)
+
+
+def _drop_held(conn: Any) -> None:
+    _held[:] = [held for held in _held if held is not conn]
+
+
+def finish_held(*, commit: bool) -> None:
+    """Commit (or roll back) and close every held connection.
+
+    A failed commit is logged: the claims roll back and the messages are
+    delivered again, which is the at-least-once side of the trade.
+    """
+    while _held:
+        conn = _held.pop()
+        try:
+            if commit:
+                conn.commit()
+        except Exception as exc:  # noqa: BLE001 - the response is already out
+            log(
+                "delivery commit failed (messages will be redelivered): %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+        finally:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001 - closing must not break a hook
+                pass
 
 
 def session_key_for(inp: HookInput) -> str | None:
@@ -264,6 +347,7 @@ def ensure_session(conn: Any, inp: HookInput, *, full: bool = False) -> dict | N
         return None
     vm = messaging.resolve_vm_id()
     key = messaging.session_key(vm, inp.harness, inp.session_id)
+    clear_outage(key)
     row = None if full else messaging.get_session(key, conn=conn)
     if row is not None:
         workspace_id, project_id = row["workspace_id"], None
@@ -280,6 +364,132 @@ def ensure_session(conn: Any, inp: HookInput, *, full: bool = False) -> dict | N
         model=inp.model,
         conn=conn,
     )
+
+
+# ---------------------------------------------------------------------------
+# Mailbox outage notice
+# ---------------------------------------------------------------------------
+
+
+OUTAGE_NOTICE = (
+    "agent-notes: the mailbox database is unreachable ({error}), so peer messages "
+    "are not being delivered and `agent-notes msg` commands will fail. Details are "
+    "in {log}. This notice is shown once until the mailbox is reachable again."
+)
+
+
+# SQLSTATE classes that mean the server can't be reached or won't serve us:
+# connection exception, invalid authorization, insufficient resources.
+_OUTAGE_CLASSES = ("08", "28", "53")
+# admin_shutdown, crash_shutdown, cannot_connect_now
+_OUTAGE_STATES = ("57P01", "57P02", "57P03")
+
+
+def is_outage(exc: BaseException) -> bool:
+    """A failure to reach Postgres, not a hook bug or a slow query.
+
+    A connect timeout or refusal has no SQLSTATE, and nor has the pool's
+    ``PoolTimeout`` (session start's orientation). A statement timeout, a
+    deadlock or a serialization failure is also an ``OperationalError``, but
+    the mailbox answered, so it isn't reported as unreachable.
+    """
+    try:
+        import psycopg
+    except ImportError:
+        return False
+    if not isinstance(exc, psycopg.OperationalError):
+        return False
+    state = getattr(exc, "sqlstate", None)
+    return state is None or state[:2] in _OUTAGE_CLASSES or state in _OUTAGE_STATES
+
+
+def _outage_marker(key: str) -> Path:
+    """Beside the hook log, so ``AGENT_NOTES_HOOK_LOG`` moves both."""
+    import hashlib
+
+    return _log_path().parent / "outage" / hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
+
+
+def clear_outage(key: str) -> None:
+    """Forget a reported outage for ``key``: the mailbox answered."""
+    try:
+        _outage_marker(key).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def outage_notice(inp: HookInput, exc: BaseException) -> str | None:
+    """The one-time notice for a session that can't reach the mailbox.
+
+    ``None`` once it has been given for this outage, for failures that are
+    not outages, and when the marker's directory can't be written (a notice
+    on every prompt would be worse than none). The marker itself is written
+    by :func:`respond` once the notice is out, so a lost response doesn't use
+    the notice up.
+    """
+    if not inp.session_id or not is_outage(exc):
+        return None
+    from agent_notes.core import messaging
+
+    marker = _outage_marker(
+        messaging.session_key(messaging.resolve_vm_id(), inp.harness, inp.session_id)
+    )
+    if marker.exists():
+        return None
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        _prune_outage_markers(marker.parent)
+    except OSError as err:
+        log("outage notice can't be recorded, so not shown: %s", err)
+        return None
+    _pending_markers.append((marker, type(exc).__name__))
+    return OUTAGE_NOTICE.format(error=type(exc).__name__, log=_log_path())
+
+
+# Markers for notices in the response being built, written once it is out.
+_pending_markers: list[tuple[Path, str]] = []
+
+
+def _record_outage_markers() -> None:
+    while _pending_markers:
+        marker, error = _pending_markers.pop()
+        try:
+            marker.write_text(error, encoding="utf-8")
+        except OSError as err:
+            log("outage notice shown but not recorded (it may repeat): %s", err)
+
+
+_OUTAGE_MARKER_DAYS = 7
+
+
+def _prune_outage_markers(directory: Path) -> None:
+    """Drop markers of sessions that ended during an outage, a week on."""
+    cutoff = time.time() - _OUTAGE_MARKER_DAYS * 86400
+    for old in directory.iterdir():
+        try:
+            if old.stat().st_mtime < cutoff:
+                old.unlink()
+        except OSError:
+            pass
+
+
+def _outage_result(
+    adapter: Any,
+    event: str,
+    payload: Mapping[str, Any] | None,
+    exc: BaseException,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """``result``, or the adapter's framing of the outage notice when one is due."""
+    notice = getattr(adapter, "outage", None)
+    if notice is None or payload is None:
+        return result
+    try:
+        return notice(event, payload, os.environ, exc) or result
+    except Exception as err:  # noqa: BLE001 - the notice is best effort
+        _pending_markers.clear()
+        log("outage notice failed: %s: %s", type(err).__name__, err)
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -400,11 +610,14 @@ def deliver(conn: Any, key: str, budget: int = MESSAGE_BUDGET) -> str | None:
     """Claim direct and inbox messages (never notices or requests) and frame them.
 
     The claim, the release of what doesn't fit and the pending count are one
-    transaction on the hook's connection. If any step fails, nothing stays
-    claimed and the messages wait for the next delivery.
+    transaction on the hook's connection, held (:func:`hold`) until the
+    response is written. If any step fails, or the hook dies before its
+    output is out, nothing stays claimed and the messages wait for the next
+    delivery.
     """
     from agent_notes.core import messaging
 
+    hold(conn)
     with conn.transaction():
         rows = messaging.claim_deliverable(key, limit=CLAIM_LIMIT, conn=conn)
         if not rows:
@@ -430,7 +643,8 @@ def claim_wake(conn: Any, row: Mapping[str, Any] | None, env: Mapping[str, str])
     """L2: claim one message that may wake this session, and count the extension.
 
     The wake rule is :func:`agent_notes.core.messaging.may_wake`, the same one
-    the dispatcher applies. The claim and the count land together or not at all.
+    the dispatcher applies. The claim and the count land together or not at
+    all, and only once the response carrying the message is written.
     """
     import psycopg
 
@@ -439,6 +653,7 @@ def claim_wake(conn: Any, row: Mapping[str, Any] | None, env: Mapping[str, str])
     if not wake_allowed(row, env):
         return None
     assert row is not None
+    hold(conn)
     with conn.transaction():
         msg = messaging.next_wakeable(row, claim=True, conn=conn)
         if msg is None:

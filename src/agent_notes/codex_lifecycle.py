@@ -266,10 +266,11 @@ def _run_event(event: str, payload: dict[str, Any]) -> dict[str, object]:
     try:
         return codex.handle(event, payload, os.environ)
     except BaseException as exc:  # noqa: BLE001 - hooks fail open, always
-        from agent_notes.hooks.common import log
+        from agent_notes.hooks.common import finish_held, log
 
+        finish_held(commit=False)
         log("codex %s failed: %s: %s", event, type(exc).__name__, exc)
-        return _success_output()
+        return codex.outage(event, payload, os.environ, exc) or _success_output()
 
 
 def run_session_start(payload: dict[str, Any]) -> dict[str, object]:
@@ -294,14 +295,15 @@ _RUNNERS = {
 
 def cmd_codex_hook(args: argparse.Namespace) -> int:
     """``agent-notes codex-hook <event>``: the command older installs still trust."""
-    from agent_notes.hooks.common import write_json
+    from agent_notes.hooks.common import respond
 
     payload = _read_payload(sys.stdin)
     if payload is None:
         result: dict[str, object] = _success_output()
     else:
         result = _RUNNERS[args.codex_hook_event](payload)
-    write_json(result, sys.stdout)
+    # Commits the claims the response carries, as ``agent-notes-hook`` does.
+    respond(result, sys.stdout)
     return 0
 
 

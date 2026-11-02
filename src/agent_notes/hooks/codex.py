@@ -80,6 +80,9 @@ def session_start(payload: Mapping[str, Any], env: Mapping[str, str]) -> dict[st
                         parts.append(messages)
     except Exception as exc:  # noqa: BLE001 - keep the orientation if the mailbox fails
         common.log("codex session-start mailbox failed: %s: %s", type(exc).__name__, exc)
+        notice = common.outage_notice(_input(payload, env), exc)
+        if notice:
+            parts.append(notice)
     return _context("SessionStart", "\n\n".join(parts)) if parts else fallback("session-start")
 
 
@@ -114,6 +117,17 @@ _HANDLERS = {
     "user-prompt-submit": user_prompt_submit,
     "stop": stop,
 }
+
+_CONTEXT_EVENTS = {"session-start": "SessionStart", "user-prompt-submit": "UserPromptSubmit"}
+
+
+def outage(
+    event: str, payload: Mapping[str, Any], env: Mapping[str, str], exc: BaseException
+) -> dict[str, Any] | None:
+    """The mailbox-unreachable notice as context, once per outage. Never at Stop."""
+    name = _CONTEXT_EVENTS.get(event)
+    text = common.outage_notice(_input(payload, env), exc) if name else None
+    return _context(name, text) if name and text else None
 
 
 def handle(event: str, payload: Mapping[str, Any], env: Mapping[str, str]) -> dict[str, Any]:

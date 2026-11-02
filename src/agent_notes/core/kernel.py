@@ -67,6 +67,12 @@ def get_blob(conn: psycopg.Connection, h: str) -> str | None:
 # Op creation and commit
 # ---------------------------------------------------------------------------
 
+# Hashed into every op except ``create``: the op's own lamport. An op is an
+# event, so two with the same content (a second identical heartbeat, a release
+# after a re-claim) are still two ops and need two op_ids. ``create`` keeps a
+# pure content hash because that hash is the entity_id callers derive first.
+OP_SEQ_KEY = "op_seq"
+
 
 def _make_op_id(entity_type: str, op_type: str, payload: dict, parent_op_ids: list[str]) -> str:
     """Deterministic content hash of an op."""
@@ -106,7 +112,7 @@ def _next_lamport(conn: psycopg.Connection) -> int:
 
 def commit_op(
     conn: psycopg.Connection,
-    entity_id: str,
+    entity_id: str | None,
     entity_type: str,
     op_type: str,
     payload: dict,
@@ -124,10 +130,22 @@ def commit_op(
     the payload inside the envelope).  ``signer`` defaults to ``NullSigner``
     so the structural format is present from day one; flipping to
     ``LocalKeySigner`` in P1 is a config change.
+
+    Every op but ``create`` carries its lamport as :data:`OP_SEQ_KEY` inside
+    the hashed payload, so op_ids are unique by construction and callers need
+    no timestamp of their own to keep a repeated op from colliding.
+
+    ``entity_id=None`` makes the op the root of a new entity named by its own
+    op_id (``request``, ``wait`` and ``add_link``), which keeps "entity_id is
+    the hash of the first op" true now that the hash includes the lamport.
     """
     parent_op_ids = parent_op_ids or []
-    op_id = _make_op_id(entity_type, op_type, payload, parent_op_ids)
     lamport = _next_lamport(conn)
+    if op_type != "create":
+        payload = {**payload, OP_SEQ_KEY: lamport}
+    op_id = _make_op_id(entity_type, op_type, payload, parent_op_ids)
+    if entity_id is None:
+        entity_id = op_id
 
     signer = signer or NullSigner()
     effective_actor_id = actor_id if actor_id is not None else signer.key_id()

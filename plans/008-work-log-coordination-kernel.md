@@ -191,6 +191,12 @@ profile). We **borrow models, not dependencies**:
   `add-link`, `remove-link`, `claim`, `release`, `heartbeat`, `request`, `wait`,
   `close`, `snapshot` (seal), `merge`. Each op: `op_id` (content hash), `entity_id`
   (hash of first op), `op_type`, `lamport`, `actor_id` (pubkey), `payload`, parent refs.
+  *Amended 2026-11-02:* every op but `create` hashes its own `lamport` as `op_seq`
+  in the payload. Native writers parent the entity rather than the previous op, so
+  a pure content hash made a repeated op (a second identical heartbeat) collide
+  with the first on the unique `op_id`. Root ops other than `create` (`request`,
+  `wait`, `add_link`) take their own op_id as `entity_id`, so "hash of first op"
+  still holds.
 - **Op authority — fix the schema at P0 even though cross-project triggering is P3.**
   An op only ever mutates an entity in **its own author's** log. The `request` op is the
   load-bearing case: it lives in the **dependent's** (A's) log as **signed evidence of a

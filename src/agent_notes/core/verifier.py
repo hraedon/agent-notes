@@ -31,6 +31,7 @@ from psycopg.rows import dict_row
 from agent_notes.core.db import _conn
 from agent_notes.core.envelope import verify_envelope
 from agent_notes.core.kernel import (
+    OP_SEQ_KEY,
     _get_entity_ops,
     _make_op_id,
     _resolve_status_lattice,
@@ -94,6 +95,15 @@ def verify_op_id(op: dict) -> Violation | None:
             op_id=op["op_id"],
             rule="hash",
             message=f"op_id mismatch: expected {expected[:16]}…, got {op['op_id'][:16]}…",
+        )
+    # The hashed sequence must be the op's own lamport, or an op could be
+    # moved in the fold order without changing its op_id.
+    seq = inner_payload.get(OP_SEQ_KEY)
+    if seq is not None and "lamport" in op and seq != op["lamport"]:
+        return Violation(
+            op_id=op["op_id"],
+            rule="hash",
+            message=f"{OP_SEQ_KEY} {seq} does not match lamport {op['lamport']}",
         )
     return None
 

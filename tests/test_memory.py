@@ -549,3 +549,93 @@ The phased implementation approach reduced risk.
         identifiers = {n.identifier for n in nodes}
         assert "BC-001" in identifiers
         assert "BC-002" in identifiers
+
+
+# ---------------------------------------------------------------------------
+# Concurrent attribute updates (read-merge-write under a row lock)
+# ---------------------------------------------------------------------------
+
+
+def _race_with_writer(memory_id: int, admin_sql: str, call) -> None:
+    """Run ``call`` while another transaction is mid-write on the row.
+
+    The admin connection updates the row and holds it uncommitted until
+    ``call`` is blocked on that row lock, then commits. Without a lock before
+    its read, ``call`` merges into the stale attributes and drops the admin's.
+    """
+    import threading
+    import time
+
+    from agent_notes.core.config import resolve_dsn
+
+    errors: list[BaseException] = []
+    with psycopg.connect(resolve_dsn()) as admin:
+        admin.execute(admin_sql, (memory_id,))
+        pid = admin.execute("SELECT pg_backend_pid()").fetchone()[0]
+
+        def target() -> None:
+            try:
+                call()
+            except BaseException as exc:  # noqa: BLE001 - surfaced below
+                errors.append(exc)
+
+        worker = threading.Thread(target=target)
+        worker.start()
+        deadline = time.monotonic() + 10
+        with psycopg.connect(resolve_dsn(), autocommit=True) as probe:
+            while time.monotonic() < deadline:
+                (blocked,) = probe.execute(
+                    "SELECT count(*) FROM pg_stat_activity WHERE %s = ANY(pg_blocking_pids(pid))",
+                    (pid,),
+                ).fetchone()
+                if blocked:
+                    break
+                time.sleep(0.05)
+            else:
+                pytest.fail("the update never waited on the locked row")
+        admin.commit()
+        worker.join(10)
+    assert not errors, errors
+
+
+class TestConcurrentAttributeUpdates:
+    def _memory(self, ws, proj, name: str, memory_type: str = "note") -> dict:
+        with patch("agent_notes.core.embed.embed", side_effect=_fake_embed):
+            return add_memory(
+                workspace_id=ws.id,
+                project_id=proj.id,
+                name=name,
+                memory_type=memory_type,
+                body="# Reflection\n\n## Gaps to flag\n- [[BC-R1]]: one.\n",
+                attributes={"origin": "test"},
+                embedding=_fake_embed("test"),
+            )
+
+    def test_update_memory_keeps_a_concurrent_writers_keys(
+        self, pg, mem_ws, mem_proj, seeded_vocab
+    ) -> None:
+        from agent_notes.core.memory_model import update_memory
+
+        row = self._memory(mem_ws, mem_proj, "race-update")
+        _race_with_writer(
+            row["id"],
+            "UPDATE memories SET attributes = attributes || '{\"a\": 1}' WHERE id = %s",
+            lambda: update_memory(mem_ws.id, mem_proj.id, "race-update", attributes={"b": 2}),
+        )
+        attrs = get_memory(mem_ws.id, mem_proj.id, "race-update")["attributes"]
+        assert attrs == {"origin": "test", "a": 1, "b": 2}
+
+    def test_mark_gaps_filed_keeps_a_concurrent_writers_identifiers(
+        self, pg, mem_ws, mem_proj, seeded_vocab
+    ) -> None:
+        from agent_notes.core.memory_model import mark_gaps_filed
+
+        row = self._memory(mem_ws, mem_proj, "race-gaps", memory_type="reflection")
+        _race_with_writer(
+            row["id"],
+            "UPDATE memories SET attributes = attributes || "
+            '\'{"gaps_filed_as": ["BC-OTHER"]}\' WHERE id = %s',
+            lambda: mark_gaps_filed(mem_ws.id, mem_proj.id, "race-gaps", ["BC-R1"]),
+        )
+        attrs = get_memory(mem_ws.id, mem_proj.id, "race-gaps")["attributes"]
+        assert attrs["gaps_filed_as"] == ["BC-OTHER", "BC-R1"]

@@ -18,7 +18,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Iterator, Mapping
+from typing import Any, Callable, Iterator, Mapping
 
 import psycopg
 from psycopg.rows import dict_row
@@ -52,6 +52,9 @@ AUTO_CONTINUE_WINDOW_ENV = "AGENT_NOTES_AUTO_CONTINUE_WINDOW"
 DEFAULT_AUTO_CONTINUE_WINDOW = 1800
 # Safety re-check while awaiting, in case a notification is lost.
 _AWAIT_POLL = 2.0
+# How long the dispatcher's claim waits for a reader holding the row until its
+# output is written (hooks hold for milliseconds).
+CLAIM_LOCK_TIMEOUT = "5s"
 
 # The D6 framing. Hooks test prompts for this prefix to tell a wake from a
 # human prompt (§6), so it must stay stable.
@@ -381,7 +384,9 @@ def register_session(
                 "model": model,
             },
         )
-        conn.commit()
+        # Never a bare commit on a caller's connection: a hook's may hold
+        # uncommitted claims (hooks.common.hold).
+        _commit(conn)
         return _get_session(conn, key)
 
 
@@ -839,6 +844,7 @@ def inbox(
     project: str | None = None,
     workspace_id: int | None = None,
     limit: int = 50,
+    emit: Callable[[list[dict]], None] | None = None,
 ) -> list[dict]:
     """List (and with ``claim``, claim) what is waiting for a session.
 
@@ -851,6 +857,10 @@ def inbox(
     With ``claim``, the unclaimed rows returned are exactly those this call
     claimed (up to ``limit``); notices and ``include_claimed`` rows are listed
     alongside and never displace them.
+
+    ``emit`` gets the result before the claim commits, so a caller that shows
+    the messages there never leaves one claimed but unshown: if ``emit``
+    raises (or the process dies first), the claim rolls back.
     """
     with _conn() as conn:
         who = _addressee(conn, session, vm=vm, project=project, workspace_id=workspace_id)
@@ -858,7 +868,6 @@ def inbox(
         claimed: list[dict] = []
         if claim:
             claimed = _claim(conn, where, params, who.claimer, limit)
-            conn.commit()
         unclaimed = "m.kind = 'notice'" if claim else "(m.claimed_by IS NULL OR m.kind = 'notice')"
         if include_claimed:
             seen_filter = (
@@ -876,10 +885,11 @@ def inbox(
             "ORDER BY m.id LIMIT %s",
             [*params, *extra, claimed_ids, limit],
         ).fetchall()
-    listed = [dict(r) for r in rows]
-    if claim:
-        return sorted(claimed + listed, key=lambda r: r["id"])
-    return listed
+        listed = [dict(r) for r in rows]
+        result = sorted(claimed + listed, key=lambda r: r["id"]) if claim else listed
+        if emit is not None:
+            emit(result)
+    return result
 
 
 def live_notices(
@@ -988,17 +998,28 @@ def claim_message(message_id: int, claimer: str) -> dict | None:
     """Claim one unclaimed, unexpired message by ID (the dispatcher's L3 wake).
 
     Returns the claimed row, or ``None`` if someone else got there first.
+
+    A reader holds its claim uncommitted until its output is written. This
+    waits up to :data:`CLAIM_LOCK_TIMEOUT` for it: if that reader then rolls
+    back, the row is still unclaimed and this claims it, so the wake isn't
+    lost. A reader that holds it longer (a pager on ``msg inbox --claim``)
+    counts as having got there first.
     """
     with _conn() as conn:
-        row = conn.execute(
-            f"""
-            UPDATE agent_messages SET claimed_by = %s, claimed_at = now()
-            WHERE id = %s AND claimed_by IS NULL AND kind <> 'notice'
-              AND expires_at > now()
-            RETURNING {_MESSAGE_COLUMNS}
-            """,  # noqa: S608 - column list is a module constant
-            (claimer, message_id),
-        ).fetchone()
+        conn.execute(f"SET LOCAL lock_timeout = '{CLAIM_LOCK_TIMEOUT}'")
+        try:
+            row = conn.execute(
+                f"""
+                UPDATE agent_messages SET claimed_by = %s, claimed_at = now()
+                WHERE id = %s AND claimed_by IS NULL AND kind <> 'notice'
+                  AND expires_at > now()
+                RETURNING {_MESSAGE_COLUMNS}
+                """,  # noqa: S608 - column list is a module constant
+                (claimer, message_id),
+            ).fetchone()
+        except psycopg.errors.LockNotAvailable:
+            conn.rollback()
+            return None
         conn.commit()
     return dict(row) if row else None
 
@@ -1087,9 +1108,12 @@ def next_wakeable(
             if not claim:
                 found = msg
                 break
+            # SKIP LOCKED: a row another reader holds uncommitted is theirs.
             claimed = conn.execute(
                 "UPDATE agent_messages SET claimed_by = %s, claimed_at = now() "  # noqa: S608
-                f"WHERE id = %s AND claimed_by IS NULL RETURNING {_MESSAGE_COLUMNS}",
+                "WHERE id = (SELECT id FROM agent_messages WHERE id = %s "
+                "AND claimed_by IS NULL FOR UPDATE SKIP LOCKED) "
+                f"RETURNING {_MESSAGE_COLUMNS}",
                 (key, msg["id"]),
             ).fetchone()
             if claimed is not None:
@@ -1153,11 +1177,13 @@ def await_message(
     project: str | None = None,
     workspace_id: int | None = None,
     dsn: str | None = None,
+    emit: Callable[[dict], None] | None = None,
 ) -> dict | None:
     """Block until a matching message arrives, claim it, and return it.
 
     LISTENs on a dedicated, non-pooled connection *before* the first SELECT,
-    so nothing can slip in between. Returns ``None`` on timeout.
+    so nothing can slip in between. Returns ``None`` on timeout. ``emit``
+    gets the message before the claim commits, as in :func:`inbox`.
     """
     from agent_notes.core.config import resolve_dsn
 
@@ -1177,6 +1203,8 @@ def await_message(
         while True:
             with conn.transaction():
                 rows = _claim(conn, where, params, who.claimer, 1)
+                if rows and emit is not None:
+                    emit(rows[0])
             if rows:
                 return rows[0]
             remaining = deadline - time.monotonic()
