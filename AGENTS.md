@@ -139,6 +139,8 @@ not a tidy-up — it fails `memory add` for every unconfigured caller.
 
 In-process lazy singleton (decision 2). 270MB nomic model loads on first call; thread-safe. `AGENT_NOTES_EMBED_MODEL` / `AGENT_NOTES_EMBED_DIM` env vars override defaults. Always embed *before* opening a DB transaction (decision 26).
 
+Each CLI call is a new process, so loading the model costs ~9s per search or write. `agent-notes-embed-server` keeps it warm. The shared deployment is on k8s (`deploy/k8s/embed/`, `https://agent-notes-embed.k8s.hraedon.com`, bearer token); a host uses it with `AGENT_NOTES_EMBED_URL` and `AGENT_NOTES_EMBED_TOKEN` in suite.env. A host can instead run its own on 127.0.0.1:8766 (`deploy/agent-notes-embed.service`, `deploy/windows/agent-notes-embed.ps1`). An unreachable service (or an ingress 502/503/504) falls back to in-process with a warning; a rejected token or a service on another model fails the call. `doctor` reports it as `embedding_service`.
+
 ## Connection pool
 
 `psycopg_pool.ConnectionPool` (sync), `min_size=2, max_size=5` per process (decision 22).

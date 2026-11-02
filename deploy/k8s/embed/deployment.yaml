@@ -1,0 +1,91 @@
+# Two stateless replicas behind one Service. Out-of-band prerequisites in the namespace
+# (never in this repository): the registry pull secret `agent-notes-registry` and the
+# bearer token secret `agent-notes-embed-token` (key `token`). See README.md.
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-notes-embed
+spec:
+  selector: { app: agent-notes-embed }
+  ports:
+    - { name: http, port: 80, targetPort: http }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: agent-notes-embed
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: agent-notes-embed }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-notes-embed
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels: { app: agent-notes-embed }
+  template:
+    metadata:
+      labels: { app: agent-notes-embed }
+    spec:
+      automountServiceAccountToken: false
+      # Service links would set AGENT_NOTES_EMBED_PORT=tcp://... (from this Service's
+      # name) over the server's own port setting.
+      enableServiceLinks: false
+      imagePullSecrets:
+        - name: agent-notes-registry
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app: agent-notes-embed }
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: embed
+          image: git.hraedon.com/glassbreak/agent-notes-embed:pinned-by-kustomization
+          env:
+            # torch sizes its thread pool from the node's cores, not the CPU limit.
+            - { name: OMP_NUM_THREADS, value: "4" }
+            - name: AGENT_NOTES_EMBED_TOKEN
+              valueFrom:
+                secretKeyRef: { name: agent-notes-embed-token, key: token }
+          ports:
+            - { name: http, containerPort: 8766 }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: 250m, memory: 1Gi }
+            limits: { cpu: "4", memory: 2Gi }
+          # The model loads before the first request is served (~10-20s).
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 24
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 30
+            timeoutSeconds: 5
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 256Mi }

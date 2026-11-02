@@ -1,0 +1,23 @@
+[Unit]
+Description=agent-notes warm embedding service (keeps the model loaded for CLI calls)
+Documentation=file:///projects/agent-notes/src/agent_notes/embed_server.py
+After=network-online.target
+Wants=network-online.target
+
+# A systemd *user* unit: install as ~/.config/systemd/user/agent-notes-embed.service,
+# then `systemctl --user daemon-reload && systemctl --user enable --now agent-notes-embed`.
+# Run `loginctl enable-linger $USER` once so it runs without a login session.
+# Then add AGENT_NOTES_EMBED_URL=http://127.0.0.1:8766 to ~/.config/agent-suite/suite.env
+# so every agent-notes call on this host uses it. It binds 127.0.0.1 only; see
+# embed_server.py before passing --host.
+
+[Service]
+Type=simple
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/bin/agent-notes-embed-server
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target
